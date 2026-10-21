@@ -10,10 +10,13 @@ use std::{
 
 use ccl_core::{
     CancellationToken, Error, Result, TaskContext, TaskEvent,
-    config::{LauncherConfig, default_config_path},
+    accounts::{AccountStore, OsSecretStore},
+    auth::{AuthConfig, MicrosoftAuth},
+    config::{ConfigStore, LauncherConfig, default_config_path},
     directory::DirectoryInputs,
     install::{InstallError, InstallOptions, InstallService},
     launch::{self, LaunchError, LaunchRequest, LaunchService},
+    launch_plan::MicrosoftIdentity,
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -45,6 +48,16 @@ enum Command {
     Doctor,
     /// Create the selected game directory if it is missing.
     Init,
+    /// View or persist launcher settings.
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
+    /// Sign in and manage Microsoft accounts.
+    Account {
+        #[command(subcommand)]
+        command: AccountCommand,
+    },
     /// Show available vanilla versions, newest first.
     Versions {
         /// Maximum entries to print (0 shows all).
@@ -58,17 +71,27 @@ enum Command {
     },
     /// List versions already installed in the selected game directory.
     Instances,
-    /// Launch an installed vanilla version with an offline account.
+    /// Launch an installed version with the selected Microsoft account or offline identity.
     Launch {
         version: String,
-        #[arg(long, default_value = "CCLPlayer")]
-        username: String,
+        /// Use an offline profile with this name.
+        #[arg(long, conflicts_with = "account")]
+        username: Option<String>,
+        /// Use an offline profile instead of the selected Microsoft account.
+        #[arg(long, conflicts_with = "account")]
+        offline: bool,
+        /// Microsoft account profile ID; defaults to the selected account.
+        #[arg(long)]
+        account: Option<String>,
+        /// Do not download a missing Java runtime.
+        #[arg(long)]
+        no_java_download: bool,
         /// Java executable or Java home; otherwise detect a matching installed runtime.
         #[arg(long)]
         java: Option<PathBuf>,
         /// Maximum Java heap in MiB.
-        #[arg(long, default_value_t = 2048)]
-        memory: u32,
+        #[arg(long)]
+        memory: Option<u32>,
         /// Prepare and print the argument vector without starting the game.
         #[arg(long)]
         dry_run: bool,
@@ -79,6 +102,45 @@ enum Command {
         run: Option<String>,
         #[arg(long, default_value_t = 100)]
         lines: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsCommand {
+    /// Show all settings with proxy credentials hidden.
+    Show,
+    /// Read one dotted setting.
+    Get { key: String },
+    /// Persist a setting; booleans/numbers/null use JSON, other values are strings.
+    Set { key: String, value: String },
+    /// Reset one setting, or all settings with --all.
+    Reset {
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        key: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AccountCommand {
+    /// Begin device-code login. Credentials are saved only in OS secure storage.
+    Login {
+        #[arg(long)]
+        client_id: Option<String>,
+    },
+    /// Check that the system credential vault can persist credentials.
+    CheckStorage,
+    List,
+    Select {
+        id: String,
+    },
+    Refresh {
+        id: Option<String>,
+    },
+    /// Remove local credentials; this does not revoke Microsoft consent.
+    Logout {
+        id: Option<String>,
     },
 }
 
@@ -133,7 +195,13 @@ async fn run(cli: &Cli) -> Result<Value> {
             env::var_os("XDG_CONFIG_HOME").as_deref().map(Path::new),
         )
     });
-    let config = if cli.config.is_some() {
+    let is_settings_write = matches!(
+        &cli.command,
+        Command::Settings {
+            command: SettingsCommand::Set { .. } | SettingsCommand::Reset { .. }
+        }
+    );
+    let config = if cli.config.is_some() && !is_settings_write {
         LauncherConfig::read(&config_path)?
     } else {
         LauncherConfig::read_or_default(&config_path)?
@@ -141,6 +209,94 @@ async fn run(cli: &Cli) -> Result<Value> {
     let _transport = HttpClient::new(&config.downloads)?;
 
     match &cli.command {
+        Command::Settings { command } => {
+            let store = ConfigStore::new(&config_path);
+            match command {
+                SettingsCommand::Show => Ok(
+                    json!({ "ok": true, "settings": config.display_json()?, "path": config_path }),
+                ),
+                SettingsCommand::Get { key } => {
+                    Ok(json!({ "ok": true, "key": key, "value": store.get(key)? }))
+                }
+                SettingsCommand::Set { key, value } => {
+                    let value = serde_json::from_str(value)
+                        .unwrap_or_else(|_| Value::String(value.clone()));
+                    store.set(key, value)?;
+                    Ok(json!({ "ok": true, "key": key, "value": store.get(key)? }))
+                }
+                SettingsCommand::Reset { key, .. } => {
+                    store.reset(key.as_deref())?;
+                    Ok(
+                        json!({ "ok": true, "settings": LauncherConfig::read(&config_path)?.display_json()? }),
+                    )
+                }
+            }
+        }
+        Command::Account { command } => {
+            let store = account_store(&config_path)?;
+            match command {
+                AccountCommand::CheckStorage => {
+                    OsSecretStore::for_account_file(&config_path.with_file_name("accounts.json"))?
+                        .probe()?;
+                    Ok(json!({"ok": true, "secure_storage": "available"}))
+                }
+                AccountCommand::List => Ok(
+                    json!({ "ok": true, "accounts": store.list()?, "selected": store.selected()? }),
+                ),
+                AccountCommand::Select { id } => {
+                    store.select(id)?;
+                    Ok(json!({ "ok": true, "selected": id }))
+                }
+                AccountCommand::Logout { id } => {
+                    let id = account_id(&store, id.as_deref())?;
+                    store.remove(&id)?;
+                    Ok(json!({ "ok": true, "removed": id }))
+                }
+                AccountCommand::Login { client_id } => {
+                    let client_id = client_id.as_ref().or(config.auth.microsoft_client_id.as_ref()).ok_or_else(|| Error::InvalidConfig("set auth.microsoft_client_id to your registered CCL application ID before login; see docs/accounts.en.md".into()))?;
+                    OsSecretStore::for_account_file(&config_path.with_file_name("accounts.json"))?
+                        .probe()?;
+                    let auth = auth_service(client_id, &config)?;
+                    let token = signal_token();
+                    let device = auth.begin_device_login().await?;
+                    if cli.json {
+                        eprintln!(
+                            "{}",
+                            json!({ "kind": "device_authorization", "verification_uri": device.verification_uri, "user_code": device.user_code, "expires_in": device.expires_in.as_secs() })
+                        );
+                    } else {
+                        eprintln!(
+                            "Open {} and enter {} (expires in {} seconds)",
+                            device.verification_uri,
+                            device.user_code,
+                            device.expires_in.as_secs()
+                        );
+                    }
+                    let authenticated = auth.complete_device_login(device, &token).await?;
+                    let metadata = authenticated.metadata.clone();
+                    authenticated.persist(&store)?;
+                    store.select(&metadata.id)?;
+                    Ok(json!({ "ok": true, "account": metadata, "selected": metadata.id }))
+                }
+                AccountCommand::Refresh { id } => {
+                    let id = account_id(&store, id.as_deref())?;
+                    let metadata = store
+                        .list()?
+                        .into_iter()
+                        .find(|a| a.id == id)
+                        .ok_or(ccl_core::accounts::AccountError::Invalid)?;
+                    let auth = auth_service(
+                        metadata
+                            .oauth_client_id
+                            .as_deref()
+                            .ok_or(ccl_core::accounts::AccountError::Invalid)?,
+                        &config,
+                    )?;
+                    let metadata = auth.refresh_account(&store, &id, &signal_token()).await?;
+                    Ok(json!({ "ok": true, "account": metadata }))
+                }
+            }
+        }
         Command::Doctor => Ok(json!({
             "ok": true,
             "platform": { "os": env::consts::OS, "architecture": env::consts::ARCH },
@@ -211,25 +367,63 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Launch {
             version,
             username,
+            offline,
+            account,
+            no_java_download,
             java,
             memory,
             dry_run,
         } => {
-            let service = LaunchService::new(config.downloads);
+            let service = LaunchService::new(config.downloads.clone());
+            let token = signal_token();
+            let store = account_store(&config_path)?;
+            let selected = if *offline || username.is_some() {
+                None
+            } else {
+                account.clone().or(store.selected()?)
+            };
+            let identity = if let Some(id) = selected {
+                let metadata = store
+                    .list()?
+                    .into_iter()
+                    .find(|a| a.id == id)
+                    .ok_or(ccl_core::accounts::AccountError::Invalid)?;
+                let metadata = auth_service(
+                    metadata
+                        .oauth_client_id
+                        .as_deref()
+                        .ok_or(ccl_core::accounts::AccountError::Invalid)?,
+                    &config,
+                )?
+                .refresh_if_expiring(&store, &id, &token, std::time::Duration::from_secs(60))
+                .await?;
+                let credentials = store
+                    .credentials(&id)?
+                    .ok_or(ccl_core::accounts::AccountError::Invalid)?;
+                Some(
+                    MicrosoftIdentity::new(
+                        metadata.username,
+                        metadata.uuid,
+                        metadata.xuid.unwrap_or_default(),
+                        metadata
+                            .oauth_client_id
+                            .ok_or(ccl_core::accounts::AccountError::Invalid)?,
+                        credentials.access_token().to_owned(),
+                    )
+                    .map_err(LaunchError::from)?,
+                )
+            } else {
+                None
+            };
             let request = LaunchRequest {
                 game_directory: resolution.path,
                 version: version.clone(),
-                username: username.clone(),
-                java: java.clone(),
-                max_memory_mb: *memory,
+                username: username.clone().unwrap_or_else(|| "CCLPlayer".into()),
+                java: java.clone().or(config.launch.java.clone()),
+                max_memory_mb: memory.unwrap_or(config.launch.max_memory_mb),
+                identity,
+                auto_install_java: !no_java_download && config.launch.auto_install_java,
             };
-            let token = CancellationToken::default();
-            let signal = token.clone();
-            tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    signal.cancel();
-                }
-            });
             let human = !cli.json;
             let context = TaskContext::new(
                 token,
@@ -253,7 +447,46 @@ async fn run(cli: &Cli) -> Result<Value> {
     }
 }
 
+fn account_store(config_path: &Path) -> Result<AccountStore<OsSecretStore>> {
+    let path = config_path.with_file_name("accounts.json");
+    Ok(AccountStore::new(
+        &path,
+        Arc::new(OsSecretStore::for_account_file(&path)?),
+    ))
+}
+fn account_id(store: &AccountStore<OsSecretStore>, explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(str::to_owned)
+        .or(store.selected()?)
+        .ok_or_else(|| ccl_core::accounts::AccountError::Invalid.into())
+}
+fn auth_service(client_id: &str, config: &LauncherConfig) -> Result<MicrosoftAuth> {
+    let mut auth = AuthConfig::new(client_id);
+    auth.proxy = config.downloads.http_proxy.clone();
+    Ok(MicrosoftAuth::new(auth)?)
+}
+fn signal_token() -> CancellationToken {
+    let token = CancellationToken::default();
+    let signal = token.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal.cancel();
+        }
+    });
+    token
+}
+
 fn print_human(value: &Value) {
+    if value.get("settings").is_some()
+        || value.get("key").is_some()
+        || value.get("accounts").is_some()
+        || value.get("account").is_some()
+        || value.get("selected").is_some()
+        || value.get("removed").is_some()
+    {
+        println!("{}", serde_json::to_string_pretty(value).unwrap());
+        return;
+    }
     if let Some(log) = value.get("log").and_then(Value::as_str) {
         println!("{log}");
         return;
@@ -327,8 +560,17 @@ fn error_code(error: &Error) -> &'static str {
         Error::Io { .. } | Error::NotDirectory(_) => "filesystem_error",
         Error::Network(_) => "network_error",
         Error::Cancelled => "cancelled",
+        Error::Auth(ccl_core::auth::AuthError::Cancelled) => "cancelled",
+        Error::Auth(_) => "authentication_error",
+        Error::Account(_) => "account_error",
         Error::Launch(error) => match error {
-            LaunchError::Java(_) => "java_error",
+            LaunchError::Runtime(
+                ccl_core::runtime::RuntimeError::Cancelled
+                | ccl_core::runtime::RuntimeError::Download(
+                    ccl_core::download::DownloadError::Cancelled,
+                ),
+            ) => "cancelled",
+            LaunchError::Java(_) | LaunchError::Runtime(_) => "java_error",
             LaunchError::Cancelled
             | LaunchError::Download(ccl_core::download::DownloadError::Cancelled) => "cancelled",
             LaunchError::Io { .. } => "filesystem_error",
@@ -353,8 +595,16 @@ fn exit_code(error: &Error) -> u8 {
         Error::Io { .. } | Error::NotDirectory(_) => 4,
         Error::Network(_) => 5,
         Error::Cancelled => 130,
+        Error::Auth(ccl_core::auth::AuthError::Cancelled) => 130,
+        Error::Auth(_) | Error::Account(_) => 10,
         Error::Launch(error) => match error {
-            LaunchError::Java(_) => 9,
+            LaunchError::Runtime(
+                ccl_core::runtime::RuntimeError::Cancelled
+                | ccl_core::runtime::RuntimeError::Download(
+                    ccl_core::download::DownloadError::Cancelled,
+                ),
+            ) => 130,
+            LaunchError::Java(_) | LaunchError::Runtime(_) => 9,
             LaunchError::Cancelled
             | LaunchError::Download(ccl_core::download::DownloadError::Cancelled) => 130,
             LaunchError::Io { .. } => 4,

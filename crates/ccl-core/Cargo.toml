@@ -7,6 +7,8 @@ repository.workspace = true
 description = "Platform-independent core for CialloCraftLauncher"
 
 [dependencies]
+fs2.workspace = true
+keyring.workspace = true
 md5.workspace = true
 regex.workspace = true
 reqwest.workspace = true

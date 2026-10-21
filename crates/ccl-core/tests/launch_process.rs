@@ -25,11 +25,7 @@ fn temp_dir(label: &str) -> PathBuf {
 }
 
 fn plan(executable: PathBuf, arguments: Vec<String>, working_directory: PathBuf) -> LaunchPlan {
-    LaunchPlan {
-        executable,
-        arguments,
-        working_directory,
-    }
+    LaunchPlan::new(executable, arguments, working_directory)
 }
 
 fn fixture_args(name: &str) -> Vec<String> {
@@ -174,4 +170,95 @@ fn fixture_wait_forever() {
     loop {
         std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+#[tokio::test]
+async fn authenticated_launch_redacts_tokens_from_plans_logs_and_events() {
+    use ccl_core::{
+        launch_plan::{
+            LaunchPlatform, MicrosoftIdentity, OfflineAccount, PlanOptions,
+            build_authenticated_launch_plan,
+        },
+        metadata::VersionMetadata,
+    };
+    use std::sync::Mutex;
+    let root = temp_dir("authenticated redaction");
+    let executable = fixture_executable(&root);
+    fs::create_dir_all(root.join("versions/test")).unwrap();
+    fs::create_dir_all(root.join("natives")).unwrap();
+    fs::write(root.join("versions/test/test.jar"), b"test").unwrap();
+    let metadata = VersionMetadata::parse(r#"{"id":"test","mainClass":"Main","downloads":{"client":{}},"arguments":{"game":["--username","${auth_player_name}","--uuid","${auth_uuid}","--accessToken","${auth_access_token}","--session","${auth_session}","--userType","${user_type}","--clientId","${clientid}","--xuid","${auth_xuid}"]}}"#).unwrap();
+    let secret = "CCL-P3-SECRET-SENTINEL";
+    let identity = MicrosoftIdentity::new(
+        "OnlinePlayer".into(),
+        "0123456789abcdef0123456789abcdef".into(),
+        "123456789".into(),
+        "00000000-0000-0000-0000-000000000001".into(),
+        secret.into(),
+    )
+    .unwrap();
+    let mut plan = build_authenticated_launch_plan(
+        &metadata,
+        &PlanOptions {
+            game_directory: root.clone(),
+            version: "test".into(),
+            natives_directory: root.join("natives"),
+            java_executable: executable,
+            max_memory_mb: 1024,
+            account: OfflineAccount::new("OfflinePlayer").unwrap(),
+            platform: LaunchPlatform::current(),
+            logging_argument: None,
+        },
+        &identity,
+    )
+    .unwrap();
+    assert!(
+        plan.arguments
+            .windows(2)
+            .any(|a| a == ["--username", "OnlinePlayer"])
+    );
+    assert!(
+        plan.arguments
+            .windows(2)
+            .any(|a| a == ["--accessToken", secret])
+    );
+    assert!(
+        plan.arguments
+            .windows(2)
+            .any(|a| a == ["--userType", "msa"])
+    );
+    assert!(
+        plan.arguments
+            .iter()
+            .any(|a| a == &format!("token:{secret}:0123456789abcdef0123456789abcdef"))
+    );
+    assert!(!serde_json::to_string(&plan).unwrap().contains(secret));
+    assert!(!format!("{plan:?} {identity:?}").contains(secret));
+    plan.arguments = fixture_args("fixture_print_secret");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let output = events.clone();
+    let context = TaskContext::new(
+        CancellationToken::default(),
+        Arc::new(move |e| output.lock().unwrap().push(e)),
+    );
+    let result = run_process(&plan, "test", &root.join("logs"), Some(context))
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    let log = fs::read_to_string(result.log_path).unwrap();
+    assert!(!log.contains(secret));
+    assert!(log.contains("<redacted>"));
+    assert!(
+        !serde_json::to_string(&*events.lock().unwrap())
+            .unwrap()
+            .contains(secret)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore]
+fn fixture_print_secret() {
+    println!("token:CCL-P3-SECRET-SENTINEL:profile");
+    eprintln!("accessToken=CCL-P3-SECRET-SENTINEL");
 }

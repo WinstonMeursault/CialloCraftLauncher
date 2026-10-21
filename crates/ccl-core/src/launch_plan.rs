@@ -2,7 +2,7 @@
 
 use crate::metadata::{Argument, Arguments, RuleContext, VersionMetadata, library_allowed};
 use md5::{Digest, Md5};
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Serializer, ser::SerializeStruct};
 use std::{
     collections::HashMap,
     env,
@@ -14,6 +14,8 @@ use thiserror::Error;
 pub enum PlanError {
     #[error("invalid offline username (expected 1 to 16 ASCII letters, digits, or underscores)")]
     InvalidUsername,
+    #[error("invalid authenticated identity")]
+    InvalidIdentity,
     #[error("invalid version identifier")]
     InvalidVersion,
     #[error("maximum memory must be between 256 and 65536 MiB")]
@@ -136,16 +138,131 @@ pub struct PlanOptions {
     pub platform: LaunchPlatform,
     pub logging_argument: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Authenticated profile. Tokens are deliberately excluded from Debug and Serialize.
+#[derive(Clone)]
+pub struct MicrosoftIdentity {
+    pub username: String,
+    pub uuid: String,
+    pub xuid: String,
+    pub client_id: String,
+    access_token: String,
+}
+impl MicrosoftIdentity {
+    pub fn new(
+        username: String,
+        uuid: String,
+        xuid: String,
+        client_id: String,
+        access_token: String,
+    ) -> Result<Self, PlanError> {
+        OfflineAccount::new(&username)?;
+        let uuid = uuid.replace('-', "");
+        if uuid.len() != 32
+            || !uuid.bytes().all(|b| b.is_ascii_hexdigit())
+            || !xuid.bytes().all(|b| b.is_ascii_digit())
+            || client_id.is_empty()
+            || access_token.is_empty()
+            || access_token.chars().any(char::is_control)
+        {
+            return Err(PlanError::InvalidIdentity);
+        }
+        Ok(Self {
+            username,
+            uuid,
+            xuid,
+            client_id,
+            access_token,
+        })
+    }
+}
+impl std::fmt::Debug for MicrosoftIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MicrosoftIdentity")
+            .field("username", &self.username)
+            .field("uuid", &self.uuid)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 pub struct LaunchPlan {
     pub executable: PathBuf,
     pub arguments: Vec<String>,
     pub working_directory: PathBuf,
+    sensitive_values: Vec<String>,
+}
+impl LaunchPlan {
+    pub fn new(executable: PathBuf, arguments: Vec<String>, working_directory: PathBuf) -> Self {
+        Self {
+            executable,
+            arguments,
+            working_directory,
+            sensitive_values: Vec::new(),
+        }
+    }
+    pub fn redact(&self, text: &str) -> String {
+        self.sensitive_values
+            .iter()
+            .fold(text.to_owned(), |text, secret| {
+                text.replace(secret, "<redacted>")
+            })
+    }
+    pub(crate) fn sensitive_values(&self) -> Vec<String> {
+        self.sensitive_values.clone()
+    }
+}
+impl Serialize for LaunchPlan {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("LaunchPlan", 3)?;
+        state.serialize_field("executable", &self.executable)?;
+        state.serialize_field(
+            "arguments",
+            &self
+                .arguments
+                .iter()
+                .map(|arg| self.redact(arg))
+                .collect::<Vec<_>>(),
+        )?;
+        state.serialize_field("working_directory", &self.working_directory)?;
+        state.end()
+    }
+}
+impl std::fmt::Debug for LaunchPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchPlan")
+            .field("executable", &self.executable)
+            .field(
+                "arguments",
+                &self
+                    .arguments
+                    .iter()
+                    .map(|arg| self.redact(arg))
+                    .collect::<Vec<_>>(),
+            )
+            .field("working_directory", &self.working_directory)
+            .finish()
+    }
+}
+
+pub fn build_authenticated_launch_plan(
+    metadata: &VersionMetadata,
+    options: &PlanOptions,
+    identity: &MicrosoftIdentity,
+) -> Result<LaunchPlan, PlanError> {
+    build_plan(metadata, options, Some(identity))
 }
 
 pub fn build_launch_plan(
     metadata: &VersionMetadata,
     options: &PlanOptions,
+) -> Result<LaunchPlan, PlanError> {
+    build_plan(metadata, options, None)
+}
+
+fn build_plan(
+    metadata: &VersionMetadata,
+    options: &PlanOptions,
+    identity: Option<&MicrosoftIdentity>,
 ) -> Result<LaunchPlan, PlanError> {
     if options.version.is_empty()
         || options.version == "."
@@ -207,7 +324,19 @@ pub fn build_launch_plan(
     } else {
         ":"
     });
-    let values = placeholders(metadata, options, &game, &natives, &cp);
+    let mut values = placeholders(metadata, options, &game, &natives, &cp);
+    if let Some(identity) = identity {
+        values.insert("auth_player_name".into(), identity.username.clone());
+        values.insert("auth_uuid".into(), identity.uuid.clone());
+        values.insert("auth_access_token".into(), identity.access_token.clone());
+        values.insert(
+            "auth_session".into(),
+            format!("token:{}:{}", identity.access_token, identity.uuid),
+        );
+        values.insert("auth_xuid".into(), identity.xuid.clone());
+        values.insert("clientid".into(), identity.client_id.clone());
+        values.insert("user_type".into(), "msa".into());
+    }
     let mut args = Vec::new();
     if options.platform.os == "osx" {
         args.push("-XstartOnFirstThread".into());
@@ -304,6 +433,9 @@ pub fn build_launch_plan(
         executable,
         arguments: args,
         working_directory: game,
+        sensitive_values: identity
+            .map(|i| vec![i.access_token.clone()])
+            .unwrap_or_default(),
     })
 }
 
