@@ -330,7 +330,7 @@ fn version_in_range(version: &str, range: &VersionRange) -> bool {
         && range
             .max
             .as_ref()
-            .is_none_or(|max| compare(max).is_some_and(|o| o != std::cmp::Ordering::Greater))
+            .is_none_or(|max| compare(max).is_some_and(|o| o == std::cmp::Ordering::Less))
 }
 fn arch_matches(pattern: &str, arch: &str) -> bool {
     pattern == arch
@@ -338,25 +338,9 @@ fn arch_matches(pattern: &str, arch: &str) -> bool {
         || (pattern == "x86_64" && matches!(arch, "x86_64" | "amd64"))
         || (pattern == "aarch64" && matches!(arch, "aarch64" | "arm64"))
 }
-// Mojang metadata uses simple regular expressions for OS versions. This covers
-// anchors and wildcards without making regex a mandatory dependency.
+// Metadata OS version patterns are regular expressions, including escaped dots.
 fn regex_like(pattern: &str, value: &str) -> bool {
-    let p = pattern.trim_start_matches('^').trim_end_matches('$');
-    if p == ".*" {
-        return true;
-    }
-    if p.contains(".*") {
-        let mut rest = value;
-        for part in p.split(".*").filter(|x| !x.is_empty()) {
-            if let Some(i) = rest.find(part) {
-                rest = &rest[i + part.len()..];
-            } else {
-                return false;
-            }
-        }
-        return true;
-    }
-    p == value
+    regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value))
 }
 impl VersionMetadata {
     /// Return the OS-specific native classifier, substituting `${arch}` as Mojang does.
@@ -640,6 +624,26 @@ mod tests {
         assert!(!rule.matches(&RuleContext {
             os: "windows",
             os_version: "10.0.15000",
+            arch: "x86_64",
+            features: &features
+        }));
+        let upper: Rule = serde_json::from_str(
+            r#"{"action":"allow","os":{"name":"windows","versionRange":{"max":"10.0.17134"}}}"#,
+        )
+        .unwrap();
+        assert!(!upper.matches(&RuleContext {
+            os: "windows",
+            os_version: "10.0.17134",
+            arch: "x86_64",
+            features: &features
+        }));
+        let regex_rule: Rule = serde_json::from_str(
+            r#"{"action":"allow","os":{"name":"windows","version":"^10\\.0\\.[0-9]+$"}}"#,
+        )
+        .unwrap();
+        assert!(regex_rule.matches(&RuleContext {
+            os: "windows",
+            os_version: "10.0.19045",
             arch: "x86_64",
             features: &features
         }));
