@@ -4,13 +4,18 @@ A libre, open-source, cross-platform Minecraft launcher written in Rust.
 
 ## Project status
 
-The project is in its initial planning and development stage.
+The project is in early development. The `ccl` CLI currently provides `doctor` for read-only environment checks and `init` for creating the game directory. Installation, downloads, and authentication are not implemented yet.
+
+## Documentation
+
+- [Architecture and design boundaries (English)](docs/architecture.en.md) · [简体中文](docs/architecture.zh-CN.md)
+- [CLI commands and output (English)](docs/cli.en.md) · [简体中文](docs/cli.zh-CN.md)
+- [Development guide (English)](docs/development.en.md) · [简体中文](docs/development.zh-CN.md)
+- [简体中文项目说明](README.zh-CN.md)
 
 ## Acknowledgements
 
-This project draws inspiration from the feature set of [Hello Minecraft! Launcher (HMCL)](https://github.com/HMCL-dev/HMCL). Thank you to the HMCL developers and contributors for their work on free and open-source Minecraft launchers.
-
-CialloCraftLauncher is an independently developed project with its own code, GUI, and assets. It is not affiliated with or endorsed by HMCL-dev.
+We thank the developers and contributors of Hello Minecraft! Launcher (HMCL) for their work on open-source Minecraft launchers. CialloCraftLauncher is independently developed; a graphical interface is planned for the future and is not available yet.
 
 ## License
 
