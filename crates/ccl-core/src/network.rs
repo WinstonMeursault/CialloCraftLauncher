@@ -1,4 +1,5 @@
 use serde::de::DeserializeOwned;
+use std::time::Duration;
 
 use crate::{Result, config::DownloadConfig};
 
@@ -9,7 +10,9 @@ pub struct HttpClient(reqwest::Client);
 impl HttpClient {
     pub fn new(settings: &DownloadConfig) -> Result<Self> {
         let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")));
+            .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(30));
         if let Some(proxy) = &settings.http_proxy {
             builder = builder.proxy(reqwest::Proxy::all(proxy)?);
         }

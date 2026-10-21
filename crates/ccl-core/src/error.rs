@@ -23,6 +23,8 @@ pub enum Error {
     Network(#[from] reqwest::Error),
     #[error("task cancelled")]
     Cancelled,
+    #[error(transparent)]
+    Install(#[from] crate::install::InstallError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
