@@ -596,14 +596,18 @@ mod tests {
         let legacy = VersionMetadata::parse(&format!(r#"{{"id":"v1","mainClass":"example.Main","minecraftArguments":"--username ${{auth_player_name}} --gameDir ${{game_directory}}","downloads":{{"client":{{}}}},"libraries":[{lib}]}}"#)).unwrap();
         let p = build_launch_plan(&legacy, &options).unwrap();
         assert!(p.arguments.iter().any(|a| a == "--gameDir"));
-        assert!(p.arguments.iter().any(|a| {
-            a == options
-                .game_directory
-                .canonicalize()
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        }));
+        let directory_index = p
+            .arguments
+            .iter()
+            .position(|arg| arg == "--gameDir")
+            .unwrap()
+            + 1;
+        let directory_argument = &p.arguments[directory_index];
+        assert_eq!(
+            Path::new(directory_argument).canonicalize().unwrap(),
+            options.game_directory.canonicalize().unwrap()
+        );
+        assert!(!directory_argument.starts_with(r"\\?\"));
         let main = p
             .arguments
             .iter()
