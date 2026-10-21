@@ -1,6 +1,6 @@
 # Microsoft account setup
 
-> **Preview status:** Microsoft sign-in is implemented, but live authorization has not been verified. The project has not completed Microsoft's application review/approval for public use of the Microsoft, Xbox, and Minecraft services. Treat this as an implementation preview, not a ready-to-distribute account feature. Do not publish a client ID or tell users that login is approved until the application owner has completed the required review and validated the full flow with an eligible account.
+> **Preview status:** Microsoft sign-in is implemented but has not been verified with a real account. A CCL OAuth application has not yet been registered. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
 
 ## Register a public desktop application
 
