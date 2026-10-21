@@ -13,7 +13,7 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-CLI 提供 `doctor`、`init`、`versions`、`install`、`instances`、`launch` 和 `logs`。运行 `cargo run -p ccl-cli -- --help` 查看当前参数。启动支持离线身份、兼容 Java 运行时探测、dry-run 计划、进程日志捕获和取消。
+CLI 提供 `doctor`、`init`、`settings`、`account`、`versions`、`install`、`instances`、`launch` 和 `logs`。运行 `cargo run -p ccl-cli -- --help` 查看当前参数。启动支持 Microsoft 或离线身份、兼容 Java 运行时探测和托管安装、dry-run 计划、进程日志捕获和取消。Microsoft 应用尚未完成验证和公开分发批准；参阅[账户注册指南](accounts.zh-CN.md)。
 
 ## 代码边界
 
@@ -21,11 +21,11 @@ CLI 提供 `doctor`、`init`、`versions`、`install`、`instances`、`launch` �
 - `crates/ccl-core` 不得依赖终端或图形界面库。
 - CLI 负责解析参数、格式化输出和映射退出码，不复制核心业务规则。
 - 任务通过核心事件报告进度，并通过取消句柄响应取消。
-- 配置错误应包含易理解的上下文；不得将秘密写入日志或输出。
+- 配置错误应包含易理解的上下文；不得将秘密写入日志或输出。设置更新使用核心的 `ConfigStore::update` 事务，通过跨进程锁串行化，并在验证后原子保存。账户令牌必须保存在操作系统凭据库中；Linux 需要可用且持久的 Secret Service/D-Bus 会话，不得退回保存明文。
 
 ## 配置与数据目录
 
-默认配置路径见[架构说明](architecture.zh-CN.md#下载源)。JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy` 和 `downloads.max_parallel`。缺失字段使用默认值；显式指定但不存在的配置文件会报错。
+默认配置路径见[架构说明](architecture.zh-CN.md#下载源)。JSON 配置字段包括 `downloads.*`、`auth.microsoft_client_id`、`launch.java`、`launch.max_memory_mb` 和 `launch.auto_install_java`。缺失字段使用默认值，以兼容旧配置；显式指定但不存在的配置文件会报错。客户端 ID 属于公开配置。代理凭据会为网络请求保留，但在设置输出中隐藏。
 
 默认游戏目录优先级为：显式 `--game-dir`、当前工作目录中已存在的 `.minecraft`、平台惯用目录、用户主目录中的 `.minecraft`，最后在当前工作目录创建新的 `.minecraft`。macOS 已存在的惯用目录可以复用。`doctor` 只读；`init` 会创建所选目录。
 
@@ -33,4 +33,4 @@ CLI 提供 `doctor`、`init`、`versions`、`install`、`instances`、`launch` �
 
 ## 当前功能范围
 
-核心提供配置、目录选择、HTTP 下载、版本查询与安装、Java 运行时探测、启动计划、原生库解压和子进程输出捕获。启动当前使用离线账户，不提供账户身份验证。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。
+核心提供配置、目录选择、HTTP 下载、版本查询与安装、安装托管 Java 运行时到 `.ccl/runtimes`、Microsoft 账户身份验证、启动计划、原生库解压和子进程输出捕获。账户批准和实时端到端验证尚未完成；在这些条件满足前，不要把账户登录描述为可公开使用。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。

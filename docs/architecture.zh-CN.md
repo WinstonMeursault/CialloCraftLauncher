@@ -30,9 +30,9 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 `doctor` 检查配置和目录状态，不创建或修改游戏目录。`init` 按此顺序选择并创建游戏目录。
 
-CLI 还提供 `versions`，读取官方版本清单，并支持通过 `--limit N` 限制结果数量（`0` 表示全部版本）；`install VERSION` 会在游戏目录中安装指定版本。
+CLI 还提供 `versions`，读取官方版本清单，并支持通过 `--limit N` 限制结果数量（`0` 表示全部版本）；`install VERSION` 会在游戏目录中安装指定版本。`settings` 提供有类型的用户配置读取、校验、更新和重置。跨进程锁会串行化每次读取、修改和写入事务；配置会先校验，再通过原子文件替换保存。
 
-`instances` 列出已安装的原版版本及其 Java 要求。`launch VERSION` 会选择与元数据所需主版本号和主机架构匹配的 Java 运行时，准备并校验已安装文件，然后使用离线账户启动。它会捕获进程的两个输出流，并在 `.ccl/logs` 下写入运行日志和 JSON 结果记录。`logs` 读取这些记录对应的文本日志；`--dry-run` 会准备结构化启动计划，并清理临时原生库文件，但不启动游戏。启动和安装行为在共享核心中实现，与 GUI 解耦。
+`instances` 列出已安装的原版版本及其 Java 要求。`launch VERSION` 会选择与元数据所需主版本号和主机架构匹配的 Java 运行时，准备并校验已安装文件，然后使用已选择的 Microsoft 账户启动，也可显式指定离线身份。缺少 Java 时，可从 Mojang 官方组件清单安装到 `.ccl/runtimes`，并校验运行时文件。Microsoft 访问令牌和刷新令牌保存在操作系统凭据库中，账户元数据单独存储。Linux 必须有持久的 Secret Service/D-Bus 支持，不提供明文回退。账户登录已实现，但应用的实时批准和端到端验证尚未完成；参阅[账户设置](accounts.zh-CN.md)。启动器会捕获进程的两个输出流，并在 `.ccl/logs` 下写入运行日志和 JSON 结果记录。`logs` 读取这些记录对应的文本日志；`--dry-run` 会准备结构化启动计划，并清理临时原生库文件，但不启动游戏。启动和安装行为在共享核心中实现，与 GUI 解耦。
 
 ## 下载源
 
@@ -44,10 +44,10 @@ CLI 还提供 `versions`，读取官方版本清单，并支持通过 `--limit N
 - macOS：`~/Library/Application Support/CialloCraftLauncher/config.json`
 - Linux：`$XDG_CONFIG_HOME/ciallocraftlauncher/config.json`；未设置该变量时为 `~/.config/ciallocraftlauncher/config.json`
 
-配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy` 和 `downloads.max_parallel`。缺失字段使用默认值。镜像根地址必须是无凭据的 HTTPS URL，未知字段会被拒绝。默认配置文件缺失时使用默认值；通过 `--config` 显式指定的文件缺失时则报错。
+配置字段包括下载偏好、可选的 `auth.microsoft_client_id`（公开客户端 ID），以及 `launch.java`、`launch.max_memory_mb`（默认 2048）和 `launch.auto_install_java`（默认 true）。缺失字段会使用默认值，以兼容旧配置。镜像根地址必须是无凭据的 HTTPS URL，未知字段会被拒绝。显示设置时会隐藏代理凭据。CLI 在 Unix 上写入的配置文件仅允许所有者访问。默认配置文件缺失时使用默认值；通过 `--config` 显式指定的文件缺失时则报错。
 
 ## CLI 与 GUI 一致性
 
 CLI 与 GUI 共用核心操作、配置和错误定义。CLI 不应另行实现下载或安装规则；GUI 不应要求核心启动终端或读取标准输入。`--json` 将命令执行结果格式化为 JSON。clap 帮助和参数解析错误仍为文本。CLI 命令无需交互输入即可运行。
 
-核心提供配置、目录选择、HTTP 传输、任务事件与取消、版本列表、安装、Java 运行时探测、已安装版本列表、启动准备和进程输出捕获。启动仅使用离线身份；账户身份验证和 GUI 尚未实现。
+核心提供配置、目录选择、HTTP 传输、任务事件与取消、版本列表、安装、托管 Java 运行时安装、账户存储与身份验证、已安装版本列表、启动准备和进程输出捕获。应用注册和凭据存储要求见[Microsoft 账户设置](accounts.zh-CN.md)。Microsoft 实时批准与身份验证验证仍未完成；启用账户的公开预览尚不能分发。
