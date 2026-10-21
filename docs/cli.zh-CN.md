@@ -3,7 +3,7 @@
 ## 用法
 
 ```text
-ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init>
+ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|versions|install>
 ```
 
 全局选项可以放在子命令前。命令以非交互方式运行，不会等待标准输入。
@@ -12,14 +12,16 @@ ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init>
 | --- | --- |
 | `doctor` | 只读检查配置和游戏目录状态，不创建目录。 |
 | `init` | 按[目录优先级](architecture.zh-CN.md#游戏目录选择)选择并创建游戏目录。 |
+| `versions [--limit N]` | 列出可用的游戏版本。`--limit N` 限制结果数量；`--limit 0` 列出全部版本。 |
+| `install VERSION` | 将指定游戏版本安装到所选游戏目录。 |
 
 `--game-dir PATH` 显式指定游戏目录，优先于默认选择。`--config PATH` 指定配置文件；省略时读取平台默认位置，文件不存在则使用默认配置。显式指定的配置文件缺失时会报文件系统错误（退出码 `4`）。
 
-`--json` 将命令执行结果输出为 JSON。clap 生成的帮助和参数解析错误仍为文本。
+`--json` 将命令执行结果输出为 JSON。它是全局选项，可以放在子命令前。进度输出到标准错误。clap 生成的帮助和参数解析错误仍为文本。
 
 ## 配置
 
-JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy` 和 `downloads.max_parallel`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。镜像映射、版本查询、安装、下载、启动、账户管理和实例管理命令尚未实现。
+JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy` 和 `downloads.max_parallel`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。当前 `versions` 和 `install` 流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；要求并校验每个下载文件的 SHA-1，限制并发数，重试临时失败，复用有效缓存文件，并通过临时文件替换目标文件。多个进程通过版本锁协调，也支持取消操作。如果已有版本 JSON 与请求的元数据冲突，将返回冲突错误而不会覆盖。
 
 ## 退出码
 
@@ -30,6 +32,8 @@ JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`�
 | `3` | 配置错误 |
 | `4` | 文件系统错误 |
 | `5` | 网络错误 |
+| `6` | 版本无效或未知 |
+| `7` | 已有版本元数据与请求的安装内容冲突 |
 | `130` | 操作已取消 |
 
 脚本应使用退出码判断结果。使用 `--json` 时命令执行结果为 JSON；clap 帮助和参数解析错误为文本，并使用参数错误退出码。

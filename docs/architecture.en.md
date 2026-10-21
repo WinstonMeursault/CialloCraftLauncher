@@ -30,9 +30,11 @@ The default game directory is selected in this order:
 
 `doctor` checks configuration and directory state without creating or modifying the game directory. `init` selects and creates the game directory using this order.
 
+The CLI also provides `versions`, which reads the official version manifest and accepts `--limit N` to limit results (`0` means all versions), and `install VERSION`, which installs a selected version in the game directory.
+
 ## Download sources
 
-Version lists and game files have separate source settings, each supporting `auto`, `official`, and `mirror`. Both default to `auto`; the core will choose a suitable source and fallback policy. The mirror root can be set in the user configuration. The configuration structure exists, but source selection, mirror URL mapping, downloads, and fallback workflows are not implemented yet.
+Version lists and game files have separate source settings, each supporting `auto`, `official`, and `mirror`. Both default to `auto`; the mirror root can be set in the user configuration. The current version listing and installation workflows use the official manifest and version metadata. Installation downloads the client, libraries, native libraries, asset index, and assets. It requires and verifies SHA-1 for every downloaded file, bounds concurrent downloads, retries transient failures, reuses valid cached files, and writes through temporary files before replacement. A cross-process version lock prevents competing installations from writing the same version simultaneously. Tasks support cooperative cancellation. Existing version JSON that conflicts with the requested metadata is reported as a conflict instead of being replaced.
 
 The user configuration is JSON and defaults to:
 
@@ -46,4 +48,4 @@ Configuration fields are `downloads.version_list_source`, `downloads.file_source
 
 The CLI and GUI share core operations, configuration, and error definitions. The CLI must not implement separate download or installation rules, and the GUI must not require the core to start a terminal or read standard input. `--json` formats command execution results as JSON. clap help and argument parsing errors remain text. CLI commands run without interactive input.
 
-The core currently provides configuration, directory selection, an HTTP client, and task event/cancellation foundations. Installation, downloads, authentication, and a GUI are not implemented yet.
+The core currently provides configuration, directory selection, HTTP transport, task events and cancellation, version listing, and game version installation. Authentication, launching, instance management, and a GUI are not implemented yet.
