@@ -201,7 +201,15 @@ async fn run(cli: &Cli) -> Result<Value> {
             command: SettingsCommand::Set { .. } | SettingsCommand::Reset { .. }
         }
     );
-    let config = if cli.config.is_some() && !is_settings_write {
+    let reset_all = matches!(
+        &cli.command,
+        Command::Settings {
+            command: SettingsCommand::Reset { all: true, .. }
+        }
+    );
+    let config = if reset_all {
+        LauncherConfig::default()
+    } else if cli.config.is_some() && !is_settings_write {
         LauncherConfig::read(&config_path)?
     } else {
         LauncherConfig::read_or_default(&config_path)?
@@ -249,7 +257,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
                 AccountCommand::Logout { id } => {
                     let id = account_id(&store, id.as_deref())?;
-                    store.remove(&id)?;
+                    store.remove_cancellable(&id, &signal_token())?;
                     Ok(json!({ "ok": true, "removed": id }))
                 }
                 AccountCommand::Login { client_id } => {
@@ -258,7 +266,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         .probe()?;
                     let auth = auth_service(client_id, &config)?;
                     let token = signal_token();
-                    let device = auth.begin_device_login().await?;
+                    let device = auth.begin_device_login_cancellable(&token).await?;
                     if cli.json {
                         eprintln!(
                             "{}",
@@ -430,6 +438,9 @@ async fn run(cli: &Cli) -> Result<Value> {
                 Arc::new(move |event| match event {
                     TaskEvent::Log { line, .. } if human => eprintln!("{line}"),
                     TaskEvent::ProcessStarted { pid } => eprintln!("Game process: {pid}"),
+                    TaskEvent::Started { task } if task.starts_with("install Java runtime ") => {
+                        eprintln!("{task}...")
+                    }
                     _ => {}
                 }),
             );
@@ -562,6 +573,7 @@ fn error_code(error: &Error) -> &'static str {
         Error::Cancelled => "cancelled",
         Error::Auth(ccl_core::auth::AuthError::Cancelled) => "cancelled",
         Error::Auth(_) => "authentication_error",
+        Error::Account(ccl_core::accounts::AccountError::Cancelled) => "cancelled",
         Error::Account(_) => "account_error",
         Error::Launch(error) => match error {
             LaunchError::Runtime(
@@ -596,6 +608,7 @@ fn exit_code(error: &Error) -> u8 {
         Error::Network(_) => 5,
         Error::Cancelled => 130,
         Error::Auth(ccl_core::auth::AuthError::Cancelled) => 130,
+        Error::Account(ccl_core::accounts::AccountError::Cancelled) => 130,
         Error::Auth(_) | Error::Account(_) => 10,
         Error::Launch(error) => match error {
             LaunchError::Runtime(

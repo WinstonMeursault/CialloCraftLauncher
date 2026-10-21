@@ -224,6 +224,10 @@ impl ConfigStore {
 
     /// Reset one dotted setting, or the complete configuration when key is None.
     pub fn reset(&self, key: Option<&str>) -> Result<()> {
+        if key.is_none() {
+            let _lock = FileLock::acquire(&self.path)?;
+            return write_atomic(&self.path, &LauncherConfig::default());
+        }
         self.update(|config| {
             if let Some(key) = key {
                 let default = LauncherConfig::default();

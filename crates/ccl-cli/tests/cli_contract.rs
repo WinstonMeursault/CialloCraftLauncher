@@ -363,3 +363,27 @@ fn account_selection_survives_restart_and_logout_requires_secure_store() {
     assert_eq!(json_output(&run(&["account", "list"]))["selected"], ids[1]);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn reset_all_recovers_a_corrupt_configuration() {
+    let root = sandbox();
+    let config = root.join("config.json");
+    fs::write(&config, "not valid JSON").unwrap();
+    let output = command(&root)
+        .args(["--json", "--config"])
+        .arg(&config)
+        .args(["settings", "reset", "--all"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        json_output(&output)["settings"]["launch"]["max_memory_mb"],
+        2048
+    );
+    assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(&config).unwrap()).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}

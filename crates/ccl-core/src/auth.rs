@@ -141,22 +141,37 @@ impl MicrosoftAuth {
         })
     }
     pub async fn begin_device_login(&self) -> Result<DeviceCode, AuthError> {
-        let v = self
+        self.begin_device_login_inner(None).await
+    }
+    pub async fn begin_device_login_cancellable(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<DeviceCode, AuthError> {
+        self.begin_device_login_inner(Some(cancel)).await
+    }
+    async fn begin_device_login_inner(
+        &self,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DeviceCode, AuthError> {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err(AuthError::Cancelled);
+        }
+        let request = self
             .client
             .post(self.config.endpoints.device_code.clone())
             .form(&[
                 ("client_id", self.config.client_id.as_str()),
                 ("scope", MS_SCOPE),
             ])
-            .send()
-            .await
-            .map_err(|_| AuthError::Network)?;
-        let v = checked_json(v).await?;
+            .send();
+        let response = send_request(request, cancel).await?;
+        let v = parse_json(response, cancel).await?;
         let d: DeviceResponse =
             serde_json::from_value(v).map_err(|_| AuthError::InvalidResponse)?;
         if d.expires_in == 0
             || d.device_code.is_empty()
             || d.user_code.is_empty()
+            || d.expires_in > 86400
             || !valid_verification_uri(&d.verification_uri)
         {
             return Err(AuthError::InvalidResponse);
@@ -184,7 +199,11 @@ impl MicrosoftAuth {
             if Instant::now() >= device.deadline {
                 return Err(AuthError::Expired);
             }
-            tokio::select! {_ = tokio::time::sleep(delay)=>{},_ = wait_cancel(cancel)=>return Err(AuthError::Cancelled)}
+            let remaining = device.deadline.saturating_duration_since(Instant::now());
+            tokio::select! {_ = tokio::time::sleep(delay.min(remaining))=>{},_ = wait_cancel(cancel)=>return Err(AuthError::Cancelled)}
+            if Instant::now() >= device.deadline {
+                return Err(AuthError::Expired);
+            }
             let form = [
                 ("grant_type", DEVICE_GRANT),
                 ("client_id", self.config.client_id.as_str()),
@@ -195,8 +214,18 @@ impl MicrosoftAuth {
                 .post(self.config.endpoints.token.clone())
                 .form(&form)
                 .send();
-            let response = tokio::select! { r = future => r.map_err(|_|AuthError::Network)?, _ = wait_cancel(cancel) => return Err(AuthError::Cancelled) };
-            let value = parse_json(response, Some(cancel)).await?;
+            let response = tokio::select! {
+                r = future => r.map_err(|_|AuthError::Network)?,
+                _ = wait_cancel(cancel) => return Err(AuthError::Cancelled),
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(device.deadline)) => return Err(AuthError::Expired),
+            };
+            let success = response.status().is_success();
+            // OAuth pending/slow_down responses use HTTP 400. Decode their error
+            // identifier before treating other unsuccessful statuses as failures.
+            let value = tokio::select! {
+                value = parse_body(response, Some(cancel)) => value?,
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(device.deadline)) => return Err(AuthError::Expired),
+            };
             if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
                 match error {
                     "authorization_pending" => continue,
@@ -213,6 +242,9 @@ impl MicrosoftAuth {
                     }
                     _ => return Err(AuthError::Rejected("Microsoft sign-in failed".into())),
                 }
+            }
+            if !success {
+                return Err(AuthError::Rejected("Microsoft sign-in failed".into()));
             }
             break serde_json::from_value::<OAuthResponse>(value)
                 .map_err(|_| AuthError::InvalidResponse)?;
@@ -431,19 +463,6 @@ struct OAuthResponse {
     #[serde(default)]
     refresh_token: Option<String>,
 }
-async fn checked_json(r: reqwest::Response) -> Result<serde_json::Value, AuthError> {
-    if !r.status().is_success() {
-        let status = r.status();
-        return Err(AuthError::Rejected(
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                "credentials were refused".into()
-            } else {
-                "authentication service returned an error".into()
-            },
-        ));
-    }
-    r.json().await.map_err(|_| AuthError::InvalidResponse)
-}
 async fn post_json(
     c: &Client,
     url: &Url,
@@ -486,6 +505,12 @@ async fn parse_json(
             },
         ));
     }
+    parse_body(r, cancel).await
+}
+async fn parse_body(
+    r: reqwest::Response,
+    cancel: Option<&CancellationToken>,
+) -> Result<serde_json::Value, AuthError> {
     match cancel {
         Some(token) => {
             tokio::select! { result = r.json() => result.map_err(|_|AuthError::InvalidResponse), _ = wait_cancel(token) => Err(AuthError::Cancelled) }
@@ -545,6 +570,13 @@ mod tests {
     };
 
     fn mock_server(replies: Vec<(&'static str, &'static str)>) -> Url {
+        mock_server_observed(replies).0
+    }
+    fn mock_server_observed(
+        replies: Vec<(&'static str, &'static str)>,
+    ) -> (Url, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = count.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -598,9 +630,10 @@ mod tests {
                     ("200", body)
                 };
                 write!(stream, "HTTP/1.1 {} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, payload.len(), payload).unwrap();
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         });
-        Url::parse(&format!("http://{address}/")).unwrap()
+        (Url::parse(&format!("http://{address}/")).unwrap(), count)
     }
 
     #[tokio::test]
@@ -610,7 +643,10 @@ mod tests {
                 "POST /device HTTP/",
                 r#"{"device_code":"opaque-device","user_code":"ABCD-EFGH","verification_uri":"https://microsoft.com/devicelogin","message":"Enter code","expires_in":60,"interval":1}"#,
             ),
-            ("POST /token HTTP/", r#"{"error":"authorization_pending"}"#),
+            (
+                "POST /token HTTP/",
+                "!400\n{\"error\":\"authorization_pending\"}",
+            ),
             (
                 "POST /token HTTP/",
                 r#"{"access_token":"ms-access","refresh_token":"ms-refresh","expires_in":3600}"#,
@@ -755,12 +791,12 @@ mod tests {
 
     #[tokio::test]
     async fn slow_down_is_cancellable_during_extended_poll_delay() {
-        let root = mock_server(vec![
+        let (root, observed) = mock_server_observed(vec![
             (
                 "POST /device HTTP/",
                 r#"{"device_code":"opaque","user_code":"ABCD","verification_uri":"https://microsoft.com/devicelogin","message":"Enter code","expires_in":60,"interval":1}"#,
             ),
-            ("POST /token HTTP/", r#"{"error":"slow_down"}"#),
+            ("POST /token HTTP/", "!400\n{\"error\":\"slow_down\"}"),
         ]);
         let mut config = AuthConfig::new("test-client");
         config.endpoints.device_code = root.join("device").unwrap();
@@ -770,11 +806,19 @@ mod tests {
         let cancellation = CancellationToken::default();
         let cancel_clone = cancellation.clone();
         tokio::spawn(async move {
+            while observed.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
             cancel_clone.cancel();
         });
         assert!(matches!(
-            auth.complete_device_login(device, &cancellation).await,
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                auth.complete_device_login(device, &cancellation)
+            )
+            .await
+            .unwrap(),
             Err(AuthError::Cancelled)
         ));
     }
@@ -923,5 +967,32 @@ mod tests {
             "minecraft-access"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+    #[tokio::test]
+    async fn expires_before_first_poll_and_begin_honors_precancellation() {
+        let root = mock_server(vec![(
+            "POST /device HTTP/",
+            r#"{"device_code":"opaque","user_code":"ABCD","verification_uri":"https://microsoft.com/devicelogin","message":"Enter code","expires_in":1,"interval":5}"#,
+        )]);
+        let mut config = AuthConfig::new("test-client");
+        config.endpoints.device_code = root.join("device").unwrap();
+        config.endpoints.token = root.join("token").unwrap();
+        let auth = MicrosoftAuth::new(config).unwrap();
+        let device = auth.begin_device_login().await.unwrap();
+        assert!(matches!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                auth.complete_device_login(device, &CancellationToken::default())
+            )
+            .await
+            .unwrap(),
+            Err(AuthError::Expired)
+        ));
+        let token = CancellationToken::default();
+        token.cancel();
+        assert!(matches!(
+            auth.begin_device_login_cancellable(&token).await,
+            Err(AuthError::Cancelled)
+        ));
     }
 }
