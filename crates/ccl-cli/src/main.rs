@@ -2,12 +2,17 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use ccl_core::{
-    Error, Result,
+    CancellationToken, Error, Result, TaskContext, TaskEvent,
     config::{LauncherConfig, default_config_path},
     directory::DirectoryInputs,
+    install::{InstallError, InstallOptions, InstallService},
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -39,6 +44,17 @@ enum Command {
     Doctor,
     /// Create the selected game directory if it is missing.
     Init,
+    /// Show available vanilla versions, newest first.
+    Versions {
+        /// Maximum entries to print (0 shows all).
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Download and verify a vanilla version and its resources.
+    Install {
+        /// Version ID from the official version list.
+        version: String,
+    },
 }
 
 #[tokio::main]
@@ -50,7 +66,7 @@ async fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    match run(&cli) {
+    match run(&cli).await {
         Ok(value) => {
             if cli.json {
                 println!("{value}");
@@ -73,7 +89,7 @@ async fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> Result<Value> {
+async fn run(cli: &Cli) -> Result<Value> {
     let inputs = DirectoryInputs::from_environment(cli.game_dir.clone())?;
     let resolution = inputs.resolve()?;
     let config_path = cli.config.clone().unwrap_or_else(|| {
@@ -90,7 +106,7 @@ fn run(cli: &Cli) -> Result<Value> {
     };
     let _transport = HttpClient::new(&config.downloads)?;
 
-    match cli.command {
+    match &cli.command {
         Command::Doctor => Ok(json!({
             "ok": true,
             "platform": { "os": env::consts::OS, "architecture": env::consts::ARCH },
@@ -110,10 +126,72 @@ fn run(cli: &Cli) -> Result<Value> {
                 json!({ "ok": true, "game_directory": { "path": resolution.path, "origin": resolution.origin, "exists": true } }),
             )
         }
+        Command::Versions { limit } => {
+            let manifest = InstallService::new(config.downloads)?
+                .list_versions()
+                .await?;
+            let versions: Vec<_> = manifest.versions.iter().take(if *limit == 0 { usize::MAX } else { *limit })
+                .map(|v| json!({ "id": v.id, "type": v.version_type, "release_time": v.release_time }))
+                .collect();
+            Ok(json!({ "ok": true, "latest": manifest.latest, "versions": versions }))
+        }
+        Command::Install { version } => {
+            resolution.ensure_exists()?;
+            let service = InstallService::new(config.downloads)?;
+            let token = CancellationToken::default();
+            let signal_token = token.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    signal_token.cancel();
+                }
+            });
+            let completed = Arc::new(AtomicUsize::new(0));
+            let counter = completed.clone();
+            let context = TaskContext::new(
+                token,
+                Arc::new(move |event| {
+                    if matches!(event, TaskEvent::Finished { .. }) {
+                        let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                        if count.is_multiple_of(100) {
+                            eprintln!("Verified {count} files...");
+                        }
+                    }
+                }),
+            );
+            let summary = service
+                .install(
+                    version,
+                    &InstallOptions::for_current_platform(&resolution.path),
+                    Some(context),
+                )
+                .await?;
+            Ok(json!({ "ok": true, "install": summary }))
+        }
     }
 }
 
 fn print_human(value: &Value) {
+    if let Some(versions) = value.get("versions").and_then(Value::as_array) {
+        for version in versions {
+            println!(
+                "{}\t{}",
+                version["id"].as_str().unwrap_or("?"),
+                version["type"].as_str().unwrap_or("?")
+            );
+        }
+        return;
+    }
+    if let Some(install) = value.get("install") {
+        println!(
+            "Installed {} in {} (downloaded {}, reused {} of {} files)",
+            install["version"].as_str().unwrap_or("?"),
+            install["game_directory"].as_str().unwrap_or("?"),
+            install["downloaded_files"].as_u64().unwrap_or(0),
+            install["reused_files"].as_u64().unwrap_or(0),
+            install["total_files"].as_u64().unwrap_or(0)
+        );
+        return;
+    }
     if let Some(game) = value.get("game_directory") {
         println!("Game directory: {}", game["path"].as_str().unwrap_or("?"));
         println!(
@@ -139,6 +217,16 @@ fn error_code(error: &Error) -> &'static str {
         Error::Io { .. } | Error::NotDirectory(_) => "filesystem_error",
         Error::Network(_) => "network_error",
         Error::Cancelled => "cancelled",
+        Error::Install(error) => match error {
+            InstallError::VersionNotFound(_)
+            | InstallError::InvalidResource(_)
+            | InstallError::Metadata(_) => "invalid_version",
+            InstallError::Conflict(_) => "instance_conflict",
+            InstallError::Io { .. } => "filesystem_error",
+            InstallError::Cancelled
+            | InstallError::Download(ccl_core::download::DownloadError::Cancelled) => "cancelled",
+            _ => "network_error",
+        },
     }
 }
 
@@ -148,5 +236,15 @@ fn exit_code(error: &Error) -> u8 {
         Error::Io { .. } | Error::NotDirectory(_) => 4,
         Error::Network(_) => 5,
         Error::Cancelled => 130,
+        Error::Install(error) => match error {
+            InstallError::VersionNotFound(_)
+            | InstallError::InvalidResource(_)
+            | InstallError::Metadata(_) => 6,
+            InstallError::Conflict(_) => 7,
+            InstallError::Io { .. } => 4,
+            InstallError::Cancelled
+            | InstallError::Download(ccl_core::download::DownloadError::Cancelled) => 130,
+            _ => 5,
+        },
     }
 }
