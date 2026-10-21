@@ -44,6 +44,11 @@ fn fixture_executable(dir: &Path) -> PathBuf {
         .map(|x| format!(".{}", x.to_string_lossy()))
         .unwrap_or_default();
     let target = dir.join(format!("fixture executable{suffix}"));
+    // An immutable symlink preserves the spaced executable path without opening
+    // a writable copy while other parallel tests are spawning children (ETXTBSY on Linux).
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &target).unwrap();
+    #[cfg(windows)]
     fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
     target
 }
