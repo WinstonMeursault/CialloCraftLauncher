@@ -12,7 +12,7 @@ Initial target platforms:
 
 ## Workspace
 
-- `crates/ccl-core`: shared services, configuration, errors, HTTP transport, and task events.
+- `crates/ccl-core`: shared services, configuration, errors, HTTP transport, task events, installation, Java discovery, and launch orchestration.
 - `crates/ccl-cli`: command-line arguments, text or JSON output, exit codes, and calls into the core.
 - `docs`: public documentation for users and contributors.
 
@@ -32,6 +32,8 @@ The default game directory is selected in this order:
 
 The CLI also provides `versions`, which reads the official version manifest and accepts `--limit N` to limit results (`0` means all versions), and `install VERSION`, which installs a selected version in the game directory.
 
+`instances` lists installed vanilla versions and their Java requirements. `launch VERSION` selects a Java runtime matching the metadata's required major version and host architecture, prepares and verifies installed files, and launches using an offline account. It captures both process output streams and writes a run log plus a JSON result record beneath `.ccl/logs`. `logs` reads those records' text logs; `--dry-run` prepares a structured launch plan and cleans up temporary native files without starting the game. Launch and installation behavior is implemented in the shared core, independently of the GUI.
+
 ## Download sources
 
 Version lists and game files have separate source settings, each supporting `auto`, `official`, and `mirror`. Both default to `auto`; the mirror root can be set in the user configuration. The current version listing and installation workflows use the official manifest and version metadata. Installation downloads the client, libraries, native libraries, asset index, and assets. It requires and verifies SHA-1 for every downloaded file, bounds concurrent downloads, retries transient failures, reuses valid cached files, and writes through temporary files before replacement. A cross-process version lock prevents competing installations from writing the same version simultaneously. Tasks support cooperative cancellation. Existing version JSON that conflicts with the requested metadata is reported as a conflict instead of being replaced.
@@ -48,4 +50,4 @@ Configuration fields are `downloads.version_list_source`, `downloads.file_source
 
 The CLI and GUI share core operations, configuration, and error definitions. The CLI must not implement separate download or installation rules, and the GUI must not require the core to start a terminal or read standard input. `--json` formats command execution results as JSON. clap help and argument parsing errors remain text. CLI commands run without interactive input.
 
-The core currently provides configuration, directory selection, HTTP transport, task events and cancellation, version listing, and game version installation. Authentication, launching, instance management, and a GUI are not implemented yet.
+The core provides configuration, directory selection, HTTP transport, task events and cancellation, version listing, installation, Java runtime discovery, installed-version listing, and launch preparation and process capture. Launch uses offline identity only; account authentication and a GUI are not implemented.
