@@ -813,10 +813,11 @@ impl Drop for InstallLock {
 mod tests {
     use super::*;
     use sha1::Digest;
+    use std::sync::Arc;
+    #[cfg(unix)]
     use std::{
         io::{Read, Write},
         net::TcpListener,
-        sync::Arc,
         thread,
     };
 
