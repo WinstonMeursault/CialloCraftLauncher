@@ -41,5 +41,9 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets --locked --target ${{ matrix.target }}
 
+      - name: Verify Windows credential vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} os_secure_store_probe_round_trips_without_account_credentials -- --ignored
+
       - name: Build
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
