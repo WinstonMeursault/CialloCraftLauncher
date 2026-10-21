@@ -13,7 +13,7 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-The CLI provides the basic `doctor` and `init` commands; the full installation workflow is not available yet.
+The CLI provides `doctor`, `init`, `versions`, `install`, `instances`, `launch`, and `logs`. Run `cargo run -p ccl-cli -- --help` for the current arguments. Launch supports offline identity, compatible Java runtime discovery, dry-run planning, process log capture, and cancellation.
 
 ## Code boundaries
 
@@ -29,8 +29,8 @@ See the [architecture guide](architecture.en.md#download-sources) for default co
 
 Default game directory priority is: explicit `--game-dir`, an existing `.minecraft` in the current working directory, the platform-conventional directory, `.minecraft` in the home directory, and finally a new `.minecraft` in the current working directory. An existing conventional macOS directory can be reused. `doctor` is read-only; `init` creates the selected directory.
 
-The version-list and file-source preferences are independent and accept `auto`, `official`, or `mirror`. The mirror root is configurable and must be HTTPS without URL credentials; actual downloads and source selection are not implemented yet.
+The version-list and file-source preferences are independent and accept `auto`, `official`, or `mirror`. The mirror root is configurable and must be HTTPS without URL credentials. Version listing, installation, launch preparation, and process capture are implemented in the shared core; keep CLI-specific formatting and exit-code mapping in the CLI.
 
 ## Current feature scope
 
-The core provides configuration, directory selection, an HTTP client, and task event/cancellation foundations. Game installation, file downloads, version lookup, and authentication are not implemented yet. Keep the core independent from interfaces and update the relevant user documentation when adding features.
+The core provides configuration, directory selection, HTTP downloads, version lookup and installation, Java runtime discovery, launch planning, native extraction, and child-process output capture. Launch currently uses an offline account and does not provide account authentication. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.

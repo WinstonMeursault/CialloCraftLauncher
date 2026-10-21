@@ -25,6 +25,8 @@ pub enum Error {
     Cancelled,
     #[error(transparent)]
     Install(#[from] crate::install::InstallError),
+    #[error(transparent)]
+    Launch(#[from] crate::launch::LaunchError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

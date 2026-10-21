@@ -13,6 +13,7 @@ use ccl_core::{
     config::{LauncherConfig, default_config_path},
     directory::DirectoryInputs,
     install::{InstallError, InstallOptions, InstallService},
+    launch::{self, LaunchError, LaunchRequest, LaunchService},
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -55,6 +56,30 @@ enum Command {
         /// Version ID from the official version list.
         version: String,
     },
+    /// List versions already installed in the selected game directory.
+    Instances,
+    /// Launch an installed vanilla version with an offline account.
+    Launch {
+        version: String,
+        #[arg(long, default_value = "CCLPlayer")]
+        username: String,
+        /// Java executable or Java home; otherwise detect a matching installed runtime.
+        #[arg(long)]
+        java: Option<PathBuf>,
+        /// Maximum Java heap in MiB.
+        #[arg(long, default_value_t = 2048)]
+        memory: u32,
+        /// Prepare and print the argument vector without starting the game.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Read the latest launch log, or select a run ID.
+    Logs {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        lines: usize,
+    },
 }
 
 #[tokio::main]
@@ -73,7 +98,16 @@ async fn main() -> ExitCode {
             } else {
                 print_human(&value);
             }
-            ExitCode::SUCCESS
+            let code = value.get("launch").map_or(0, |result| {
+                if result["cancelled"].as_bool() == Some(true) {
+                    130
+                } else if result["exit_code"].as_i64() == Some(0) {
+                    0
+                } else {
+                    8
+                }
+            });
+            ExitCode::from(code)
         }
         Err(error) => {
             if cli.json {
@@ -167,10 +201,86 @@ async fn run(cli: &Cli) -> Result<Value> {
                 .await?;
             Ok(json!({ "ok": true, "install": summary }))
         }
+        Command::Instances => Ok(
+            json!({ "ok": true, "game_directory": resolution, "instances": launch::list_installed_versions(&resolution.path)? }),
+        ),
+        Command::Logs { run, lines } => {
+            let (run_id, text) = launch::read_logs(&resolution.path, run.as_deref(), *lines)?;
+            Ok(json!({ "ok": true, "run_id": run_id, "log": text }))
+        }
+        Command::Launch {
+            version,
+            username,
+            java,
+            memory,
+            dry_run,
+        } => {
+            let service = LaunchService::new(config.downloads);
+            let request = LaunchRequest {
+                game_directory: resolution.path,
+                version: version.clone(),
+                username: username.clone(),
+                java: java.clone(),
+                max_memory_mb: *memory,
+            };
+            let token = CancellationToken::default();
+            let signal = token.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    signal.cancel();
+                }
+            });
+            let human = !cli.json;
+            let context = TaskContext::new(
+                token,
+                Arc::new(move |event| match event {
+                    TaskEvent::Log { line, .. } if human => eprintln!("{line}"),
+                    TaskEvent::ProcessStarted { pid } => eprintln!("Game process: {pid}"),
+                    _ => {}
+                }),
+            );
+            if *dry_run {
+                let prepared = service.prepare(&request, Some(context)).await?;
+                let value = json!({ "ok": true, "prepared": prepared });
+                Ok(value)
+            } else {
+                let result = service.launch(&request, Some(context)).await?;
+                Ok(
+                    json!({ "ok": result.exit_code == Some(0) && !result.cancelled, "launch": result }),
+                )
+            }
+        }
     }
 }
 
 fn print_human(value: &Value) {
+    if let Some(log) = value.get("log").and_then(Value::as_str) {
+        println!("{log}");
+        return;
+    }
+    if let Some(instances) = value.get("instances").and_then(Value::as_array) {
+        for instance in instances {
+            println!(
+                "{}\tJava {}",
+                instance["id"].as_str().unwrap_or("?"),
+                instance["required_java"]
+            );
+        }
+        return;
+    }
+    if let Some(prepared) = value.get("prepared") {
+        println!("{}", serde_json::to_string_pretty(prepared).unwrap());
+        return;
+    }
+    if let Some(result) = value.get("launch") {
+        println!(
+            "Game exited: {} (cancelled: {}). Log: {}",
+            result["exit_code"],
+            result["cancelled"],
+            result["log_path"].as_str().unwrap_or("?")
+        );
+        return;
+    }
     if let Some(versions) = value.get("versions").and_then(Value::as_array) {
         for version in versions {
             println!(
@@ -217,6 +327,13 @@ fn error_code(error: &Error) -> &'static str {
         Error::Io { .. } | Error::NotDirectory(_) => "filesystem_error",
         Error::Network(_) => "network_error",
         Error::Cancelled => "cancelled",
+        Error::Launch(error) => match error {
+            LaunchError::Java(_) => "java_error",
+            LaunchError::Cancelled
+            | LaunchError::Download(ccl_core::download::DownloadError::Cancelled) => "cancelled",
+            LaunchError::Io { .. } => "filesystem_error",
+            _ => "launch_error",
+        },
         Error::Install(error) => match error {
             InstallError::VersionNotFound(_)
             | InstallError::InvalidResource(_)
@@ -236,6 +353,13 @@ fn exit_code(error: &Error) -> u8 {
         Error::Io { .. } | Error::NotDirectory(_) => 4,
         Error::Network(_) => 5,
         Error::Cancelled => 130,
+        Error::Launch(error) => match error {
+            LaunchError::Java(_) => 9,
+            LaunchError::Cancelled
+            | LaunchError::Download(ccl_core::download::DownloadError::Cancelled) => 130,
+            LaunchError::Io { .. } => 4,
+            _ => 8,
+        },
         Error::Install(error) => match error {
             InstallError::VersionNotFound(_)
             | InstallError::InvalidResource(_)

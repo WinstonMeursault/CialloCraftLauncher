@@ -22,6 +22,16 @@ pub enum TaskEvent {
     Finished {
         task: String,
     },
+    ProcessStarted {
+        pid: u32,
+    },
+    Log {
+        stream: String,
+        line: String,
+    },
+    ProcessExited {
+        code: Option<i32>,
+    },
 }
 
 /// Cooperative cancellation handle that can be shared across tasks.
