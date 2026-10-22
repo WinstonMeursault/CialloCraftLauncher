@@ -195,20 +195,30 @@ impl LaunchService {
         let metadata = load_installed_metadata(&root, &request.version)?;
         let runtime = match java::detect_java(request.java.as_deref(), required_java(&metadata)) {
             Ok(runtime) => runtime,
-            Err(java::JavaError::NoCompatibleRuntime(_)) if request.auto_install_java => {
+            Err(error @ java::JavaError::NoCompatibleRuntime(_)) => {
                 let component = metadata
                     .java_version
                     .as_ref()
                     .and_then(|v| v.component.as_deref())
                     .unwrap_or("jre-legacy");
-                crate::runtime::ensure_runtime(
+                if let Some(runtime) = crate::runtime::find_installed_runtime(
                     &root,
                     component,
                     required_java(&metadata),
-                    &self.config,
-                    context.clone(),
-                )
-                .await?
+                )? {
+                    runtime
+                } else if request.auto_install_java {
+                    crate::runtime::ensure_runtime(
+                        &root,
+                        component,
+                        required_java(&metadata),
+                        &self.config,
+                        context.clone(),
+                    )
+                    .await?
+                } else {
+                    return Err(error.into());
+                }
             }
             Err(error) => return Err(error.into()),
         };

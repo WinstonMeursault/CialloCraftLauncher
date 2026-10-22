@@ -51,6 +51,45 @@ pub enum RuntimeError {
 
 type Result<T> = std::result::Result<T, RuntimeError>;
 
+/// Find a complete, valid managed Java runtime without creating directories or
+/// making network requests. Missing or corrupt installations return `Ok(None)`;
+/// unsafe cache roots are reported as errors.
+pub fn find_installed_runtime(
+    game_directory: &Path,
+    component: &str,
+    required_major: u32,
+) -> std::result::Result<Option<JavaRuntime>, RuntimeError> {
+    let platform = platform_key()?;
+    let component = safe_component(component)?;
+    let game_root = match fs::canonicalize(game_directory) {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io(game_directory, error)),
+    };
+    let ccl_dir = game_root.join(".ccl");
+    if !existing_real_directory(&ccl_dir)? {
+        return Ok(None);
+    }
+    let root = ccl_dir.join("runtimes");
+    if !existing_real_directory(&root)? {
+        return Ok(None);
+    }
+    let runtime_dir = root.join(format!("{component}-{platform}"));
+    Ok(valid_runtime(&runtime_dir, required_major))
+}
+
+fn existing_real_directory(path: &Path) -> std::result::Result<bool, RuntimeError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err(RuntimeError::InvalidManifest(format!(
+            "runtime directory is not a real directory: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io(path, error)),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct CatalogEntry {
     manifest: Artifact,
@@ -929,7 +968,7 @@ mod tests {
     #[tokio::test]
     async fn installs_direct_files_then_reuses_probed_runtime() {
         let file = format!(
-            "#!/bin/sh\necho '    java.version = 17.0.1' >&2\necho '    java.specification.version = 17' >&2\necho '    os.arch = {}' >&2\n",
+            "#!/bin/sh\necho '    java.version = 999.0.1' >&2\necho '    java.specification.version = 999' >&2\necho '    os.arch = {}' >&2\n",
             std::env::consts::ARCH
         );
         let sha = format!("{:x}", sha1::Sha1::digest(file.as_bytes()));
@@ -953,7 +992,7 @@ mod tests {
                 let request = String::from_utf8_lossy(&req[..n]);
                 let path = request.split_whitespace().nth(1).unwrap_or("/");
                 let body = match path {
-                    "/catalog" => serde_json::to_vec(&serde_json::json!({(platform_key().unwrap()):{"test-runtime":[{"manifest":{"url":format!("http://{addr}/manifest"),"sha1":server_state.2,"size":server_state.0.len()},"version":{"name":"17.0.1"}}]}})).unwrap(),
+                    "/catalog" => serde_json::to_vec(&serde_json::json!({(platform_key().unwrap()):{"test-runtime":[{"manifest":{"url":format!("http://{addr}/manifest"),"sha1":server_state.2,"size":server_state.0.len()},"version":{"name":"999.0.1"}}]}})).unwrap(),
                     "/manifest" => server_state.0.clone(),
                     "/java" => { artifact_counter.fetch_add(1,std::sync::atomic::Ordering::SeqCst); tx.send(()).unwrap(); server_state.1.clone() },
                     _ => b"not found".to_vec(),
@@ -989,30 +1028,67 @@ mod tests {
         let result = ensure_runtime_with_catalog(
             &dir,
             "test-runtime",
-            17,
+            999,
             &local_config,
             None,
             &catalog_url,
         )
         .await
         .unwrap();
-        assert_eq!(result.major, 17);
+        assert_eq!(result.major, 999);
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), ());
         let reused = ensure_runtime_with_catalog(
             &dir,
             "test-runtime",
-            17,
+            999,
             &local_config,
             None,
             &catalog_url,
         )
         .await
         .unwrap();
-        assert_eq!(reused.major, 17);
+        assert_eq!(reused.major, 999);
         assert_eq!(
             artifact_requests.load(std::sync::atomic::Ordering::SeqCst),
             1
         );
+        let client_bytes = b"jar";
+        let client_sha = format!("{:x}", sha1::Sha1::digest(client_bytes));
+        let version_dir = dir.join("versions/runtime-cache-test");
+        fs::create_dir_all(&version_dir).unwrap();
+        fs::write(
+            version_dir.join("runtime-cache-test.json"),
+            serde_json::json!({
+                "id":"runtime-cache-test",
+                "mainClass":"example.Main",
+                "javaVersion":{"component":"test-runtime","majorVersion":999},
+                "downloads":{"client":{"sha1":client_sha,"size":client_bytes.len()}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(version_dir.join("runtime-cache-test.jar"), client_bytes).unwrap();
+        let service = crate::launch::LaunchService::new(local_config.clone());
+        let request = crate::launch::LaunchRequest {
+            game_directory: dir.clone(),
+            version: "runtime-cache-test".into(),
+            username: "RuntimeCacheTest".into(),
+            java: None,
+            max_memory_mb: 1024,
+            identity: None,
+            auto_install_java: false,
+        };
+        let prepared = service.prepare(&request, None).await.unwrap();
+        assert_eq!(prepared.runtime.major, 999);
+        assert_eq!(
+            prepared.runtime.executable,
+            fs::canonicalize(dir.join(format!(
+                ".ccl/runtimes/test-runtime-{}/bin/java",
+                platform_key().unwrap()
+            )))
+            .unwrap()
+        );
+        drop(prepared);
         let java_path = dir.join(format!(
             ".ccl/runtimes/test-runtime-{}/bin/java",
             platform_key().unwrap()
@@ -1021,14 +1097,14 @@ mod tests {
         let repaired = ensure_runtime_with_catalog(
             &dir,
             "test-runtime",
-            17,
+            999,
             &local_config,
             None,
             &catalog_url,
         )
         .await
         .unwrap();
-        assert_eq!(repaired.major, 17);
+        assert_eq!(repaired.major, 999);
         assert_eq!(
             artifact_requests.load(std::sync::atomic::Ordering::SeqCst),
             2
