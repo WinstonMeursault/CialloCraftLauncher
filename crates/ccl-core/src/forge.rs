@@ -42,6 +42,11 @@ async fn versions_with_context(
     minecraft: &str,
     context: &Option<TaskContext>,
 ) -> Result<Vec<LoaderVersion>, LoaderError> {
+    if config.offline {
+        return Err(LoaderError::Unsupported(
+            "Forge version discovery is unavailable in offline mode".into(),
+        ));
+    }
     safe_segment(minecraft)?;
     let root = maven_root(kind)?;
     let (path, prefix) = match kind {
@@ -50,7 +55,10 @@ async fn versions_with_context(
             format!("{minecraft}-"),
         ),
         LoaderKind::NeoForge => ("net/neoforged/neoforge/maven-metadata.xml", String::new()),
-        LoaderKind::Fabric => {
+        LoaderKind::Fabric
+        | LoaderKind::Quilt
+        | LoaderKind::LegacyFabric
+        | LoaderKind::OptiFine => {
             return Err(LoaderError::Unsupported(
                 "Forge version request cannot use Fabric".into(),
             ));
@@ -126,7 +134,10 @@ async fn versions_with_context(
         let fallback = match kind {
             LoaderKind::Forge => bmcl_forge_versions(config, minecraft, context, &http).await,
             LoaderKind::NeoForge => bmcl_neoforge_versions(config, minecraft, context, &http).await,
-            LoaderKind::Fabric => unreachable!("Fabric is rejected above"),
+            LoaderKind::Fabric
+            | LoaderKind::Quilt
+            | LoaderKind::LegacyFabric
+            | LoaderKind::OptiFine => unreachable!("non-Forge loader is rejected above"),
         };
         match fallback {
             Ok(mut values) if !values.is_empty() => {
@@ -348,19 +359,22 @@ pub async fn install(
     safe_segment(&request.minecraft)?;
     safe_segment(&request.version)?;
     check(&context)?;
-    if request.kind == LoaderKind::Fabric {
+    if !matches!(request.kind, LoaderKind::Forge | LoaderKind::NeoForge) {
         return Err(LoaderError::Unsupported(
             "Forge installer cannot install Fabric".into(),
         ));
     }
-    let choices = versions_with_context(config, request.kind, &request.minecraft, &context).await?;
-    if !choices.iter().any(|v| v.version == request.version) {
-        return Err(LoaderError::Unsupported(format!(
-            "{} {} is not published for Minecraft {}",
-            kind_label(request.kind),
-            request.version,
-            request.minecraft
-        )));
+    if !config.offline {
+        let choices =
+            versions_with_context(config, request.kind, &request.minecraft, &context).await?;
+        if !choices.iter().any(|v| v.version == request.version) {
+            return Err(LoaderError::Unsupported(format!(
+                "{} {} is not published for Minecraft {}",
+                kind_label(request.kind),
+                request.version,
+                request.minecraft
+            )));
+        }
     }
     // Populate the vanilla client and libraries expected by processor inputs.
     InstallService::new(config.clone())?
@@ -391,14 +405,13 @@ pub async fn install(
         .join("installers")
         .join(format!("{}-{coordinate}-installer.jar", artifact));
     let downloader = DownloadManager::new(config)?;
-    let checksum_url = format!("{installer_url}.sha1");
     let integrity_record = installer_integrity_record_path(&installer);
     let expected_sha1 = expected_installer_sha1(
         &installer,
         &integrity_record,
         &installer_url,
         &context,
-        || fetch_sha1(config, &checksum_url, &context),
+        || expected_artifact_sha1(config, &installer_url, &installer, &context),
     )
     .await?;
     let mut download = DownloadRequest::new(
@@ -420,19 +433,126 @@ pub async fn install(
         .map_err(|e| LoaderError::Unsupported(format!("invalid installer archive: {e}")))?;
     let mut archive = archive;
     let profile = read_json::<InstallProfile>(&mut archive, "install_profile.json")?;
-    if profile.spec.is_some_and(|spec| spec != 1) {
+    if profile.spec.is_some_and(|spec| spec > 1) {
         return Err(LoaderError::Unsupported(format!(
             "unsupported installer profile spec {}",
             profile.spec.unwrap()
         )));
     }
-    if profile.minecraft.as_deref() != Some(request.minecraft.as_str()) {
+    if profile.spec.is_some() && profile.minecraft.as_deref() != Some(request.minecraft.as_str()) {
         return Err(LoaderError::Unsupported(
             "installer metadata targets a different Minecraft version".into(),
         ));
     }
-    if profile.processors.is_empty() {
-        return Err(LoaderError::Unsupported("installer profile contains no client processors; legacy profile schemas are unsupported".into()));
+    if profile.processors.is_empty() && profile.json.is_none() {
+        if request.kind != LoaderKind::Forge {
+            return Err(LoaderError::Unsupported(
+                "NeoForge installer profile contains no client processors".into(),
+            ));
+        }
+        let legacy: LegacyInstallProfile = read_json(&mut archive, "install_profile.json")?;
+        if legacy.install.minecraft.as_deref() != Some(request.minecraft.as_str()) {
+            return Err(LoaderError::Unsupported(
+                "legacy Forge install metadata targets a different Minecraft version".into(),
+            ));
+        }
+        let coordinate = legacy.install.path.as_deref().ok_or_else(|| {
+            LoaderError::Unsupported(
+                "legacy Forge install metadata has no universal artifact coordinate".into(),
+            )
+        })?;
+        let file_path = legacy.install.file_path.as_deref().ok_or_else(|| {
+            LoaderError::Unsupported(
+                "legacy Forge install metadata has no universal artifact path".into(),
+            )
+        })?;
+        safe_zip_entry(file_path)?;
+        let mut version = legacy.version_info;
+        let version_id = version.id.clone().ok_or_else(|| {
+            LoaderError::Unsupported("legacy Forge version metadata has no id".into())
+        })?;
+        safe_segment(&version_id)?;
+        if !installer_version_matches(
+            request.kind,
+            &request.minecraft,
+            &request.version,
+            &version_id,
+        ) {
+            return Err(LoaderError::Unsupported(format!(
+                "legacy Forge metadata version ID {version_id} does not match requested loader {}",
+                request.version
+            )));
+        }
+        if version.inherits_from.is_none() {
+            version.inherits_from = Some(request.minecraft.clone());
+        }
+        if version.inherits_from.as_deref() != Some(request.minecraft.as_str()) {
+            return Err(LoaderError::Unsupported(
+                "legacy Forge version does not inherit from requested Minecraft version".into(),
+            ));
+        }
+        let universal = artifact_path(&options.game_directory.join("libraries"), coordinate)?;
+        let entry_name = safe_zip_entry(file_path)?;
+        let mut entry = archive.by_name(&entry_name).map_err(|e| {
+            LoaderError::Unsupported(format!(
+                "legacy Forge installer is missing universal artifact {entry_name}: {e}"
+            ))
+        })?;
+        if entry.size() > 1024 * 1024 * 1024 {
+            return Err(LoaderError::Unsupported(
+                "legacy Forge universal artifact exceeds 1 GiB".into(),
+            ));
+        }
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut bytes).map_err(|e| {
+            LoaderError::Unsupported(format!(
+                "could not read legacy Forge universal artifact: {e}"
+            ))
+        })?;
+        drop(entry);
+        if let Some(parent) = universal.parent() {
+            fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+        }
+        ensure_path_has_no_symlinks(&universal, &options.game_directory.join("libraries"))?;
+        fs::write(&universal, &bytes).map_err(|e| io(&universal, e))?;
+        let relative = universal
+            .strip_prefix(options.game_directory.join("libraries"))
+            .map_err(|_| {
+                LoaderError::Unsupported("legacy Forge artifact escaped libraries directory".into())
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let library_url = format!("{base}/{}", relative);
+        let hash = format!("{:x}", Sha1::digest(&bytes));
+        version.libraries.push(crate::metadata::Library {
+            name: coordinate.to_owned(),
+            downloads: crate::metadata::LibraryDownloads {
+                artifact: Some(crate::metadata::DownloadInfo {
+                    path: Some(relative),
+                    url: Some(library_url),
+                    sha1: Some(hash),
+                    size: Some(bytes.len() as u64),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        crate::loaders::install_libraries(
+            config,
+            &options.game_directory,
+            &mut version,
+            options,
+            &context,
+        )
+        .await?;
+        let version_dir = options.game_directory.join("versions").join(&version_id);
+        fs::create_dir_all(&version_dir).map_err(|e| io(&version_dir, e))?;
+        let json_path = version_dir.join(format!("{version_id}.json"));
+        let encoded = serde_json::to_vec_pretty(&version)
+            .map_err(|e| LoaderError::Unsupported(e.to_string()))?;
+        atomic_write(&json_path, &encoded)?;
+        return Ok(version_id);
     }
     let version_path = profile.json.as_deref().ok_or_else(|| {
         LoaderError::Unsupported("installer has no version.json reference".into())
@@ -467,6 +587,68 @@ pub async fn install(
     }
     let lib_root = options.game_directory.join("libraries");
     fs::create_dir_all(&lib_root).map_err(|e| io(&lib_root, e))?;
+    if profile.processors.is_empty() {
+        if request.kind != LoaderKind::Forge {
+            return Err(LoaderError::Unsupported(
+                "NeoForge installer has no client processors".into(),
+            ));
+        }
+        for library in &mut version.libraries {
+            let Some(artifact) = library.downloads.artifact.as_mut() else {
+                continue;
+            };
+            let Some(relative) = artifact.path.as_deref() else {
+                continue;
+            };
+            let relative = safe_zip_entry(relative)?;
+            let target = lib_root.join(&relative);
+            ensure_path_has_no_symlinks(&target, &lib_root)?;
+            let integrity = artifact.sha1.as_ref().map(|sha1| ArtifactIntegrity {
+                sha1: sha1.clone(),
+                size: artifact.size,
+            });
+            if artifact.url.as_deref().is_none_or(str::is_empty) {
+                if integrity.is_none() {
+                    return Err(LoaderError::Unsupported(format!(
+                        "embedded runtime artifact {} has no integrity hash",
+                        library.name
+                    )));
+                }
+                if !extract_embedded_artifact(
+                    &mut archive,
+                    &format!("maven/{relative}"),
+                    &target,
+                    integrity.as_ref(),
+                    artifact.size,
+                )? {
+                    return Err(LoaderError::Unsupported(format!(
+                        "embedded runtime artifact {} is missing or corrupt",
+                        library.name
+                    )));
+                }
+                artifact.url = Some(format!("{base}/{relative}"));
+            }
+        }
+        crate::loaders::install_libraries(
+            config,
+            &options.game_directory,
+            &mut version,
+            options,
+            &context,
+        )
+        .await?;
+        let path = options
+            .game_directory
+            .join("versions")
+            .join(&version_id)
+            .join(format!("{version_id}.json"));
+        atomic_write(
+            &path,
+            &serde_json::to_vec_pretty(&version)
+                .map_err(|e| LoaderError::Unsupported(e.to_string()))?,
+        )?;
+        return Ok(version_id);
+    }
     download_profile_libraries(
         &downloader,
         config,
@@ -838,6 +1020,19 @@ struct InstallProfile {
     #[serde(default)]
     libraries: Vec<ProfileLibrary>,
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyInstallProfile {
+    install: LegacyInstall,
+    version_info: VersionMetadata,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyInstall {
+    minecraft: Option<String>,
+    path: Option<String>,
+    file_path: Option<String>,
+}
 
 fn constrain_processor_outputs(args: &mut [String], root: &Path) -> Result<(), LoaderError> {
     for index in 0..args.len().saturating_sub(1) {
@@ -899,7 +1094,12 @@ fn maven_root(k: LoaderKind) -> Result<&'static str, LoaderError> {
     match k {
         LoaderKind::Forge => Ok(FORGE_MAVEN),
         LoaderKind::NeoForge => Ok(NEO_MAVEN),
-        _ => Err(LoaderError::Unsupported("unsupported loader kind".into())),
+        LoaderKind::Fabric
+        | LoaderKind::Quilt
+        | LoaderKind::LegacyFabric
+        | LoaderKind::OptiFine => Err(LoaderError::Unsupported(
+            "Maven root requested for a non-Forge loader".into(),
+        )),
     }
 }
 fn kind_label(k: LoaderKind) -> &'static str {
@@ -1200,7 +1400,7 @@ async fn ensure_artifact(
 
     let expected = match integrity {
         Some(integrity) => integrity.sha1.clone(),
-        None => fetch_sha1(config, &format!("{url}.sha1"), context).await?,
+        None => expected_artifact_sha1(config, &url, path, context).await?,
     };
     if file_matches_integrity(
         path,
@@ -1389,7 +1589,7 @@ async fn download_profile_libraries(
                     library.name
                 )));
             }
-            None => fetch_sha1(config, &format!("{url}.sha1"), context).await?,
+            None => expected_artifact_sha1(config, &url, &destination, context).await?,
         };
         let integrity = ArtifactIntegrity {
             sha1: expected.clone(),
@@ -1549,6 +1749,58 @@ async fn fetch_sha1(
     url: &str,
     context: &Option<TaskContext>,
 ) -> Result<String, LoaderError> {
+    fetch_digest(c, url, 40, context).await
+}
+
+async fn expected_artifact_sha1(
+    c: &DownloadConfig,
+    url: &str,
+    destination: &Path,
+    context: &Option<TaskContext>,
+) -> Result<String, LoaderError> {
+    match fetch_sha1(c, &format!("{url}.sha1"), context).await {
+        Ok(hash) => Ok(hash),
+        Err(LoaderError::Cancelled) => Err(LoaderError::Cancelled),
+        Err(first) => {
+            let trusted = fetch_digest(c, &format!("{url}.sha512"), 128, context)
+                .await
+                .map_err(|second| {
+                    LoaderError::Unsupported(format!("{first}; SHA-512 fallback failed: {second}"))
+                })?;
+            let mut request =
+                DownloadRequest::new(maven_candidates(url, DownloadKind::File, c), destination)
+                    .with_sha512(trusted);
+            if let Some(ctx) = context {
+                request = request.with_task_context(ctx.clone());
+            }
+            DownloadManager::new(c)?.download(request).await?;
+            // SHA-1 is derived only after verification against the independently fetched SHA-512.
+            let mut file = fs::File::open(destination).map_err(|e| io(destination, e))?;
+            let mut hash = sha1::Sha1::new();
+            let mut buffer = [0u8; 65536];
+            loop {
+                let n = file.read(&mut buffer).map_err(|e| io(destination, e))?;
+                if n == 0 {
+                    break;
+                }
+                hash.update(&buffer[..n]);
+            }
+            Ok(format!("{:x}", hash.finalize()))
+        }
+    }
+}
+
+async fn fetch_digest(
+    c: &DownloadConfig,
+    url: &str,
+    length: usize,
+    context: &Option<TaskContext>,
+) -> Result<String, LoaderError> {
+    if c.offline {
+        return Err(LoaderError::Unsupported(
+            "installer checksum is not available in offline mode".into(),
+        ));
+    }
     let mut client = reqwest::Client::builder()
         .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(20))
@@ -1575,10 +1827,10 @@ async fn fetch_sha1(
         match response {
             Ok(s) => {
                 let hash = s.split_whitespace().next().unwrap_or("").trim();
-                if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if hash.len() == length && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return Ok(hash.to_ascii_lowercase());
                 }
-                errors.push(format!("{candidate}: malformed SHA-1"));
+                errors.push(format!("{candidate}: malformed {}-digit checksum", length));
             }
             Err(e) => errors.push(format!("{candidate}: {e}")),
         }
@@ -1613,6 +1865,9 @@ fn file_hash(path: &Path) -> Option<String> {
     Some(format!("{:x}", Sha1::digest(b)))
 }
 fn atomic_write(path: &Path, b: &[u8]) -> Result<(), LoaderError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+    }
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, b).map_err(|e| io(&tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| io(path, e))
@@ -1622,6 +1877,28 @@ fn io(p: &Path, e: std::io::Error) -> LoaderError {
         path: p.to_path_buf(),
         source: e,
     }
+}
+
+fn ensure_path_has_no_symlinks(destination: &Path, root: &Path) -> Result<(), LoaderError> {
+    let relative = destination.strip_prefix(root).map_err(|_| {
+        LoaderError::Conflict(format!(
+            "artifact path escapes library directory: {}",
+            destination.display()
+        ))
+    })?;
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        path.push(component);
+        if let Ok(metadata) = fs::symlink_metadata(&path)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(LoaderError::Conflict(format!(
+                "installation path is a symbolic link: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 fn check(ctx: &Option<TaskContext>) -> Result<(), LoaderError> {
     if ctx.as_ref().is_some_and(|c| c.cancellation.is_cancelled()) {
@@ -1642,6 +1919,30 @@ async fn wait_cancel(ctx: &Option<TaskContext>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_legacy_forge_install_profile_and_universal_coordinate() {
+        let json = serde_json::json!({
+            "install": { "minecraft": "1.7.10", "path": "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10", "filePath": "maven/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-universal.jar" },
+            "versionInfo": { "id": "1.7.10-Forge10.13.4.1614-1.7.10", "mainClass": "net.minecraft.launchwrapper.Launch", "libraries": [] }
+        });
+        let profile: LegacyInstallProfile = serde_json::from_value(json).unwrap();
+        assert_eq!(profile.install.minecraft.as_deref(), Some("1.7.10"));
+        assert!(profile.version_info.inherits_from.is_none());
+        let coordinate = profile.install.path.as_deref().unwrap();
+        assert_eq!(
+            coordinate,
+            "net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10"
+        );
+        assert_eq!(
+            artifact_path(Path::new("libraries"), coordinate).unwrap(),
+            PathBuf::from(
+                "libraries/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10.jar"
+            )
+        );
+        assert!(safe_zip_entry(profile.install.file_path.as_deref().unwrap()).is_ok());
+        assert!(safe_zip_entry("../../escape.jar").is_err());
+    }
 
     fn integrity_fixture(name: &str) -> (PathBuf, PathBuf, PathBuf, String) {
         let root = std::env::temp_dir().join(format!(
@@ -1711,6 +2012,63 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn installer_checksum_sha512_fallback_verifies_before_deriving_sha1() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let bytes = b"cold installer fixture verified with sha512".to_vec();
+        let sha512 = format!("{:x}", sha2::Sha512::digest(&bytes));
+        let expected_sha1 = format!("{:x}", Sha1::digest(&bytes));
+        let server_bytes = bytes.clone();
+        let server_hash = sha512.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 2048];
+                let read = stream.read(&mut request).await.unwrap();
+                let line = String::from_utf8_lossy(&request[..read])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                let path = line.split_whitespace().nth(1).unwrap_or("/");
+                let (status, body) = if path.ends_with(".sha1") {
+                    ("404 Not Found", b"missing".to_vec())
+                } else if path.ends_with(".sha512") {
+                    ("200 OK", server_hash.as_bytes().to_vec())
+                } else {
+                    ("200 OK", server_bytes.clone())
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            }
+        });
+        let root = std::env::temp_dir().join(format!("ccl-sha512-fallback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("installer.jar");
+        let config = DownloadConfig {
+            file_source: SourceMode::Official,
+            ..DownloadConfig::default()
+        };
+        let url = format!("http://{address}/installer.jar");
+        let digest = expected_artifact_sha1(&config, &url, &target, &None)
+            .await
+            .unwrap();
+        assert_eq!(digest, expected_sha1);
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        server.await.unwrap();
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1968,6 +2326,81 @@ mod tests {
         assert!(safe_zip_entry("../escape").is_err());
         drop(archive);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_zero_forge_profile_fixture_reads_and_verifies_embedded_maven_library() {
+        let root = std::env::temp_dir().join(format!("ccl-forge-spec-zero-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let installer = root.join("installer.jar");
+        let library_bytes = b"embedded forge runtime library";
+        let library_hash = format!("{:x}", Sha1::digest(library_bytes));
+        let profile_value = serde_json::json!({
+            "spec":0,
+            "minecraft":"1.12.2",
+            "json":"version.json",
+            "processors":[],
+            "libraries":[{"name":"net.minecraftforge:forge:1.12.2-14.23.5.2859","downloads":{"artifact":{"path":"net/minecraftforge/forge/1.12.2-14.23.5.2859/forge-1.12.2-14.23.5.2859.jar","sha1":library_hash,"size":library_bytes.len()}}}]
+        });
+        let file = fs::File::create(&installer).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("install_profile.json", opts).unwrap();
+        zip.write_all(&serde_json::to_vec(&profile_value).unwrap())
+            .unwrap();
+        zip.start_file("version.json", opts).unwrap();
+        let version_value = serde_json::json!({
+            "id":"1.12.2-forge-14.23.5.2859",
+            "mainClass":"net.minecraft.launchwrapper.Launch",
+            "libraries":[{"name":"net.minecraftforge:forge:1.12.2-14.23.5.2859","downloads":{"artifact":{"path":"net/minecraftforge/forge/1.12.2-14.23.5.2859/forge-1.12.2-14.23.5.2859.jar","sha1":library_hash,"size":library_bytes.len()}}}]
+        });
+        zip.write_all(&serde_json::to_vec(&version_value).unwrap())
+            .unwrap();
+        zip.start_file(
+            "maven/net/minecraftforge/forge/1.12.2-14.23.5.2859/forge-1.12.2-14.23.5.2859.jar",
+            opts,
+        )
+        .unwrap();
+        zip.write_all(library_bytes).unwrap();
+        drop(zip.finish().unwrap());
+        let mut archive = zip::ZipArchive::new(fs::File::open(&installer).unwrap()).unwrap();
+        let profile: InstallProfile = read_json(&mut archive, "install_profile.json").unwrap();
+        assert_eq!(profile.spec, Some(0));
+        assert!(profile.processors.is_empty());
+        let version: VersionMetadata =
+            read_json(&mut archive, profile.json.as_deref().unwrap()).unwrap();
+        let artifact = version.libraries[0].downloads.artifact.as_ref().unwrap();
+        let target = root.join(
+            "libraries/net/minecraftforge/forge/1.12.2-14.23.5.2859/forge-1.12.2-14.23.5.2859.jar",
+        );
+        let integrity = ArtifactIntegrity {
+            sha1: artifact.sha1.clone().unwrap(),
+            size: artifact.size,
+        };
+        assert!(
+            extract_embedded_artifact(
+                &mut archive,
+                "maven/net/minecraftforge/forge/1.12.2-14.23.5.2859/forge-1.12.2-14.23.5.2859.jar",
+                &target,
+                Some(&integrity),
+                artifact.size
+            )
+            .unwrap()
+        );
+        assert_eq!(fs::read(&target).unwrap(), library_bytes);
+        assert!(
+            !extract_embedded_artifact(
+                &mut archive,
+                "maven/missing.jar",
+                &root.join("missing.jar"),
+                Some(&integrity),
+                artifact.size
+            )
+            .unwrap()
+        );
+        drop(archive);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

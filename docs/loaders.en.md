@@ -1,17 +1,22 @@
 # Modded instances and loaders
 
-CCL can query upstream loader metadata and install Fabric, Forge, and NeoForge into isolated managed instances. Loader compatibility is checked against the upstream version list before installation. This check confirms that the loader release is advertised for the requested Minecraft version; it does not verify every mod, modpack, Java setup, or real-game launch combination.
+CCL can query loader metadata and install Fabric, Quilt, Legacy Fabric, Forge, NeoForge, and OptiFine into isolated managed instances. Loader compatibility is checked against the provider's version list before installation. This check confirms that the release is advertised for the requested Minecraft version; it does not verify every mod, modpack, Java setup, or launch combination.
 
-Fabric profiles come from Fabric Meta. Forge and NeoForge use their supported modern installer formats. Legacy installer formats that the current installer path cannot process return an unsupported-format error.
+Fabric and Legacy Fabric profiles come from their Meta APIs; Quilt profiles come from Quilt Meta. Forge supports processor based installers, spec 0 profiles with embedded Maven artifacts, and the earlier `install`/`versionInfo` universal JAR format. NeoForge uses processor based installers and embedded runtime artifacts. Unsupported installer structures return an explicit unsupported-format error.
 
-Validated menu launches on macOS: Minecraft `1.21.1` with Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234`. On Linux, Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234` reached the menu and exited normally with code `0`. The Linux NeoForge run reused an installer with a matching verified integrity record; a cold run could not obtain the official checksum sidecar, and the mirror did not provide it. These results do not certify other versions, platforms, or third-party mods. Windows is covered by compilation and automated tests.
+OptiFine releases are listed through the configured BMCLAPI compatible mirror. CCL downloads a fresh installer over HTTPS, checks its archive size and the embedded Minecraft/OptiFine version constants, and runs the bundled patcher against the vanilla client JAR when the installer contains one. OptiFine does not publish a checksum through this metadata endpoint, so CCL does not reuse a prior installer download as a verified cache entry.
+
+Cold installs have been completed for Quilt `0.20.0-beta.9` on Minecraft `1.21.4`, NeoForge `21.1.234` on Minecraft `1.21.1`, and OptiFine `HD_U_I6` on Minecraft `1.20.1`. The older Forge and Legacy Fabric installs are not included in this validation statement. These results do not certify other versions, platforms, or third-party mods.
 
 ## Query loader releases
 
 ```sh
 ccl loaders fabric 1.21.1
+ccl loaders quilt 1.21.4
+ccl loaders legacyfabric 1.8.9
 ccl loaders forge 1.20.1 --limit 10
 ccl loaders neoforge 1.21.1 --limit 10
+ccl loaders optifine 1.20.1
 ```
 
 The command prints compatible loader releases, newest first. Pass the selected release string to `instance install` or `instance update`.
@@ -20,6 +25,8 @@ The command prints compatible loader releases, newest first. Pass the selected r
 
 ```sh
 ccl instance install my-world 1.21.1 fabric 0.20.1
+ccl instance install my-quilt-world 1.21.4 quilt 0.20.0-beta.9
+ccl instance install my-optifine-world 1.20.1 optifine HD_U_I6
 ccl instance list
 ccl instance show my-world
 ccl launch --instance my-world --dry-run
@@ -37,6 +44,8 @@ CCL does not bundle Fabric API, mods, or modpacks. Install those separately into
 
 An instance selects one loader at a time. Use mods built for that loader and Minecraft release; Fabric, Forge and NeoForge mod files are not generally interchangeable. Changing the loader preserves the existing `mods` directory, so review those files before launching with the new loader. Removing the loader leaves those files in place but vanilla does not load them.
 
-Forge-family installer checksums can be reused from a local integrity record only when the installer URL, SHA-1, and file size all match. If checksum metadata is unavailable and no valid matching record exists, installation fails.
+Forge-family installer integrity is checked against the official Maven SHA-1 sidecar. If it is unavailable, CCL fetches the official SHA-512 sidecar, verifies the installer bytes against it, and only then derives the SHA-1 used by the install pipeline. A cached installer is reused only when its URL, recorded SHA-1, and file size match. If neither upstream checksum can be obtained and no valid matching record exists, installation fails. Offline installation can reuse a verified installer record when the other required artifacts are already available; loader version discovery requires network access.
+
+Metadata and checksum sources: [Fabric Meta](https://meta.fabricmc.net/), [Quilt Meta](https://meta.quiltmc.org/), [Legacy Fabric Meta API](https://github.com/Legacy-Fabric/legacy-meta), [OptiFine downloads](https://optifine.net/downloads), [Forge Maven](https://maven.minecraftforge.net/), and [NeoForge Maven](https://maven.neoforged.net/releases/).
 
 `--json` can be used with these commands. `loaders` returns `loader_versions`; `instance list`, `show`, and lifecycle commands return `managed_instances` or `instance` records. Network and installation errors follow the general [CLI exit codes](cli.en.md#exit-codes).

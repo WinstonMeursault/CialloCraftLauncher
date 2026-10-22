@@ -4,9 +4,14 @@ A libre, open-source, cross-platform Minecraft launcher written in Rust.
 
 ## Project status
 
-The project is in early development. The `ccl` CLI provides settings and account management, version listing, verified vanilla installation, Java runtime discovery/installation, isolated Fabric/Forge/NeoForge instance management, and game launch. It also includes commands to inspect/import/export Modrinth `.mrpack` files, manage local instance content, and create/restore userdata backups; see the [Modrinth and content guide](docs/modpacks.en.md). Minecraft 1.21.1 reached the game menu with Fabric 0.20.1 and Forge 52.1.0 on Linux, and with NeoForge 21.1.234 on macOS and Linux. The Linux NeoForge run reused an installer with a matching verified integrity record; a cold run could not retrieve the upstream checksum sidecar and the mirror lacked it. These results do not establish broad compatibility. Loader metadata checks do not guarantee every mod set or loader/platform combination. Fabric API and mods are not bundled. Microsoft account sign-in is implemented but has not been verified with a project-owned registered application and a real account; the account-enabled preview has not met its public preview acceptance gate. See the [Microsoft account setup guide](docs/accounts.en.md) and the [loader guide](docs/loaders.en.md).
+The project is in early development. The CLI provides vanilla installation and launch, Java management, independent instance lifecycle and history cleanup, Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine installation, Modrinth pack management, CurseForge and MultiMC/Prism imports, online content and dependency checks, local content backups, and explicit network offline mode. The core is independent of interfaces; a GUI has not been developed. Compatibility claims follow the actual validation matrices in the guides. Microsoft login is implemented, but this application’s registration and real-account acceptance remain deferred. CurseForge uses a user-owned API key and has no live-key production acceptance. Builds and automated tests cover Windows x64, macOS arm64 and Linux x86_64.
 
 ## Documentation
+
+- [Instance lifecycle and cleanup](docs/instances.en.md) · [简体中文](docs/instances.zh-CN.md)
+- [Additional pack imports](docs/imports.en.md) · [简体中文](docs/imports.zh-CN.md)
+- [Online content](docs/online-content.en.md) · [简体中文](docs/online-content.zh-CN.md)
+- [Networking and offline use](docs/networking.en.md) · [简体中文](docs/networking.zh-CN.md)
 
 - [Architecture and design boundaries (English)](docs/architecture.en.md) · [简体中文](docs/architecture.zh-CN.md)
 - [CLI commands and output (English)](docs/cli.en.md) · [简体中文](docs/cli.zh-CN.md)

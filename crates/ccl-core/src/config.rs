@@ -23,6 +23,8 @@ pub enum SourceMode {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DownloadConfig {
+    /// Disable all network access; valid local artifacts can still be reused.
+    pub offline: bool,
     pub version_list_source: SourceMode,
     pub file_source: SourceMode,
     pub mirror_root: String,
@@ -33,6 +35,7 @@ pub struct DownloadConfig {
 impl Default for DownloadConfig {
     fn default() -> Self {
         Self {
+            offline: false,
             version_list_source: SourceMode::Auto,
             file_source: SourceMode::Auto,
             mirror_root: "https://bmclapi2.bangbang93.com".into(),
@@ -46,6 +49,7 @@ impl std::fmt::Debug for DownloadConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DownloadConfig")
             .field("version_list_source", &self.version_list_source)
+            .field("offline", &self.offline)
             .field("file_source", &self.file_source)
             .field("mirror_root", &self.mirror_root)
             .field("http_proxy", &self.http_proxy.as_deref().map(redact_proxy))
@@ -417,6 +421,10 @@ mod tests {
         assert_eq!(old.launch.max_memory_mb, 2048);
         assert!(old.launch.auto_install_java);
         assert!(old.auth.microsoft_client_id.is_none());
+        assert!(!old.downloads.offline);
+        let offline: LauncherConfig =
+            serde_json::from_str(r#"{"downloads":{"offline":true}}"#).unwrap();
+        assert!(offline.downloads.offline);
     }
 
     #[test]

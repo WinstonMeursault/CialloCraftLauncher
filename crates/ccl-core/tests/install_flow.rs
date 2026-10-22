@@ -421,3 +421,37 @@ async fn concurrent_install_for_same_version_returns_instance_conflict() {
     first.await.unwrap().unwrap();
     fs::remove_dir_all(game).unwrap();
 }
+
+#[tokio::test]
+async fn warmed_install_works_with_network_offline_and_corrupt_files_fail_without_replacement() {
+    let (routes, object) = install_fixture_routes();
+    let fixture = Fixture::new(routes);
+    let game = temp_dir("offline-warm");
+    seed_asset(&game, &object);
+    let options = options_for(game.clone());
+    let service = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(fixture.url("/manifest.json"));
+    service.install("fixture-1", &options, None).await.unwrap();
+    let offline = InstallService::new(DownloadConfig {
+        offline: true,
+        ..Default::default()
+    })
+    .unwrap()
+    .with_manifest_url("http://127.0.0.1:1/never");
+    let outcome = offline.install("fixture-1", &options, None).await.unwrap();
+    assert_eq!(outcome.downloaded_files, 0);
+    assert_eq!(outcome.reused_files, outcome.total_files);
+    let client = game.join("versions/fixture-1/fixture-1.jar");
+    fs::write(&client, b"corrupt").unwrap();
+    let error = offline
+        .install("fixture-1", &options, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        InstallError::Download(ccl_core::download::DownloadError::OfflineCacheMiss(_))
+    ));
+    assert_eq!(fs::read(&client).unwrap(), b"corrupt");
+    fs::remove_dir_all(game).unwrap();
+}

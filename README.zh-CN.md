@@ -4,9 +4,14 @@
 
 ## 项目状态
 
-项目处于早期开发阶段。`ccl` 命令行提供设置和账户管理、版本列表、校验原版安装、Java 运行时探测与安装、隔离的 Fabric/Forge/NeoForge 实例管理以及游戏启动。它还包含检查、导入和导出 Modrinth `.mrpack` 的命令、本地实例内容管理以及用户数据备份和恢复；参阅 [Modrinth 整合包与内容指南](docs/modpacks.zh-CN.md)。Minecraft 1.21.1 已在 Linux 上搭配 Fabric 0.20.1、Forge 52.1.0 和 NeoForge 21.1.234 进入游戏菜单，也在 macOS 上搭配 NeoForge 21.1.234 进入菜单。Linux NeoForge 使用了具有匹配完整性记录的已验证安装器；从空缓存安装时，上游校验和文件不可用，镜像也未提供该文件。这些结果不代表广泛兼容；加载器元数据检查也不能保证所有模组或加载器/平台组合可用。CCL 不会捆绑 Fabric API 或模组。Microsoft 账户登录已经实现，但尚未使用本项目注册的应用及真实账户验证；启用账户的预览包尚未满足公开预览验收要求。参阅 [Microsoft 账户设置指南](docs/accounts.zh-CN.md)和[加载器指南](docs/loaders.zh-CN.md)。
+项目处于早期开发阶段。CLI 已提供原版安装和启动、Java 管理、独立实例生命周期与历史清理、Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine 安装、Modrinth 整合包管理、CurseForge 与 MultiMC/Prism 导入、在线内容与依赖检查、本地内容备份以及显式网络离线模式。核心与界面解耦，GUI 尚未开发。兼容性声明以各指南中的实际验证矩阵为准。Microsoft 登录已经实现，但本项目应用注册与真实账户验收仍暂缓；CurseForge 使用用户自有 API key，尚无真实 key 的生产验收。三平台构建和自动化测试覆盖 Windows x64、macOS arm64、Linux x86_64。
 
 ## 文档
+
+- [实例生命周期与清理](docs/instances.zh-CN.md) · [English](docs/instances.en.md)
+- [其他整合包导入](docs/imports.zh-CN.md) · [English](docs/imports.en.md)
+- [在线内容](docs/online-content.zh-CN.md) · [English](docs/online-content.en.md)
+- [网络与离线](docs/networking.zh-CN.md) · [English](docs/networking.en.md)
 
 - [架构与设计边界（简体中文）](docs/architecture.zh-CN.md) · [English](docs/architecture.en.md)
 - [命令行与输出（简体中文）](docs/cli.zh-CN.md) · [English](docs/cli.en.md)

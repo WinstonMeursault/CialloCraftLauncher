@@ -1,6 +1,6 @@
 # Modrinth packs and instance content
 
-CCL can inspect, import, and export Modrinth `.mrpack` archives, and manage user content in isolated instances. This first release supports the Modrinth format only. It does not provide a graphical interface, import CurseForge packs, or import MultiMC/Prism archives. Quilt loader dependencies are unsupported.
+CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](imports.en.md). A GUI is not provided.
 
 The validated sample uses Minecraft `1.21.1`, Fabric Loader `0.20.1`, and Fabric API `0.116.17+1.21.1`. It reached the main menu on macOS arm64 and on Linux x86_64 using CPU rendering. An exported and re-imported macOS instance also reached the menu with matching mod hashes and override files. This does not certify other packs or third-party mod combinations. Windows is checked through compilation and automated tests.
 
@@ -83,4 +83,4 @@ Backups contain user data from `mods`, `config`, `resourcepacks`, `shaderpacks`,
 
 Pack imports/updates and content edits are prepared in a staged instance generation and committed under the instance operation lock. They cannot replace the game directory while a managed launch holds the lock. `instance rollback` after a pack or content change restores the exact previous snapshot, including its user data and saves. Back up first if you need those newer saves. Loader rollback preserves current user data while switching loader revisions.
 
-The archive reader supports Modrinth format version 1 for Minecraft packs. It does not import CurseForge or MultiMC/Prism formats, and does not support Quilt. See [CLI exit codes](cli.en.md#exit-codes) for error handling; `--json` is available on these commands.
+See [CLI exit codes](cli.en.md#exit-codes); these commands support `--json`. Standard Modrinth dependencies cannot represent standalone OptiFine or Legacy Fabric; those managed instances use userdata backup rather than a misleading portable export.

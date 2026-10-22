@@ -3,7 +3,7 @@
 ## 用法
 
 ```text
-ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|pack|content|launch|logs>
+ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
 ```
 
 全局选项可以放在子命令前。命令以非交互方式运行，不会等待标准输入。
@@ -17,16 +17,18 @@ ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|ver
 | `versions [--limit N]` | 列出可用的游戏版本。`--limit N` 限制结果数量；`--limit 0` 列出全部版本。 |
 | `install VERSION` | 将指定游戏版本安装到所选游戏目录。 |
 | `instances` | 列出已安装的原版版本及其所需的 Java 主版本号。 |
-| `loaders fabric\|forge\|neoforge MINECRAFT [--limit N]` | 列出上游元数据中适用于指定 Minecraft 版本的加载器版本。 |
+| `loaders fabric\|quilt\|legacyfabric\|forge\|neoforge\|optifine MINECRAFT [--limit N]` | 列出上游元数据中适用于指定 Minecraft 版本的加载器版本。 |
 | `instance list\|show ID\|install ID MINECRAFT LOADER LOADER_VERSION\|update ID MINECRAFT LOADER LOADER_VERSION\|rollback ID\|uninstall-loader ID` | 管理隔离的模组实例和加载器版本。参阅[模组实例与加载器](loaders.zh-CN.md)。 |
-| `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | 验证、检查、导入、更新和导出 Modrinth `.mrpack` 整合包。参阅 [Modrinth 与实例内容指南](modpacks.zh-CN.md)。 |
+| `instance rename ID DESTINATION\|copy ID DESTINATION\|delete ID --yes\|history ID\|restore ID REVISION\|disk-usage ID\|clean ID [--keep N] [--include-previous] [--apply]` | 重命名、复制、删除、查看、恢复和清理实例保留修订版。默认只预览清理计划；只有指定 `--apply` 才会执行。参阅[实例生命周期](instances.zh-CN.md)。 |
+| `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | 检查并导入 Modrinth、CurseForge 和 MultiMC/Prism 导出包；导出 Modrinth `.mrpack`。参阅[导入指南](imports.zh-CN.md)及 [Modrinth 与实例内容指南](modpacks.zh-CN.md)。 |
 | `content list ID KIND\|add ID KIND SOURCE [--name NAME]\|remove ID KIND NAME\|enable ID NAME\|disable ID NAME\|backup ID OUTPUT\|restore ID ARCHIVE` | 管理本地模组、资源包、光影包、存档和可移植用户数据备份。`KIND` 为 `mods`、`resourcepacks`、`shaderpacks` 或 `saves`。 |
+| `online search\|versions\|resolve\|install\|updates\|analyze\|pack-install` | 搜索 Modrinth 或 CurseForge、解析依赖、安装或更新内容，并分析已记录的在线内容。参阅[在线内容](online-content.zh-CN.md)。 |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | 启动原版版本或隔离实例。默认使用所选 Microsoft 账户，也可显式使用离线账户。Java 可自动探测或按需从 Mojang 运行时清单安装。 |
 | `logs [--instance ID] [--run ID] [--lines 100]` | 输出最近一次运行日志，或指定运行记录的日志，并限制输出行数。`--instance` 选择独立实例的日志。 |
 
 启动时会选择与版本元数据所需主版本号及主机架构匹配的 Java。离线玩家 UUID 使用 Java 离线玩家的名称派生 UUID 算法。启动前，启动器会根据可用的大小和 SHA-1 元数据校验客户端 JAR、适用的库文件和资源索引，准备资源文件映射；若版本指定了客户端日志配置，还会下载并校验该配置。平台原生库会解压到临时目录，游戏退出后删除；`--dry-run` 输出计划后也会删除该目录。
 
-托管实例使用独立的游戏目录，可通过 `ccl launch --instance ID` 启动；此时不要再提供位置版本参数。安装前会根据上游元数据检查加载器兼容关系，但不能保证所有模组组合可用，也不代表已验证所有游戏启动组合。CCL 不会捆绑 Fabric API 或其他模组。当前 Forge 和 NeoForge 安装流程支持现代安装器格式，遇到不支持的旧版格式会拒绝安装。加载器更新和移除会保留当前实例用户数据。整合包或内容变更后执行 `instance rollback` 会恢复完整的上一版实例快照，包括其中的用户数据和存档；如果需要保留较新的存档，请先备份。`instance show` 的 `loader_version` 显示最终安装配置文件 ID，可能与命令输入的加载器发行版本字符串不同。详情和示例见 [loaders.zh-CN.md](loaders.zh-CN.md)。
+托管实例使用独立的游戏目录，可通过 `ccl launch --instance ID` 启动；此时不要再提供位置版本参数。安装前会根据上游元数据检查加载器兼容关系，但不能保证所有模组组合可用，也不代表已验证所有游戏启动组合。CCL 不会捆绑 Fabric API 或其他模组。Forge 支持现代处理器安装器、spec 0 配置及受支持的旧版 `install`/`versionInfo` 通用 JAR 格式；NeoForge 使用现代处理器安装器。加载器更新和移除会保留当前实例用户数据。加载器更新后执行 `instance rollback` 会先把当前用户数据放入上一加载器版本；完整内容编辑或整合包更新后回滚则切换到完整的上一快照，包括用户数据和存档。如果需要保留较新的存档，请先备份。`instance show` 的 `loader_version` 显示最终安装配置文件 ID，可能与命令输入的加载器发行版本字符串不同。详情和示例见 [loaders.zh-CN.md](loaders.zh-CN.md)。
 
 整合包更新会先根据归属哈希检查文件，再替换或删除文件。若整合包管理的文件已修改或删除，或新整合包路径与未托管的本地内容冲突，更新会以冲突错误（退出码 `7`）停止；`--replace-modified` 会明确允许替换或删除这些本地改动。使用前请备份本地数据。只有显式使用 `pack export --include-local-content` 才会把本地二进制文件加入导出，而且这表示你授权重新分发这些文件。内容备份可用于保存用户数据（包括存档），与 Modrinth 导出归档分开。
 
@@ -34,11 +36,13 @@ ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|ver
 
 `--game-dir PATH` 显式指定游戏目录，优先于默认选择。`--config PATH` 指定配置文件；省略时读取平台默认位置，文件不存在则使用默认配置。显式指定的配置文件缺失时会报文件系统错误（退出码 `4`），但 `settings set` 和 `settings reset` 可以创建该文件。
 
-`--json` 将命令执行结果输出为 JSON。它是全局选项，可以放在子命令前。进度输出到标准错误。clap 生成的帮助和参数解析错误仍为文本。
+`--json`、`--network-offline`、`--game-dir` 和 `--config` 都是全局选项，可以放在子命令前。`--network-offline` 会禁用 HTTP 请求并要求使用已验证的本地数据；它与 `launch --offline`（选择离线玩家身份）不同。只有保存的强 ETag 和服务器范围响应均匹配时，下载才会续传。`--json` 将命令执行结果输出为 JSON。进度输出到标准错误。clap 生成的帮助和参数解析错误仍为文本。
 
 ## 配置
 
-JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy` 和 `downloads.max_parallel`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；要求并校验每个下载文件的 SHA-1，限制并发数，重试临时失败，复用有效缓存文件，并通过临时文件替换目标文件。多个进程通过版本锁协调，也支持取消操作。如果已有版本 JSON 与请求的元数据冲突，将返回冲突错误而不会覆盖。
+JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel` 和 `downloads.offline`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+
+请求 CurseForge 在线 API 需要用户自行提供 `CCL_CURSEFORGE_API_KEY`；启动器不会内置或保存该密钥。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](imports.zh-CN.md)和[在线内容](online-content.zh-CN.md)。
 
 启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。参阅[Microsoft 账户设置](accounts.zh-CN.md)。
 
@@ -56,6 +60,9 @@ ccl account login
 ccl account list
 ccl launch 1.21.1 --dry-run
 ccl loaders fabric 1.21.1 --limit 10
+ccl loaders quilt 1.21.4 --limit 10
+ccl loaders legacyfabric 1.8.9 --limit 10
+ccl loaders optifine 1.20.1
 ccl instance install my-world 1.21.1 fabric 0.20.1
 ccl launch --instance my-world --dry-run
 ccl instance rollback my-world
@@ -86,8 +93,10 @@ ccl pack export my-pack ./my-pack.mrpack --include-local-content
 | `12` | 托管实例错误 |
 | `13` | Modrinth 整合包错误 |
 | `14` | 本地内容或用户数据备份错误 |
+| `15` | 在线内容平台或操作错误 |
+| `16` | 归档导入格式错误 |
 | `130` | 操作已取消 |
 
-原版版本元数据冲突、托管实例锁冲突、Modrinth 整合包冲突（包括文件归属/更新冲突），以及因实例锁而无法执行的内容或整合包操作使用退出码 `7`。加载器错误（包括加载器配置文件冲突）及其他实例错误分别使用 `11` 和 `12`。其他 Modrinth 整合包和本地内容错误分别使用 `13` 和 `14`；操作取消时使用 `130`。
+原版版本元数据冲突、托管实例锁冲突、Modrinth 整合包冲突（包括文件归属/更新冲突），以及因实例锁而无法执行的内容或整合包操作使用退出码 `7`。加载器错误（包括加载器配置文件冲突）及其他实例错误分别使用 `11` 和 `12`。其他 Modrinth 整合包和本地内容错误分别使用 `13` 和 `14`；在线内容错误使用 `15`，归档导入格式错误使用 `16`；操作取消时使用 `130`。
 
 游戏失败时，JSON 结果记录会保留游戏实际的 `exit_code`；CLI 使用退出码 `8` 表示启动未成功。使用 `--json` 时命令执行结果为 JSON；clap 帮助和参数解析错误为文本，并使用参数错误退出码。

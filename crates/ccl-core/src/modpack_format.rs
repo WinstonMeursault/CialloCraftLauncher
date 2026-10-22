@@ -115,14 +115,9 @@ impl Manifest {
                 "dependencies.minecraft must not be blank".into(),
             ));
         }
-        let loaders = ["fabric-loader", "forge", "neoforge"];
+        let loaders = ["fabric-loader", "quilt-loader", "forge", "neoforge"];
         let mut loader_count = 0;
         for (key, value) in &self.dependencies {
-            if key == "quilt-loader" {
-                return Err(FormatError::Unsupported(
-                    "quilt-loader dependencies are not supported".into(),
-                ));
-            }
             if key != "minecraft" && !loaders.contains(&key.as_str()) {
                 return Err(FormatError::Unsupported(format!("dependency `{key}`")));
             }
@@ -628,7 +623,7 @@ mod tests {
     fn validates_dependencies_hashes_and_environment_selection() {
         let mut m = manifest(vec![pack_file("mods/a.jar")]);
         m.dependencies.insert("quilt-loader".into(), "0.20".into());
-        assert!(matches!(m.validate(), Err(FormatError::Unsupported(_))));
+        assert!(m.validate().is_ok());
         let mut m = manifest(vec![pack_file("mods/a.jar")]);
         m.dependencies.insert("forge".into(), "47".into());
         m.dependencies.insert("neoforge".into(), "20".into());

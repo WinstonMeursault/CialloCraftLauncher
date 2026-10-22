@@ -615,3 +615,81 @@ fn pack_import_parser_exposes_safety_controls_and_content_kind_is_checked() {
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("expected mods"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn instance_lifecycle_cli_requires_delete_confirmation_and_supports_preview_cleanup() {
+    let root = sandbox();
+    let game = write_managed_instance(&root, "source");
+    fs::write(game.join("options.txt"), "music:0").unwrap();
+    for args in [
+        vec!["instance", "copy", "source", "copy"],
+        vec!["instance", "rename", "copy", "renamed"],
+        vec!["instance", "history", "renamed"],
+        vec!["instance", "disk-usage", "renamed"],
+        vec!["instance", "clean", "renamed", "--keep", "0"],
+    ] {
+        let output = command(&root)
+            .arg("--json")
+            .arg("--game-dir")
+            .arg(&root)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["ok"], true);
+    }
+    let refused = command(&root)
+        .arg("--game-dir")
+        .arg(&root)
+        .args(["instance", "delete", "renamed"])
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        root.join(".ccl/instances/renamed/game/options.txt")
+            .is_file()
+    );
+    let removed = command(&root)
+        .arg("--json")
+        .arg("--game-dir")
+        .arg(&root)
+        .args(["instance", "delete", "renamed", "--yes"])
+        .output()
+        .unwrap();
+    assert!(removed.status.success());
+    assert!(!root.join(".ccl/instances/renamed").exists());
+    assert!(game.join("options.txt").is_file());
+    fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn network_offline_is_distinct_from_player_identity_and_blocks_online_catalog() {
+    let root = sandbox();
+    let output = command(&root)
+        .arg("--json")
+        .arg("--game-dir")
+        .arg(&root)
+        .args([
+            "--network-offline",
+            "online",
+            "search",
+            "modrinth",
+            "example",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(15));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("offline")
+    );
+    assert!(!root.join("versions").exists());
+    fs::remove_dir_all(root).unwrap();
+}

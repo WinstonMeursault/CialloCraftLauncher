@@ -95,6 +95,17 @@ impl ModpackService {
         })
     }
 
+    /// Create a transaction fixture service that skips installing the game runtime.
+    #[cfg(test)]
+    pub(crate) fn new_prepared(
+        root: PathBuf,
+        config: DownloadConfig,
+    ) -> Result<Self, ModpackError> {
+        let mut service = Self::new(root, config)?;
+        service.prepared = true;
+        Ok(service)
+    }
+
     pub fn inspect(archive: &Path) -> Result<Manifest, ModpackError> {
         Ok(modpack_format::read_pack(archive)?.manifest)
     }
@@ -370,6 +381,7 @@ impl ModpackService {
 fn loader_request(manifest: &Manifest) -> Option<LoaderRequest> {
     [
         ("fabric-loader", LoaderKind::Fabric),
+        ("quilt-loader", LoaderKind::Quilt),
         ("forge", LoaderKind::Forge),
         ("neoforge", LoaderKind::NeoForge),
     ]
@@ -402,9 +414,23 @@ fn manifest_for_instance(instance: &InstanceMetadata) -> Result<Manifest, Modpac
             ),
             LoaderKind::Forge => (
                 "forge",
-                profile.strip_prefix(&format!("{}-forge-", instance.minecraft)),
+                profile
+                    .strip_prefix(&format!("{}-forge-", instance.minecraft))
+                    .or_else(|| profile.strip_prefix(&format!("{}-Forge", instance.minecraft))),
             ),
             LoaderKind::NeoForge => ("neoforge", profile.strip_prefix("neoforge-")),
+            LoaderKind::Quilt => (
+                "quilt-loader",
+                profile
+                    .strip_prefix("quilt-loader-")
+                    .and_then(|v| v.strip_suffix(&format!("-{}", instance.minecraft))),
+            ),
+            LoaderKind::LegacyFabric | LoaderKind::OptiFine => {
+                return Err(conflict(
+                    &instance.id,
+                    "standard Modrinth format cannot declare Legacy Fabric or standalone OptiFine; use a userdata backup instead",
+                ));
+            }
         };
         let version = version
             .filter(|v| !v.is_empty())
