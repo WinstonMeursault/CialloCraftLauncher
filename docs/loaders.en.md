@@ -4,9 +4,9 @@ CCL can query loader metadata and install Fabric, Quilt, Legacy Fabric, Forge, N
 
 Fabric and Legacy Fabric profiles come from their Meta APIs; Quilt profiles come from Quilt Meta. Forge supports processor based installers, spec 0 profiles with embedded Maven artifacts, and the earlier `install`/`versionInfo` universal JAR format. NeoForge uses processor based installers and embedded runtime artifacts. Unsupported installer structures return an explicit unsupported-format error.
 
-OptiFine releases are listed through the configured BMCLAPI compatible mirror. CCL downloads a fresh installer over HTTPS, checks its archive size and the embedded Minecraft/OptiFine version constants, and runs the bundled patcher against the vanilla client JAR when the installer contains one. OptiFine does not publish a checksum through this metadata endpoint, so CCL does not reuse a prior installer download as a verified cache entry.
+OptiFine releases are listed through the configured BMCLAPI compatible mirror. CCL downloads a fresh installer over HTTPS, checks its archive size and the embedded Minecraft/OptiFine version constants, and runs the bundled patcher against the vanilla client JAR when the installer contains one. Bundled LaunchWrapper JARs are installed when present; older installers fall back to Maven LaunchWrapper 1.12. OptiFine does not publish a checksum through this metadata endpoint, so CCL does not reuse a prior installer download as a verified cache entry.
 
-Cold installs have been completed for Quilt `0.20.0-beta.9` on Minecraft `1.21.4`, NeoForge `21.1.234` on Minecraft `1.21.1`, and OptiFine `HD_U_I6` on Minecraft `1.20.1`. The older Forge and Legacy Fabric installs are not included in this validation statement. These results do not certify other versions, platforms, or third-party mods.
+Isolated cold installs and macOS game menus have been verified for Quilt `0.20.0-beta.9` on Minecraft `1.21.4`, NeoForge `21.1.234` on Minecraft `1.21.1`, and OptiFine `HD_U_I6` on Minecraft `1.20.1`. Legacy Fabric `0.20.1` on Minecraft `1.8.9` and Forge `14.23.5.2860` on Minecraft `1.12.2` installed successfully on macOS and Linux; Linux clients reached game startup using a virtual display and software rendering. These results do not certify other versions, platforms, or third-party mods.
 
 ## Query loader releases
 

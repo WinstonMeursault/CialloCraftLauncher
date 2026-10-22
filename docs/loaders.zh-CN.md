@@ -4,9 +4,9 @@ CCL 可以查询加载器元数据，并将 Fabric、Quilt、Legacy Fabric、For
 
 Fabric 和 Legacy Fabric 配置文件来自各自的 Meta API；Quilt 配置文件来自 Quilt Meta。Forge 支持处理器安装器、含嵌入式 Maven 文件的 spec 0 配置，以及较早的 `install`/`versionInfo` 通用 JAR 格式。NeoForge 使用处理器安装器和嵌入式运行库。无法识别的安装器结构会明确返回不支持格式错误。
 
-OptiFine 版本列表通过已配置的 BMCLAPI 兼容镜像获取。CCL 会通过 HTTPS 下载全新的安装器，检查归档大小及其中声明的 Minecraft/OptiFine 版本；若安装器包含内置补丁程序，则会针对原版客户端 JAR 运行该程序。OptiFine 此元数据接口不提供校验和，因此 CCL 不会把之前下载的安装器作为已验证缓存复用。
+OptiFine 版本列表通过已配置的 BMCLAPI 兼容镜像获取。CCL 会通过 HTTPS 下载全新的安装器，检查归档大小及其中声明的 Minecraft/OptiFine 版本；若安装器包含内置补丁程序，则会针对原版客户端 JAR 运行该程序。有内置 LaunchWrapper JAR 时优先安装使用；旧安装器不包含时回退到 Maven LaunchWrapper 1.12。OptiFine 此元数据接口不提供校验和，因此 CCL 不会把之前下载的安装器作为已验证缓存复用。
 
-已完成冷安装验证：Minecraft `1.21.4` 的 Quilt `0.20.0-beta.9`、Minecraft `1.21.1` 的 NeoForge `21.1.234`，以及 Minecraft `1.20.1` 的 OptiFine `HD_U_I6`。较旧的 Forge 和 Legacy Fabric 安装不包含在此验证说明中。这些结果不代表其他版本、平台或第三方模组已验证。
+已完成隔离冷安装及 macOS 游戏主菜单验证：Minecraft `1.21.4` 的 Quilt `0.20.0-beta.9`、Minecraft `1.21.1` 的 NeoForge `21.1.234`，以及 Minecraft `1.20.1` 的 OptiFine `HD_U_I6`。Minecraft `1.8.9` 的 Legacy Fabric `0.20.1`、Minecraft `1.12.2` 的 Forge `14.23.5.2860` 在 macOS 和 Linux 安装成功；Linux 客户端通过虚拟显示和软件渲染完成游戏启动。这些结果不代表其他版本、平台或第三方模组已验证。
 
 ## 查询加载器版本
 
