@@ -379,8 +379,12 @@ async fn cancelled_install_can_restart_and_finish_from_partial_state() {
     fixture.release();
     assert!(matches!(
         interrupted.await.unwrap(),
-        Err(InstallError::Download(_))
+        // Cancellation may be reported by the downloader while it is waiting
+        // for the held response, or by the installer immediately after that
+        // download task returns.
+        Err(InstallError::Download(_)) | Err(InstallError::Cancelled)
     ));
+    assert!(token.is_cancelled());
 
     let resumed = service.install("fixture-1", &options, None).await.unwrap();
     assert!(

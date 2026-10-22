@@ -69,17 +69,30 @@ fn json_output(output: &std::process::Output) -> serde_json::Value {
     })
 }
 
-fn java_on_path() -> Option<PathBuf> {
-    let executable = if cfg!(windows) { "java.exe" } else { "java" };
-    if let Some(home) = std::env::var_os("JAVA_HOME") {
-        let candidate = PathBuf::from(home).join("bin").join(executable);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|path| path.join(executable))
-        .find(|path| path.is_file())
+// Keep the Java error contract independent of a runner's JVM startup time.
+fn java_fixture(root: &Path) -> PathBuf {
+    let source = root.join("java_fixture.rs");
+    let executable = root.join(if cfg!(windows) { "java.exe" } else { "java" });
+    fs::write(
+        &source,
+        format!(
+            r#"fn main() {{ eprintln!("    java.version = 17.0.1\n    java.specification.version = 17\n    os.arch = {}"); }}"#,
+            std::env::consts::ARCH
+        ),
+    )
+    .unwrap();
+    let output = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    executable
 }
 
 #[test]
@@ -337,8 +350,8 @@ fn missing_explicit_java_has_java_diagnostic_and_exit_code() {
 
 #[test]
 fn explicit_java_with_wrong_major_has_java_diagnostic_and_exit_code() {
-    let Some(java) = java_on_path() else { return };
     let root = sandbox();
+    let java = java_fixture(&root);
     let game = root.join("game");
     write_instance(&game, "local", 999);
     let output = command(&root)

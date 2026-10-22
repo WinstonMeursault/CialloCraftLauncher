@@ -1179,7 +1179,7 @@ mod tests {
         collections::HashMap,
         net::TcpListener,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         },
     };
@@ -1231,6 +1231,7 @@ mod tests {
     struct Server {
         origin: String,
         stop: Arc<AtomicBool>,
+        requests: Arc<Mutex<Vec<String>>>,
         thread: Option<thread::JoinHandle<()>>,
     }
     impl Server {
@@ -1240,9 +1241,15 @@ mod tests {
             let origin = format!("http://{}", listener.local_addr().unwrap());
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let received = requests.clone();
             let worker = thread::spawn(move || {
                 while !flag.load(Ordering::Relaxed) {
                     if let Ok((mut stream, _)) = listener.accept() {
+                        // Accepted sockets do not inherit the listener mode
+                        // consistently across platforms. Ensure header reads
+                        // block instead of treating an early WouldBlock as EOF.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(10)))
                             .unwrap();
@@ -1256,8 +1263,18 @@ mod tests {
                                 Ok(n) => request.extend_from_slice(&chunk[..n]),
                             }
                         }
+                        if !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            received
+                                .lock()
+                                .unwrap()
+                                .push(format!("incomplete request ({} bytes)", request.len()));
+                            // Don't turn a disconnected or incomplete request into
+                            // an artificial 404 response for the root path.
+                            continue;
+                        }
                         let request = String::from_utf8_lossy(&request);
                         let path = request.split_whitespace().nth(1).unwrap_or("/");
+                        received.lock().unwrap().push(path.to_owned());
                         let (status, bytes) =
                             routes.get(path).cloned().unwrap_or((404, Vec::new()));
                         let _ = write!(
@@ -1274,11 +1291,23 @@ mod tests {
             Self {
                 origin,
                 stop,
+                requests,
                 thread: Some(worker),
             }
         }
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
         fn service(&self) -> UpdateService {
             let mut service = UpdateService::new(&DownloadConfig::default()).unwrap();
+            // Reqwest reads proxy variables from the environment. A loopback
+            // fixture must connect directly regardless of runner NO_PROXY rules.
+            service.client = reqwest::Client::builder()
+                .no_proxy()
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap();
             service.api_root = self.origin.clone();
             service.fixture_origin = Some(self.origin.clone());
             service
@@ -1376,7 +1405,12 @@ mod tests {
             .service()
             .check(Channel::Dev, current, &CancellationToken::default())
             .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "update check failed: {error:?}; fixture requests: {:?}",
+                    server.requests()
+                )
+            });
         assert!(result.build_pending && result.available);
         assert_eq!(result.candidate.unwrap().commit, "b".repeat(40));
     }
@@ -1401,7 +1435,12 @@ mod tests {
             .service()
             .check(Channel::Dev, current, &CancellationToken::default())
             .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "update check failed: {error:?}; fixture requests: {:?}",
+                    server.requests()
+                )
+            });
         assert!(!result.available);
         assert!(result.build_pending);
     }
@@ -1411,17 +1450,19 @@ mod tests {
             format!("/repos/{REPOSITORY}/commits/dev"),
             (429, b"rate limited".to_vec()),
         )]));
-        assert!(matches!(
-            server
-                .service()
-                .check(
-                    Channel::Dev,
-                    BuildIdentity::current(),
-                    &CancellationToken::default()
-                )
-                .await,
-            Err(UpdateError::RateLimited)
-        ));
+        let result = server
+            .service()
+            .check(
+                Channel::Dev,
+                BuildIdentity::current(),
+                &CancellationToken::default(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(UpdateError::RateLimited)),
+            "expected a rate limit response, got {result:?}; fixture requests: {:?}",
+            server.requests()
+        );
     }
     fn zip_files(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -1550,7 +1591,12 @@ mod tests {
                 &CancellationToken::default(),
             )
             .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "update staging failed: {error:?}; fixture requests: {:?}",
+                    server.requests()
+                )
+            });
         assert_eq!(status.state, UpdateState::Staged);
         assert_eq!(fs::read(&target).unwrap(), old);
         let mut journal = install.load().unwrap();

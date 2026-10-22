@@ -13,8 +13,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    thread,
-    time::Duration,
 };
 
 static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
@@ -497,32 +495,54 @@ async fn cancellation_before_import_and_after_stage_keeps_active_generation_unch
         .import("cancel-stage", &archive, &imports(), None)
         .await
         .unwrap();
-    // Keep a large unowned file in the game tree so the watcher cancels while the new stage is cloned.
+    // Keep an unowned file in the game tree to verify the active generation is
+    // retained when the staged import is cancelled.
     fs::write(
         metadata.game_directory.join("options.txt"),
-        vec![b'x'; 32 * 1024 * 1024],
+        b"preserve this user data",
     )
     .unwrap();
     let token = CancellationToken::default();
-    let watcher_token = token.clone();
-    let stage = instance_path(temp.path(), "cancel-stage").join(".stage");
-    let watcher = thread::spawn(move || {
-        while !stage.is_dir() {
-            thread::sleep(Duration::from_millis(1));
-        }
-        watcher_token.cancel();
-    });
+    let callback_token = token.clone();
+    let stage_at_cancellation = instance_path(temp.path(), "cancel-stage").join(".stage");
+    let context = TaskContext::new(
+        token.clone(),
+        Arc::new(move |_| {
+            assert!(stage_at_cancellation.is_dir());
+            callback_token.cancel();
+        }),
+    );
+    let archive = temp.path().join("cancel-during-download.mrpack");
+    let payload = b"new remote file";
+    let manifest = Manifest {
+        format_version: 1,
+        game: "minecraft".into(),
+        version_id: "cancel-stage-new".into(),
+        name: "Cancellation fixture".into(),
+        summary: None,
+        files: vec![PackFile {
+            path: "mods/new.jar".into(),
+            hashes: [
+                ("sha1".into(), format!("{:x}", sha1::Sha1::digest(payload))),
+                ("sha512".into(), hash(payload)),
+            ]
+            .into(),
+            env: None,
+            downloads: vec!["https://fixture.invalid/new.jar".into()],
+            file_size: payload.len() as u64,
+        }],
+        dependencies: [("minecraft".into(), "1.21.1".into())].into(),
+    };
+    modpack_format::write_pack(&archive, &manifest, &BTreeMap::new()).unwrap();
+    let options = ImportOptions {
+        allowed_hosts: vec!["fixture.invalid".into()],
+        ..imports()
+    };
     let error = service
-        .import(
-            "cancel-stage",
-            &archive,
-            &imports(),
-            Some(cancelled_context(token.clone())),
-        )
+        .import("cancel-stage", &archive, &options, Some(context))
         .await
         .unwrap_err();
-    watcher.join().unwrap();
-    assert!(matches!(error, ModpackError::Cancelled));
+    assert!(error.is_cancelled(), "expected cancellation, got {error:?}");
     assert!(token.is_cancelled());
     assert_eq!(
         service.show("cancel-stage").unwrap().manifest.version_id,
@@ -536,7 +556,7 @@ async fn cancellation_before_import_and_after_stage_keeps_active_generation_unch
         fs::metadata(metadata.game_directory.join("options.txt"))
             .unwrap()
             .len(),
-        32 * 1024 * 1024
+        b"preserve this user data".len() as u64
     );
 }
 

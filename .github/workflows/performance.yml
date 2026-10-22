@@ -42,7 +42,9 @@ jobs:
           CCL_BUILD_CHANNEL: ${{ github.ref_name == 'main' && 'stable' || 'dev' }}
           CCL_BUILD_COMMIT: ${{ github.sha }}
           CCL_BUILD_TARGET: ${{ matrix.target }}
-        run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-core --example p7_benchmark -p ccl-cli
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p ccl-core --example p7_benchmark
+          cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli --bin ccl
       - name: Download last five successful same-branch samples
         env:
           GH_TOKEN: ${{ github.token }}
