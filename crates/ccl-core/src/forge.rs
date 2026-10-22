@@ -117,20 +117,26 @@ async fn versions_with_context(
         return Ok(values);
     }
 
-    // BMCLAPI provides a dedicated NeoForge list endpoint with an explicit
-    // `mcversion` field. Prefer it to guessing a Minecraft version from a
-    // release prefix when the Maven catalogue is unavailable or empty.
-    if kind == LoaderKind::NeoForge && config.version_list_source != SourceMode::Official {
-        match bmcl_neoforge_versions(config, minecraft, context, &http).await {
+    // BMCLAPI provides dedicated loader lists when Maven metadata is
+    // unavailable. Only query the selected mirror when lists are not forced
+    // to official sources.
+    if config.version_list_source != SourceMode::Official {
+        let fallback = match kind {
+            LoaderKind::Forge => bmcl_forge_versions(config, minecraft, context, &http).await,
+            LoaderKind::NeoForge => bmcl_neoforge_versions(config, minecraft, context, &http).await,
+            LoaderKind::Fabric => unreachable!("Fabric is rejected above"),
+        };
+        match fallback {
             Ok(mut values) if !values.is_empty() => {
                 sort_releases(&mut values);
                 return Ok(values);
             }
             Ok(_) => errors.push(format!(
-                "BMCLAPI NeoForge list returned no releases for Minecraft {minecraft}"
+                "BMCLAPI {} list returned no installer releases for Minecraft {minecraft}",
+                kind_label(kind)
             )),
             Err(LoaderError::Cancelled) => return Err(LoaderError::Cancelled),
-            Err(e) => errors.push(format!("BMCLAPI NeoForge list: {e}")),
+            Err(e) => errors.push(format!("BMCLAPI {} list: {e}", kind_label(kind))),
         }
     }
     Err(LoaderError::Unsupported(format!(
@@ -143,6 +149,86 @@ async fn versions_with_context(
 struct BmclNeoForgeVersion {
     version: String,
     mcversion: String,
+}
+
+#[derive(Deserialize)]
+struct BmclForgeVersion {
+    branch: Option<String>,
+    mcversion: String,
+    version: String,
+    #[serde(default)]
+    files: Vec<BmclForgeFile>,
+}
+
+#[derive(Deserialize)]
+struct BmclForgeFile {
+    format: String,
+    category: String,
+}
+
+async fn bmcl_forge_versions(
+    config: &DownloadConfig,
+    minecraft: &str,
+    context: &Option<TaskContext>,
+    http: &reqwest::Client,
+) -> Result<Vec<LoaderVersion>, LoaderError> {
+    let lookup_version = if minecraft == "1.7.10-pre4" {
+        "1.7.10_pre4"
+    } else {
+        minecraft
+    };
+    let url = format!(
+        "{}/forge/minecraft/{lookup_version}",
+        config.mirror_root.trim_end_matches('/')
+    );
+    let fetch = async {
+        http.get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<BmclForgeVersion>>()
+            .await
+    };
+    let entries = tokio::select! {
+        result = fetch => result?,
+        _ = wait_cancel(context) => return Err(LoaderError::Cancelled),
+    };
+    Ok(map_bmcl_forge_versions(entries, minecraft))
+}
+
+fn map_bmcl_forge_versions(entries: Vec<BmclForgeVersion>, minecraft: &str) -> Vec<LoaderVersion> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.mcversion == minecraft)
+        .filter(|entry| {
+            entry
+                .files
+                .iter()
+                .any(|file| file.category == "installer" && file.format == "jar")
+        })
+        .filter_map(|entry| {
+            safe_segment(&entry.version).ok()?;
+            let branch = entry.branch.filter(|branch| !branch.is_empty());
+            if branch
+                .as_deref()
+                .is_some_and(|branch| safe_segment(branch).is_err())
+            {
+                return None;
+            }
+            let version = branch.as_ref().map_or_else(
+                || entry.version.clone(),
+                |branch| format!("{}-{branch}", entry.version),
+            );
+            let lower = version.to_ascii_lowercase();
+            Some(LoaderVersion {
+                stable: branch.is_none()
+                    && !["beta", "alpha", "rc", "pre", "snapshot"]
+                        .iter()
+                        .any(|marker| lower.contains(marker)),
+                version,
+            })
+        })
+        .collect()
 }
 
 async fn bmcl_neoforge_versions(
@@ -356,7 +442,12 @@ pub async fn install(
         .clone()
         .ok_or_else(|| LoaderError::Unsupported("modded version metadata has no id".into()))?;
     safe_segment(&version_id)?;
-    if !version_id.contains(&request.version) {
+    if !installer_version_matches(
+        request.kind,
+        &request.minecraft,
+        &request.version,
+        &version_id,
+    ) {
         return Err(LoaderError::Unsupported(format!(
             "installer metadata version ID {version_id} does not match requested loader {}",
             request.version
@@ -513,7 +604,14 @@ pub async fn install(
             })
             .map_err(|_| LoaderError::Cancelled)?;
         }
-        let mut child = Command::new(&java.executable)
+        let mut command = Command::new(&java.executable);
+        // The launcher handles terminal interruption before stopping Java, just
+        // as it does for game launches, so cancellation cannot race a child exit.
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+        let mut child = command
             .args(&args)
             .current_dir(&options.game_directory)
             .stdout(Stdio::piped())
@@ -565,6 +663,26 @@ pub async fn install(
         serde_json::to_vec_pretty(&version).map_err(|e| LoaderError::Unsupported(e.to_string()))?;
     atomic_write(&json_path, &encoded)?;
     Ok(version_id)
+}
+
+fn installer_version_matches(
+    kind: LoaderKind,
+    minecraft: &str,
+    requested: &str,
+    version_id: &str,
+) -> bool {
+    if kind == LoaderKind::Forge {
+        let prefix = format!("{minecraft}-forge-");
+        let Some(profile_version) = version_id.strip_prefix(&prefix) else {
+            return false;
+        };
+        requested == profile_version
+            || requested
+                .strip_prefix(profile_version)
+                .is_some_and(|suffix| suffix.starts_with('-') && suffix.len() > 1)
+    } else {
+        version_id.contains(requested)
+    }
 }
 
 fn is_client_mojmaps_task(jar: Option<&str>, args: &[String], minecraft: &str) -> bool {
@@ -1449,6 +1567,85 @@ mod tests {
         assert_eq!(values[0].version, "21.1.234");
         assert!(values[0].stable);
         assert!(!values[1].stable);
+    }
+
+    #[test]
+    fn bmcl_forge_list_filters_exact_minecraft_and_installer_jar_and_keeps_branch() {
+        let installer = || BmclForgeFile {
+            format: "jar".into(),
+            category: "installer".into(),
+        };
+        let values = map_bmcl_forge_versions(
+            vec![
+                BmclForgeVersion {
+                    branch: None,
+                    mcversion: "1.21.1".into(),
+                    version: "52.1.0".into(),
+                    files: vec![installer()],
+                },
+                BmclForgeVersion {
+                    branch: Some("custom".into()),
+                    mcversion: "1.21.1".into(),
+                    version: "52.1.0".into(),
+                    files: vec![installer()],
+                },
+                BmclForgeVersion {
+                    branch: None,
+                    mcversion: "1.21".into(),
+                    version: "53.0.0".into(),
+                    files: vec![installer()],
+                },
+                BmclForgeVersion {
+                    branch: None,
+                    mcversion: "1.21.1".into(),
+                    version: "52.2.0".into(),
+                    files: vec![BmclForgeFile {
+                        format: "jar".into(),
+                        category: "universal".into(),
+                    }],
+                },
+                BmclForgeVersion {
+                    branch: None,
+                    mcversion: "1.21.1".into(),
+                    version: "52.3.0".into(),
+                    files: vec![BmclForgeFile {
+                        format: "zip".into(),
+                        category: "installer".into(),
+                    }],
+                },
+            ],
+            "1.21.1",
+        );
+        assert_eq!(values.len(), 2);
+        let mut values = values;
+        sort_releases(&mut values);
+        assert_eq!(values[0].version, "52.1.0");
+        assert!(values[0].stable);
+        assert_eq!(values[1].version, "52.1.0-custom");
+        assert!(!values[1].stable);
+    }
+
+    #[test]
+    fn forge_profile_version_validation_accepts_only_the_requested_branch_suffix() {
+        let id = "1.21.1-forge-52.1.0";
+        assert!(installer_version_matches(
+            LoaderKind::Forge,
+            "1.21.1",
+            "52.1.0-custom",
+            id
+        ));
+        assert!(!installer_version_matches(
+            LoaderKind::Forge,
+            "1.21.1",
+            "52.1.0-custom",
+            "1.21.1-forge-52.1.0-other"
+        ));
+        assert!(!installer_version_matches(
+            LoaderKind::Forge,
+            "1.21.1",
+            "52.1.0",
+            "1.20.1-forge-52.1.0"
+        ));
     }
 
     #[test]

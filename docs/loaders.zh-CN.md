@@ -4,7 +4,7 @@ CCL 可以查询上游加载器元数据，并将 Fabric、Forge 和 NeoForge �
 
 Fabric 配置文件来自 Fabric Meta。Forge 和 NeoForge 使用当前支持的现代安装器格式。当前安装流程无法处理的旧版安装器格式会返回不支持格式的错误。
 
-已验证进入主菜单的组合：Linux 上 Minecraft `1.21.1` 搭配 Fabric `0.20.1`，以及 Linux 上 Minecraft `1.21.1` 搭配 Forge `52.1.0`；两次运行均以退出码 `0` 结束。macOS 上 Minecraft `1.21.1` 搭配 NeoForge `21.1.234` 也进入主菜单，正常测试运行以退出码 `0` 结束。Linux 上的 NeoForge 安装尚未验证：官方校验和请求失败，镜像也没有对应校验和文件。这些结果不代表其他版本、平台或第三方模组已验证。
+macOS 已验证进入主菜单的组合：Minecraft `1.21.1` 搭配 Fabric `0.20.1`、Forge `52.1.0` 和 NeoForge `21.1.234`。Linux 上 Fabric 和 Forge 均进入主菜单并以退出码 `0` 正常结束；macOS 上的一次 NeoForge 运行也正常退出。Linux NeoForge 从空缓存安装时遇到官方校验和端点不可用、镜像缺少校验和文件的情况；安装需要能访问该元数据或具有匹配的已验证安装器缓存。这些结果不代表其他版本、平台或第三方模组已验证。Windows 由编译和自动化测试覆盖。
 
 ## 查询加载器版本
 
@@ -34,6 +34,8 @@ ccl instance uninstall-loader my-world
 `instance show` 中的 `loader_version` 记录最终安装配置文件的 ID，例如 `fabric-loader-0.20.1-1.21.1`；它不一定等于命令行传入的加载器发行版本字符串。启动实例时会使用其已安装配置文件和独立游戏目录。
 
 CCL 不会捆绑 Fabric API、模组或整合包。请另行将它们安装到实例的 `mods` 目录。上游兼容元数据只用于安装前检查，不能保证特定模组组合一定可用。
+
+每个实例同时只选择一个加载器。模组应适配该加载器及 Minecraft 版本；Fabric、Forge、NeoForge 模组文件通常不能互换。更换加载器时会保留原有 `mods` 目录，因此使用新加载器启动前应检查其中的文件。移除加载器后仍保留这些文件，但原版游戏不会加载它们。
 
 只有本地完整性记录中的安装器 URL、SHA-1 和文件大小全部匹配时，Forge 系安装器才会复用该记录中的校验和。如果上游校验和不可用且没有有效的匹配记录，安装会失败。
 

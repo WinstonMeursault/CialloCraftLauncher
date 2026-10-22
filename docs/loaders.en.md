@@ -4,7 +4,7 @@ CCL can query upstream loader metadata and install Fabric, Forge, and NeoForge i
 
 Fabric profiles come from Fabric Meta. Forge and NeoForge use their supported modern installer formats. Legacy installer formats that the current installer path cannot process return an unsupported-format error.
 
-Validated menu launches: Linux with Minecraft `1.21.1` plus Fabric `0.20.1`, and Linux with Minecraft `1.21.1` plus Forge `52.1.0`; both exited with code `0`. On macOS, Minecraft `1.21.1` plus NeoForge `21.1.234` reached the main menu and a normal test run exited with code `0`. The Linux NeoForge install remains unverified because its official checksum request failed and the mirror had no checksum sidecar. These results do not certify other versions, platforms, or third-party mods.
+Validated menu launches on macOS: Minecraft `1.21.1` with Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234`. On Linux, Fabric and Forge reached the menu and exited normally with code `0`; a macOS NeoForge run also exited normally. Linux NeoForge cold installation encountered an unavailable official checksum endpoint and a missing mirror checksum sidecar; installation requires access to that metadata or a matching verified installer cache. These results do not certify other versions, platforms, or third-party mods. Windows is covered by compilation and automated tests.
 
 ## Query loader releases
 
@@ -34,6 +34,8 @@ Each managed instance has its own game directory, version metadata, mods, config
 The `loader_version` field shown by `instance show` records the resolved installed profile ID, such as `fabric-loader-0.20.1-1.21.1`; it is not necessarily the exact release string supplied on the command line. Instance launch uses the selected installed profile and its separate game directory.
 
 CCL does not bundle Fabric API, mods, or modpacks. Install those separately into the instance's `mods` directory. Upstream compatibility metadata is a preflight check, not a guarantee that a particular mod set will work.
+
+An instance selects one loader at a time. Use mods built for that loader and Minecraft release; Fabric, Forge and NeoForge mod files are not generally interchangeable. Changing the loader preserves the existing `mods` directory, so review those files before launching with the new loader. Removing the loader leaves those files in place but vanilla does not load them.
 
 Forge-family installer checksums can be reused from a local integrity record only when the installer URL, SHA-1, and file size all match. If checksum metadata is unavailable and no valid matching record exists, installation fails.
 
