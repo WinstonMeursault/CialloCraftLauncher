@@ -1462,7 +1462,7 @@ mod tests {
             schema: 1,
             state: UpdateState::Staged,
             nonce: nonce().unwrap(),
-            target: target.clone(),
+            target: install.target.clone(),
             old_sha256: digest(&old),
             old_identity,
             new_sha256: digest(&new),
