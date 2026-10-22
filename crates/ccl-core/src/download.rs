@@ -751,7 +751,10 @@ impl PartialFile {
             check_cancelled(request)?;
             match fs2::FileExt::try_lock_exclusive(&file) {
                 Ok(()) => return Ok(PartialLock(file)),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 Err(error) => return Err(io_error(&self.lock_path, error)),
@@ -1271,7 +1274,10 @@ mod tests {
             manager.download(make_request())
         );
         worker.join().unwrap();
-        assert!(first.is_ok() && second.is_ok());
+        assert!(
+            first.is_ok() && second.is_ok(),
+            "first: {first:?}; second: {second:?}"
+        );
         assert_eq!(
             usize::from(first.unwrap().reused_existing)
                 + usize::from(second.unwrap().reused_existing),

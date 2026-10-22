@@ -676,7 +676,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "ccl-offline-versions-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "-")
         ));
         let _ = fs::remove_dir_all(&root);
         let manifest = VersionManifest::parse(&serde_json::json!({
@@ -701,7 +704,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "ccl-offline-invalid-versions-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "-")
         ));
         let _ = fs::remove_dir_all(&root);
         let cache = root.join(".ccl/cache/version_manifest.json");
