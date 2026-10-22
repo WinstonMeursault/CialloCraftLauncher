@@ -4,7 +4,7 @@ A libre, open-source, cross-platform Minecraft launcher written in Rust.
 
 ## Project status
 
-The project is in early development. The `ccl` CLI provides settings and account management, version listing, verified installation, Java runtime discovery/installation, and game launch. Microsoft account sign-in is implemented but has not passed live authorization testing or the application approval required for public distribution; the account-enabled preview is not ready to distribute. See the [Microsoft account setup guide](docs/accounts.en.md).
+The project is in early development. The `ccl` CLI provides settings and account management, version listing, verified installation, Java runtime discovery/installation, and game launch. Microsoft account sign-in is implemented but has not been verified with a project-owned registered application and a real account; the account-enabled preview has not met its public preview acceptance gate. See the [Microsoft account setup guide](docs/accounts.en.md).
 
 ## Documentation
 
