@@ -1,6 +1,6 @@
 # Modrinth 整合包与实例内容
 
-CCL 可以检查、导入和导出 Modrinth `.mrpack` 整合包，也可以管理隔离实例中的用户内容。首个版本只支持 Modrinth 格式，不提供图形界面，也不导入 CurseForge、MultiMC 或 Prism 格式。Quilt 加载器依赖暂不支持。
+CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](imports.zh-CN.md)导入。目前不提供 GUI。
 
 已验证样本使用 Minecraft `1.21.1`、Fabric Loader `0.20.1`、Fabric API `0.116.17+1.21.1`，在 macOS arm64 及使用 CPU 渲染的 Linux x86_64 到达主菜单。macOS 上导出后重新导入的实例也到达主菜单，模组哈希与覆盖文件均匹配。这不代表其他整合包或第三方模组组合已认证。Windows 通过编译和自动化测试检查。
 
@@ -12,7 +12,7 @@ ccl pack import my-pack ./pack.mrpack
 ccl pack show my-pack
 ```
 
-`inspect` 会验证归档并输出清单，不会安装。`show` 会显示已导入实例记录的清单和文件归属信息。导入支持整合包声明的 Minecraft、无加载器、Fabric、Forge 或 NeoForge。默认跳过可选客户端文件；如需包含，请使用：
+`inspect` 会验证归档并输出清单，不会安装。`show` 会显示已导入实例记录的清单和文件归属信息。导入支持整合包声明的 Minecraft、无加载器、Fabric、Quilt、Forge 或 NeoForge。默认跳过可选客户端文件；如需包含，请使用：
 
 ```sh
 ccl pack import my-pack ./pack.mrpack --include-optional
@@ -83,4 +83,4 @@ ccl content restore my-pack ./my-pack-userdata.zip
 
 整合包导入/更新和内容编辑会先在暂存的实例版本中准备，再通过实例操作锁提交。托管游戏正在持有该锁运行时，这些操作无法替换游戏目录。整合包或内容变更后执行 `instance rollback` 会恢复完整的上一版快照，包括其中的用户数据和存档。如果需要保留较新的存档，请先备份。加载器回滚会切换加载器版本，同时保留当前用户数据。
 
-归档读取器支持 Minecraft 整合包的 Modrinth 格式版本 1，不导入 CurseForge、MultiMC 或 Prism 格式，也不支持 Quilt。错误处理请参阅 [CLI 退出码](cli.zh-CN.md#退出码)；这些命令也支持 `--json`。
+错误处理见 [CLI 退出码](cli.zh-CN.md#退出码)，这些命令支持 `--json`。标准 Modrinth 依赖不能表示独立 OptiFine 或 Legacy Fabric；这些托管实例应使用用户数据备份，不生成会误导可移植性的导出。

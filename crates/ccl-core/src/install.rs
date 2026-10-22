@@ -2,7 +2,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
+    io::Write,
     path::{Component, Path, PathBuf},
 };
 
@@ -117,6 +118,20 @@ impl InstallService {
         .await
     }
 
+    /// List versions using the per-game manifest cache when network offline mode is enabled.
+    /// In online mode, refresh the manifest and persist the validated result for later offline use.
+    pub async fn list_versions_for(
+        &self,
+        game_directory: &Path,
+    ) -> Result<VersionManifest, InstallError> {
+        if self.config.offline {
+            return read_cached_version_manifest(game_directory);
+        }
+        let manifest = self.list_versions().await?;
+        save_version_manifest_cache(game_directory, &manifest)?;
+        Ok(manifest)
+    }
+
     async fn list_versions_from(
         &self,
         candidates: &[String],
@@ -155,7 +170,7 @@ impl InstallService {
     ) -> Result<InstallSummary, InstallError> {
         safe_segment(version)?;
         check_cancelled(&context)?;
-        let manifest = self.list_versions().await?;
+        let manifest = self.list_versions_for(&options.game_directory).await?;
         if !manifest.versions.iter().any(|entry| entry.id == version) {
             return Err(InstallError::VersionNotFound(version.into()));
         }
@@ -513,6 +528,70 @@ fn io(path: &Path, source: std::io::Error) -> InstallError {
     }
 }
 
+fn write_cache_atomic(path: &Path, bytes: &[u8]) -> Result<(), InstallError> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".tmp-{}", std::process::id()));
+    let temporary = PathBuf::from(temporary);
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| io(&temporary, e))?;
+        file.write_all(bytes).map_err(|e| io(&temporary, e))?;
+        file.sync_all().map_err(|e| io(&temporary, e))?;
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| io(path, e))?;
+        }
+        fs::rename(&temporary, path).map_err(|e| io(path, e))
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn save_version_manifest_cache(
+    game_directory: &Path,
+    manifest: &VersionManifest,
+) -> Result<PathBuf, InstallError> {
+    let cache = game_directory.join(".ccl/cache/version_manifest.json");
+    if let Some(parent) = cache.parent() {
+        fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+    }
+    let bytes =
+        serde_json::to_vec(manifest).map_err(|e| InstallError::VersionList(e.to_string()))?;
+    write_cache_atomic(&cache, &bytes)?;
+    Ok(cache)
+}
+
+fn read_cached_version_manifest(game_directory: &Path) -> Result<VersionManifest, InstallError> {
+    let cache = game_directory.join(".ccl/cache/version_manifest.json");
+    let bytes = fs::read(&cache).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            InstallError::VersionList(format!(
+                "offline mode: version manifest is not cached at {}",
+                cache.display()
+            ))
+        } else {
+            io(&cache, error)
+        }
+    })?;
+    let manifest = VersionManifest::parse(&String::from_utf8_lossy(&bytes))?;
+    if manifest.versions.iter().any(|entry| {
+        entry
+            .sha1
+            .as_deref()
+            .is_none_or(|hash| hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()))
+    }) {
+        return Err(InstallError::VersionList(
+            "offline cache contains invalid metadata hashes".into(),
+        ));
+    }
+    Ok(manifest)
+}
+
 #[derive(Deserialize)]
 struct AssetObjects {
     objects: HashMap<String, AssetObject>,
@@ -570,5 +649,115 @@ mod tests {
             assert!(safe_segment(bad).is_err());
         }
         assert!(required_sha1(Some("abc"), "test").is_err());
+    }
+
+    #[tokio::test]
+    async fn offline_install_without_manifest_fails_before_network_or_directory_creation() {
+        let root = std::env::temp_dir().join(format!("ccl-offline-install-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let config = DownloadConfig {
+            offline: true,
+            ..Default::default()
+        };
+        let service = InstallService::new(config).unwrap();
+        let options = InstallOptions::for_current_platform(&root);
+        let error = service
+            .install("known-version", &options, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, InstallError::VersionList(message) if message.contains("offline mode") && message.contains("version manifest"))
+        );
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn offline_version_listing_uses_cached_manifest_without_network() {
+        let root = std::env::temp_dir().join(format!(
+            "ccl-offline-versions-{}-{}",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "-")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let manifest = VersionManifest::parse(&serde_json::json!({
+            "latest":{"release":"known-version","snapshot":"known-version"},
+            "versions":[{"id":"known-version","type":"release","url":"https://example.invalid/version.json","sha1":"0123456789012345678901234567890123456789"}]
+        }).to_string()).unwrap();
+        save_version_manifest_cache(&root, &manifest).unwrap();
+        // This endpoint would fail if touched. Offline listing must be a pure cache read.
+        let service = InstallService::new(DownloadConfig {
+            offline: true,
+            ..Default::default()
+        })
+        .unwrap()
+        .with_manifest_url("http://127.0.0.1:1/should-not-connect");
+        let listed = service.list_versions_for(&root).await.unwrap();
+        assert_eq!(listed.versions[0].id, "known-version");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn offline_version_listing_rejects_invalid_cached_hash_without_network() {
+        let root = std::env::temp_dir().join(format!(
+            "ccl-offline-invalid-versions-{}-{}",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "-")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let cache = root.join(".ccl/cache/version_manifest.json");
+        fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        fs::write(
+            &cache,
+            serde_json::json!({
+                "latest":{"release":"known-version","snapshot":"known-version"},
+                "versions":[{"id":"known-version","type":"release","url":"https://example.invalid/version.json","sha1":"not-a-valid-sha1"}]
+            }).to_string(),
+        )
+        .unwrap();
+        let service = InstallService::new(DownloadConfig {
+            offline: true,
+            ..Default::default()
+        })
+        .unwrap()
+        .with_manifest_url("http://127.0.0.1:1/should-not-connect");
+        let error = service.list_versions_for(&root).await.unwrap_err();
+        assert!(
+            matches!(error, InstallError::VersionList(message) if message.contains("invalid metadata hashes"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn offline_install_uses_persisted_manifest_then_reports_missing_metadata() {
+        let root =
+            std::env::temp_dir().join(format!("ccl-offline-cache-install-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let manifest = VersionManifest::parse(&serde_json::json!({
+            "latest":{"release":"known-version","snapshot":"known-version"},
+            "versions":[{"id":"known-version","type":"release","url":"https://example.invalid/version.json","sha1":"0123456789012345678901234567890123456789"}]
+        }).to_string()).unwrap();
+        let cache = save_version_manifest_cache(&root, &manifest).unwrap();
+        let service = InstallService::new(DownloadConfig {
+            offline: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let options = InstallOptions::for_current_platform(&root);
+        let error = service
+            .install("known-version", &options, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InstallError::Download(DownloadError::OfflineCacheMiss(_))
+        ));
+        assert!(cache.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

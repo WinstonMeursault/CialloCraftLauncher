@@ -6,6 +6,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod lifecycle;
+pub use lifecycle::{CleanupPlan, CleanupTarget, DiskUsage, Revision};
+
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -113,7 +116,7 @@ impl InstanceService {
         if !path.is_dir() {
             return Err(InstanceError::NotFound(id.into()).into());
         }
-        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        let _lock = self.lock_instance(id)?;
         recover_instance(&path)?;
         let metadata = read_metadata(&path.join("instance.json"))?;
         let game = path.join("game");
@@ -142,8 +145,8 @@ impl InstanceService {
         Fut: std::future::Future<Output = Result<(InstanceMetadata, T), E>>,
     {
         let path = self.instance_path(id)?;
+        let _lock = self.lock_instance(id)?;
         fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
-        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
         recover_instance(&path)?;
         let metadata_path = path.join("instance.json");
         reject_symlink(&metadata_path)?;
@@ -197,6 +200,7 @@ impl InstanceService {
         let mut result = Vec::new();
         reject_symlink(&self.root.join(".ccl"))?;
         reject_symlink(&dir)?;
+        lifecycle::recover_deleted_instances(self)?;
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(result),
@@ -208,9 +212,10 @@ impl InstanceService {
             if !entry.file_type().map_err(|e| io(entry.path(), e))?.is_dir() {
                 continue;
             }
-            let instance_lock = entry.path().join(".operation.lock");
-            let _lock =
-                InstanceLock::acquire(&instance_lock, &entry.file_name().to_string_lossy())?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let _lock = self.lock_instance(&entry.file_name().to_string_lossy())?;
             recover_instance(&entry.path())?;
             let path = entry.path().join("instance.json");
             if path.is_file() {
@@ -226,7 +231,7 @@ impl InstanceService {
         if !instance.is_dir() {
             return Err(InstanceError::NotFound(id.into()));
         }
-        let _lock = InstanceLock::acquire(&instance.join(".operation.lock"), id)?;
+        let _lock = self.lock_instance(id)?;
         recover_instance(&instance)?;
         let path = instance.join("instance.json");
         if !path.is_file() {
@@ -246,7 +251,7 @@ impl InstanceService {
         if !path.is_dir() {
             return Err(InstanceError::NotFound(id.into()));
         }
-        let lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        let lock = self.lock_instance(id)?;
         recover_instance(&path)?;
         let metadata_path = path.join("instance.json");
         if !metadata_path.is_file() {
@@ -270,8 +275,8 @@ impl InstanceService {
         validate_segment(&request.version)?;
         check_cancelled(&context)?;
         let path = self.instance_path(id)?;
+        let _lock = self.lock_instance(id)?;
         fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
-        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
         recover_instance(&path)?;
         let game = path.join("game");
         let stage = path.join(".stage");
@@ -337,7 +342,7 @@ impl InstanceService {
         if !path.is_dir() {
             return Err(InstanceError::NotFound(id.into()));
         }
-        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        let _lock = self.lock_instance(id)?;
         recover_instance(&path)?;
         let previous = path.join("previous");
         let game = path.join("game");
@@ -371,15 +376,17 @@ impl InstanceService {
             // Mark the reverse edge too, so a second rollback can redo the change.
             mark_content_revision(&previous)?;
         } else {
-            copy_latest_user_data(&game, &previous)?;
+            refresh_previous_with_latest_user_data(&path, &game, &previous)?;
             clear_content_revision(&previous)?;
         }
         if let Err(error) = fs::rename(&game, &current_swap) {
+            discard_rollback_refresh_backup(&path)?;
             let _ = fs::remove_file(&journal_path);
             return Err(io(&game, error));
         }
         if let Err(e) = fs::rename(&previous, &game) {
             let _ = fs::rename(&current_swap, &game);
+            discard_rollback_refresh_backup(&path)?;
             let _ = fs::remove_file(&journal_path);
             return Err(io(&game, e));
         }
@@ -406,6 +413,7 @@ impl InstanceService {
             })?,
         )?;
         fs::rename(&current_swap, &previous).map_err(|e| io(&current_swap, e))?;
+        discard_rollback_refresh_backup(&path)?;
         fs::remove_file(&journal_path).map_err(|e| io(&journal_path, e))?;
         Ok(next_meta)
     }
@@ -421,7 +429,7 @@ impl InstanceService {
         if !path.is_dir() {
             return Err(InstanceError::NotFound(id.into()));
         }
-        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        let _lock = self.lock_instance(id)?;
         recover_instance(&path)?;
         let meta_path = path.join("instance.json");
         let current = read_metadata(&meta_path)?;
@@ -513,7 +521,13 @@ impl InstanceLaunchGuard {
 }
 
 fn validate_id(id: &str) -> InstanceResult<()> {
-    if id.is_empty()
+    let upper = id.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes()[3], b'1'..=b'9'));
+    if reserved
+        || id.is_empty()
         || id.len() > 64
         || !id
             .bytes()
@@ -635,6 +649,29 @@ fn read_metadata(path: &Path) -> InstanceResult<InstanceMetadata> {
     Ok(meta)
 }
 
+fn validate_journal_metadata(instance: &Path, metadata: &InstanceMetadata) -> InstanceResult<()> {
+    let id = instance
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| InstanceError::InvalidId("instance journal has no directory ID".into()))?;
+    validate_id(id)?;
+    if metadata.id != id
+        || metadata.game_directory != instance.join("game")
+        || metadata.loader.is_some() != metadata.loader_version.is_some()
+        || metadata.loader.is_some()
+            && metadata.loader_version.as_deref() == Some(metadata.minecraft.as_str())
+    {
+        return Err(InstanceError::Conflict(format!(
+            "instance journal metadata does not match directory {id}"
+        )));
+    }
+    validate_segment(&metadata.minecraft)?;
+    if let Some(version) = &metadata.loader_version {
+        validate_segment(version)?;
+    }
+    Ok(())
+}
+
 fn commit_generation(
     instance: &Path,
     stage: &Path,
@@ -736,12 +773,7 @@ fn commit_generation_using(
         let _ = fs::remove_file(&journal_path);
         return Err(error);
     }
-    if saved_previous.exists() {
-        fs::remove_dir_all(&saved_previous).map_err(|e| io(&saved_previous, e))?;
-    }
-    if saved_previous_meta.exists() {
-        fs::remove_file(&saved_previous_meta).map_err(|e| io(&saved_previous_meta, e))?;
-    }
+    lifecycle::archive_previous(instance)?;
     fs::remove_file(&journal_path).map_err(|e| io(&journal_path, e))?;
     Ok(())
 }
@@ -767,6 +799,7 @@ fn restore_saved_previous(instance: &Path, had_previous: bool) -> InstanceResult
 }
 
 fn recover_instance(instance: &Path) -> InstanceResult<()> {
+    lifecycle::recover_relocation(instance)?;
     recover_rollback(instance)?;
     let journal_path = instance.join(".commit.json");
     recover_atomic_file(&journal_path)?;
@@ -782,12 +815,15 @@ fn recover_instance(instance: &Path) -> InstanceResult<()> {
             path: journal_path.clone(),
             source,
         })?;
+    validate_journal_metadata(instance, &journal.next)?;
+    if let Some(old) = &journal.old {
+        validate_journal_metadata(instance, old)?;
+    }
     let game = instance.join("game");
     let stage = instance.join(".stage");
     let previous = instance.join("previous");
     let previous_meta = instance.join("previous.json");
     let saved_previous = instance.join(".saved-previous");
-    let saved_previous_meta = instance.join(".saved-previous.json");
     for path in [&game, &stage, &previous, &saved_previous] {
         reject_symlink(path)?;
     }
@@ -814,12 +850,7 @@ fn recover_instance(instance: &Path) -> InstanceResult<()> {
             })?,
         )?;
         let _ = fs::remove_file(game.join(".ccl-instance-request.json"));
-        if saved_previous.exists() {
-            fs::remove_dir_all(&saved_previous).map_err(|e| io(&saved_previous, e))?;
-        }
-        if saved_previous_meta.exists() {
-            fs::remove_file(&saved_previous_meta).map_err(|e| io(&saved_previous_meta, e))?;
-        }
+        lifecycle::archive_previous(instance)?;
     } else {
         // The new stage was not committed. Restore the active generation and its rollback target.
         if !game.exists() && previous.exists() {
@@ -847,12 +878,15 @@ fn recover_rollback(instance: &Path) -> InstanceResult<()> {
                 path: journal_path.clone(),
                 source,
             })?;
+    validate_journal_metadata(instance, &journal.current)?;
+    validate_journal_metadata(instance, &journal.next)?;
     let game = instance.join("game");
     let previous = instance.join("previous");
     let current_swap = instance.join(".rollback-current");
     for path in [&game, &previous, &current_swap] {
         reject_symlink(path)?;
     }
+    recover_previous_refresh(instance, &game, &previous, &current_swap)?;
     recover_rollback_user_data(&previous)?;
     if current_swap.exists() && !game.exists() {
         // Only the current generation was moved. Abort the rollback and restore it.
@@ -913,6 +947,65 @@ fn recover_rollback_user_data(target: &Path) -> InstanceResult<()> {
         if staged.exists() {
             fs::remove_dir_all(&staged).map_err(|e| io(&staged, e))?;
         }
+    }
+    Ok(())
+}
+
+fn refresh_previous_with_latest_user_data(
+    instance: &Path,
+    current: &Path,
+    previous: &Path,
+) -> InstanceResult<()> {
+    let stage = instance.join(".rollback-refresh");
+    let backup = instance.join(".rollback-refresh-old");
+    for path in [&stage, &backup, previous] {
+        reject_symlink(path)?;
+    }
+    if stage.exists() || backup.exists() {
+        return Err(InstanceError::Conflict(
+            "unfinished rollback data refresh requires recovery".into(),
+        ));
+    }
+    clone_game_generation(previous, &stage)?;
+    sync_latest_user_data(current, &stage)?;
+    clear_content_revision(&stage)?;
+    fs::rename(previous, &backup).map_err(|e| io(previous, e))?;
+    if let Err(error) = fs::rename(&stage, previous) {
+        let _ = fs::rename(&backup, previous);
+        return Err(io(previous, error));
+    }
+    Ok(())
+}
+
+fn recover_previous_refresh(
+    instance: &Path,
+    game: &Path,
+    previous: &Path,
+    current_swap: &Path,
+) -> InstanceResult<()> {
+    let stage = instance.join(".rollback-refresh");
+    let backup = instance.join(".rollback-refresh-old");
+    for path in [&stage, &backup] {
+        reject_symlink(path)?;
+    }
+    if backup.exists() {
+        if previous.exists() || (game.exists() && current_swap.exists()) {
+            fs::remove_dir_all(&backup).map_err(|e| io(&backup, e))?;
+        } else {
+            fs::rename(&backup, previous).map_err(|e| io(previous, e))?;
+        }
+    }
+    if stage.exists() {
+        fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
+    }
+    Ok(())
+}
+
+fn discard_rollback_refresh_backup(instance: &Path) -> InstanceResult<()> {
+    let backup = instance.join(".rollback-refresh-old");
+    reject_symlink(&backup)?;
+    if backup.exists() {
+        fs::remove_dir_all(&backup).map_err(|e| io(&backup, e))?;
     }
     Ok(())
 }
@@ -998,10 +1091,6 @@ fn stage_matches_request(stage: &Path, request: &LoaderRequest) -> InstanceResul
     Ok(saved.kind == request.kind
         && saved.minecraft == request.minecraft
         && saved.version == request.version)
-}
-
-fn copy_latest_user_data(current: &Path, target: &Path) -> InstanceResult<()> {
-    sync_latest_user_data(current, target)
 }
 
 fn sync_latest_user_data(source: &Path, destination: &Path) -> InstanceResult<()> {
@@ -1328,6 +1417,7 @@ fn reject_symlink(path: &Path) -> InstanceResult<()> {
 struct InstanceLock(File);
 impl InstanceLock {
     fn acquire(path: &Path, id: &str) -> InstanceResult<Self> {
+        reject_symlink(path)?;
         let file = File::options()
             .create(true)
             .truncate(false)
@@ -1335,10 +1425,33 @@ impl InstanceLock {
             .write(true)
             .open(path)
             .map_err(|e| io(path, e))?;
+        let opened = file.metadata().map_err(|e| io(path, e))?;
+        let linked = fs::symlink_metadata(path).map_err(|e| io(path, e))?;
+        if !opened.is_file()
+            || !linked.is_file()
+            || linked.file_type().is_symlink()
+            || !same_file(&opened, &linked)
+        {
+            return Err(InstanceError::Conflict(format!(
+                "unsafe instance lock path: {}",
+                path.display()
+            )));
+        }
         file.try_lock_exclusive()
             .map_err(|_| InstanceError::Conflict(id.into()))?;
         Ok(Self(file))
     }
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 impl Drop for InstanceLock {
     fn drop(&mut self) {
@@ -1487,6 +1600,215 @@ mod tests {
             "1.21"
         );
         assert!(!instance.join(".commit.json").exists());
+    }
+
+    #[test]
+    fn rollback_refresh_recovery_restores_previous_if_swap_never_started() {
+        let temp = Temp::new();
+        let service = InstanceService::new(temp.0.clone(), DownloadConfig::default()).unwrap();
+        let instance = service.instance_path("test").unwrap();
+        fs::create_dir_all(instance.join("game")).unwrap();
+        fs::create_dir_all(instance.join("previous")).unwrap();
+        fs::write(instance.join("game/options.txt"), "current").unwrap();
+        fs::write(instance.join("previous/options.txt"), "previous").unwrap();
+        let game = instance.join("game");
+        let previous = instance.join("previous");
+        let stage = instance.join(".rollback-refresh");
+        let backup = instance.join(".rollback-refresh-old");
+        let current = metadata("1.21", &game);
+        let next = metadata("1.20", &game);
+        clone_game_generation(&previous, &stage).unwrap();
+        sync_latest_user_data(&game, &stage).unwrap();
+        fs::rename(&previous, &backup).unwrap();
+        fs::write(
+            instance.join(".rollback.json"),
+            serde_json::to_vec(&RollbackJournal {
+                current: current.clone(),
+                next,
+                target_active: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join("instance.json"),
+            serde_json::to_vec(&current).unwrap(),
+        )
+        .unwrap();
+
+        recover_instance(&instance).unwrap();
+        assert_eq!(
+            fs::read_to_string(game.join("options.txt")).unwrap(),
+            "current"
+        );
+        assert_eq!(
+            fs::read_to_string(previous.join("options.txt")).unwrap(),
+            "previous"
+        );
+        assert!(!stage.exists());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn rollback_refresh_recovery_finishes_after_target_generation_became_active() {
+        let temp = Temp::new();
+        let service = InstanceService::new(temp.0.clone(), DownloadConfig::default()).unwrap();
+        let instance = service.instance_path("test").unwrap();
+        let game = instance.join("game");
+        let previous = instance.join("previous");
+        let current_swap = instance.join(".rollback-current");
+        let backup = instance.join(".rollback-refresh-old");
+        fs::create_dir_all(&game).unwrap();
+        fs::create_dir_all(&previous).unwrap();
+        fs::create_dir_all(&current_swap).unwrap();
+        fs::create_dir_all(&backup).unwrap();
+        fs::write(game.join("marker"), "rolled-back target").unwrap();
+        fs::write(current_swap.join("marker"), "old active").unwrap();
+        fs::write(backup.join("marker"), "old previous").unwrap();
+        let current = metadata("1.21", &game);
+        let next = metadata("1.20", &game);
+        fs::write(
+            instance.join("instance.json"),
+            serde_json::to_vec(&current).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join(".rollback.json"),
+            serde_json::to_vec(&RollbackJournal {
+                current,
+                next: next.clone(),
+                target_active: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        recover_instance(&instance).unwrap();
+        assert_eq!(
+            read_metadata(&instance.join("instance.json"))
+                .unwrap()
+                .minecraft,
+            "1.20"
+        );
+        assert_eq!(
+            fs::read_to_string(game.join("marker")).unwrap(),
+            "rolled-back target"
+        );
+        assert_eq!(
+            fs::read_to_string(previous.join("marker")).unwrap(),
+            "old active"
+        );
+        assert!(!backup.exists());
+        assert!(!instance.join(".rollback.json").exists());
+    }
+
+    #[test]
+    fn stale_journals_do_not_rebase_metadata_or_override_instance_identity() {
+        let temp = Temp::new();
+        let service = InstanceService::new(temp.0.clone(), DownloadConfig::default()).unwrap();
+        let instance = service.instance_path("test").unwrap();
+        fs::create_dir_all(instance.join("game")).unwrap();
+        let game = instance.join("game");
+        let active = metadata("1.21", &game);
+        fs::write(
+            instance.join("instance.json"),
+            serde_json::to_vec(&active).unwrap(),
+        )
+        .unwrap();
+        fs::write(instance.join(".relocate.json"), br#""renamed""#).unwrap();
+        recover_instance(&instance).unwrap();
+        assert_eq!(
+            read_metadata(&instance.join("instance.json")).unwrap().id,
+            "test"
+        );
+        assert!(!instance.join(".relocate.json").exists());
+        assert!(!service.instance_path("renamed").unwrap().exists());
+
+        let invalid_next = InstanceMetadata {
+            id: "other-instance".into(),
+            minecraft: "1.22".into(),
+            ..active.clone()
+        };
+        fs::write(
+            instance.join(".commit.json"),
+            serde_json::to_vec(&CommitJournal {
+                old: Some(active.clone()),
+                next: invalid_next,
+                had_previous: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            recover_instance(&instance),
+            Err(InstanceError::Conflict(_))
+        ));
+        assert_eq!(
+            read_metadata(&instance.join("instance.json"))
+                .unwrap()
+                .minecraft,
+            "1.21"
+        );
+    }
+
+    #[test]
+    fn recovery_archives_older_previous_generation_after_activation() {
+        let temp = Temp::new();
+        let instance = temp.0.join("test");
+        fs::create_dir_all(instance.join("game")).unwrap();
+        fs::create_dir_all(instance.join("previous")).unwrap();
+        fs::create_dir_all(instance.join(".saved-previous")).unwrap();
+        fs::write(instance.join("game/marker"), "new active").unwrap();
+        fs::write(instance.join("previous/marker"), "immediate previous").unwrap();
+        fs::write(instance.join(".saved-previous/marker"), "older previous").unwrap();
+        let game = instance.join("game");
+        let old = metadata("1.21", &game);
+        let next = metadata("1.22", &game);
+        fs::write(
+            instance.join("instance.json"),
+            serde_json::to_vec(&next).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join("previous.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join(".saved-previous.json"),
+            serde_json::to_vec(&metadata("1.20", &game)).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join(".commit.json"),
+            serde_json::to_vec(&CommitJournal {
+                old: Some(old),
+                next,
+                had_previous: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        recover_instance(&instance).unwrap();
+        let entries = fs::read_dir(instance.join("history"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            fs::read_to_string(entries[0].join("game/marker")).unwrap(),
+            "older previous"
+        );
+        assert_eq!(
+            fs::read_to_string(game.join("marker")).unwrap(),
+            "new active"
+        );
+        assert_eq!(
+            fs::read_to_string(instance.join("previous/marker")).unwrap(),
+            "immediate previous"
+        );
+        assert!(!instance.join(".saved-previous").exists());
     }
 
     #[test]

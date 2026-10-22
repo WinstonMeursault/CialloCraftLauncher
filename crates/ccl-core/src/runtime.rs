@@ -201,7 +201,6 @@ pub async fn ensure_runtime_with_catalog(
         ".catalog-{platform}-{}.json",
         safe_component(component)?
     ));
-    let _ = fs::remove_file(&catalog_path);
     let catalog_req = DownloadRequest::new(
         source::url_candidates(catalog_url, DownloadKind::VersionList, download_config),
         &catalog_path,
@@ -947,6 +946,52 @@ mod tests {
         assert!(!dir.exists());
     }
 
+    #[tokio::test]
+    async fn offline_runtime_install_reads_saved_catalog_without_http() {
+        let dir = std::env::temp_dir().join(format!(
+            "ccl-runtime-offline-cache-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let component = "fixture-runtime";
+        let platform = platform_key().unwrap();
+        let runtime_root = dir.join(".ccl/runtimes");
+        fs::create_dir_all(&runtime_root).unwrap();
+        let catalog_path = runtime_root.join(format!(".catalog-{platform}-{component}.json"));
+        fs::write(
+            &catalog_path,
+            serde_json::json!({
+                (platform): {(component): [{
+                    "manifest":{"url":"http://127.0.0.1:1/manifest.json","sha1":"0123456789012345678901234567890123456789","size":10},
+                    "version":{"name":"17.0.1"}
+                }]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let config = DownloadConfig {
+            offline: true,
+            ..DownloadConfig::default()
+        };
+        let result = ensure_runtime_with_catalog(
+            &dir,
+            component,
+            17,
+            &config,
+            None,
+            "http://127.0.0.1:1/catalog-must-not-be-requested",
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(RuntimeError::Download(
+                crate::download::DownloadError::OfflineCacheMiss(_)
+            ))
+        ));
+        assert!(catalog_path.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn parses_platform_component_catalog_shape_and_filters_by_major() {
         let data = br#"{"linux-x64":{"java-runtime-beta":[{"manifest":{"url":"http://localhost/m.json","sha1":"00","size":0},"version":{"name":"11.0.2"}},{"manifest":{"url":"http://localhost/m2.json","sha1":"00","size":0},"version":{"name":"17.0.1+2"}}]}}"#;
@@ -985,12 +1030,15 @@ mod tests {
         let artifact_counter = artifact_requests.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let server = thread::spawn(move || {
-            for _ in 0..5 {
+            loop {
                 let (mut socket, _) = listener.accept().unwrap();
                 let mut req = [0u8; 4096];
                 let n = socket.read(&mut req).unwrap();
                 let request = String::from_utf8_lossy(&req[..n]);
                 let path = request.split_whitespace().nth(1).unwrap_or("/");
+                if path == "/__stop" {
+                    break;
+                }
                 let body = match path {
                     "/catalog" => serde_json::to_vec(&serde_json::json!({(platform_key().unwrap()):{"test-runtime":[{"manifest":{"url":format!("http://{addr}/manifest"),"sha1":server_state.2,"size":server_state.0.len()},"version":{"name":"999.0.1"}}]}})).unwrap(),
                     "/manifest" => server_state.0.clone(),
@@ -1109,6 +1157,8 @@ mod tests {
             artifact_requests.load(std::sync::atomic::Ordering::SeqCst),
             2
         );
+        let mut stop = std::net::TcpStream::connect(addr).unwrap();
+        write!(stop, "GET /__stop HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
         server.join().unwrap();
         fs::remove_dir_all(dir).unwrap();
     }

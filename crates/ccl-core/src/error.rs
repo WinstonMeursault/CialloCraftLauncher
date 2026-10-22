@@ -33,6 +33,10 @@ pub enum Error {
     Modpack(#[from] crate::modpacks::ModpackError),
     #[error(transparent)]
     Content(#[from] crate::content::ContentError),
+    #[error(transparent)]
+    Online(#[from] crate::online_content::OnlineError),
+    #[error(transparent)]
+    ImportFormat(#[from] crate::import_formats::ImportFormatError),
     #[error("task cancelled")]
     Cancelled,
     #[error(transparent)]

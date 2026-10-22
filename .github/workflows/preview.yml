@@ -7,6 +7,7 @@ on:
       - codex/feature-p3-cli-accounts
       - codex/feature-p4-loaders
       - codex/feature-p5-modpacks
+      - codex/feature-p6-ecosystem
 
 permissions:
   contents: read

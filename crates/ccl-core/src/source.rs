@@ -45,9 +45,9 @@ pub fn mirror_url(official_url: &str, mirror_root: &str) -> Option<String> {
         | "launchermeta.mojang.com"
         | "piston-data.mojang.com"
         | "launcher.mojang.com" => {
-            if url.path().ends_with("/version_manifest.json")
-                || url.path().ends_with("/version_manifest_v2.json")
-            {
+            if url.path().ends_with("/version_manifest_v2.json") {
+                "mc/game/version_manifest_v2.json".to_owned()
+            } else if url.path().ends_with("/version_manifest.json") {
                 "mc/game/version_manifest.json".to_owned()
             } else {
                 path.to_owned()
@@ -115,7 +115,7 @@ mod tests {
                 "https://mirror.example"
             )
             .as_deref(),
-            Some("https://mirror.example/mc/game/version_manifest.json")
+            Some("https://mirror.example/mc/game/version_manifest_v2.json")
         );
     }
 

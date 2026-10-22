@@ -4,10 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
@@ -16,8 +13,6 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 
 use crate::{TaskContext, TaskEvent};
-
-static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum DownloadError {
@@ -55,6 +50,8 @@ pub enum DownloadError {
     },
     #[error("all URL candidates failed: {0}")]
     CandidatesExhausted(String),
+    #[error("offline mode: required artifact is not available in the verified local cache: {0}")]
+    OfflineCacheMiss(PathBuf),
 }
 
 #[derive(Clone)]
@@ -67,8 +64,25 @@ pub struct DownloadRequest {
     pub expected_size: Option<u64>,
     /// When present, require HTTPS and permit only these hosts, including redirects.
     pub allowed_hosts: Option<Vec<String>>,
+    require_https: bool,
     /// Optional event and cancellation context shared with the caller.
     pub task_context: Option<TaskContext>,
+    sensitive_headers: Vec<ScopedHeader>,
+}
+#[derive(Clone)]
+struct ScopedHeader {
+    hosts: Vec<String>,
+    value: reqwest::header::HeaderValue,
+}
+impl ScopedHeader {
+    fn applies(&self, url: &reqwest::Url) -> bool {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| {
+                self.hosts
+                    .iter()
+                    .any(|expected| expected.eq_ignore_ascii_case(host))
+            })
+    }
 }
 
 impl DownloadRequest {
@@ -80,10 +94,21 @@ impl DownloadRequest {
             expected_sha512: None,
             expected_size: None,
             allowed_hosts: None,
+            require_https: false,
             task_context: None,
+            sensitive_headers: Vec::new(),
         }
     }
 
+    /// Attach an API key only to these exact HTTPS hosts, including after redirects.
+    pub fn with_api_key(mut self, key: &str, hosts: Vec<String>) -> Result<Self, DownloadError> {
+        let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+            DownloadError::InvalidRequest("API key is not a valid HTTP header value".into())
+        })?;
+        value.set_sensitive(true);
+        self.sensitive_headers.push(ScopedHeader { hosts, value });
+        Ok(self)
+    }
     pub fn with_sha1(mut self, sha1: impl Into<String>) -> Self {
         self.expected_sha1 = Some(sha1.into().to_ascii_lowercase());
         self
@@ -94,6 +119,11 @@ impl DownloadRequest {
         self
     }
 
+    /// Require HTTPS for the initial request and all redirects, allowing delegated CDN hosts.
+    pub fn with_https(mut self) -> Self {
+        self.require_https = true;
+        self
+    }
     pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
         self.allowed_hosts = Some(hosts.into_iter().map(|h| h.to_ascii_lowercase()).collect());
         self
@@ -125,6 +155,7 @@ pub struct DownloadManager {
     permits: Arc<Semaphore>,
     retries_per_candidate: usize,
     base_backoff: Duration,
+    offline: bool,
 }
 
 impl DownloadManager {
@@ -140,18 +171,24 @@ impl DownloadManager {
             .connect_timeout(Duration::from_secs(20))
             .read_timeout(Duration::from_secs(30));
         if let Some(proxy) = &config.http_proxy {
-            let proxy = reqwest::Proxy::all(proxy)
-                .map_err(|e| DownloadError::InvalidRequest(e.to_string()))?;
+            let proxy = reqwest::Proxy::all(proxy).map_err(|_| {
+                DownloadError::InvalidRequest(
+                    "downloads.http_proxy is invalid; check its scheme and address".into(),
+                )
+            })?;
             builder = builder.proxy(proxy);
         }
-        let client = builder
-            .build()
-            .map_err(|e| DownloadError::InvalidRequest(e.to_string()))?;
+        let client = builder.build().map_err(|_| {
+            DownloadError::InvalidRequest(
+                "could not initialize HTTP client; check proxy settings".into(),
+            )
+        })?;
         Ok(Self {
             client,
             permits: Arc::new(Semaphore::new(config.max_parallel)),
             retries_per_candidate: 3,
             base_backoff: Duration::from_millis(250),
+            offline: config.offline,
         })
     }
 
@@ -187,6 +224,10 @@ impl DownloadManager {
                 source_url: None,
                 reused_existing: true,
             });
+        }
+
+        if self.offline {
+            return Err(DownloadError::OfflineCacheMiss(request.destination));
         }
 
         let _permit = loop {
@@ -251,14 +292,47 @@ impl DownloadManager {
         let mut current_url = reqwest::Url::parse(url)
             .map_err(|_| DownloadError::InvalidRequest("invalid URL candidate".into()))?;
         check_url_policy(request, &current_url)?;
+        let partial = PartialFile::for_destination(&request.destination);
+        let _partial_lock = partial.acquire(request).await?;
+        if let Ok(bytes) = fs::read(&request.destination)
+            && verify_bytes(request, &bytes).is_ok()
+        {
+            return Ok(DownloadOutcome {
+                path: request.destination.clone(),
+                bytes: bytes.len() as u64,
+                source_url: None,
+                reused_existing: true,
+            });
+        }
+        let scope = resume_scope(url, request);
+        let (mut resume_at, mut saved_etag) = partial.resume_state(&scope)?;
+        if request
+            .expected_size
+            .is_some_and(|expected| resume_at >= expected)
+        {
+            partial.discard()?;
+            resume_at = 0;
+            saved_etag = None;
+        }
         let mut redirects = 0;
         let mut response = loop {
-            let send = self.client.get(current_url.clone()).send();
+            let mut builder = self.client.get(current_url.clone());
+            for header in &request.sensitive_headers {
+                if header.applies(&current_url) {
+                    builder = builder.header("x-api-key", header.value.clone());
+                }
+            }
+            if resume_at > 0 {
+                builder = builder
+                    .header(reqwest::header::RANGE, format!("bytes={resume_at}-"))
+                    .header(reqwest::header::IF_RANGE, saved_etag.as_deref().unwrap());
+            }
+            let send = builder.send();
             tokio::pin!(send);
             let response = loop {
                 tokio::select! {
                     result = &mut send => break result.map_err(|e| DownloadError::Request {
-                        url: safe_url(&current_url), message: e.to_string(),
+                        url: safe_url(&current_url), message: request_error_message(e),
                     })?,
                     _ = tokio::time::sleep(Duration::from_millis(100)) => check_cancelled(request)?,
                 }
@@ -278,39 +352,126 @@ impl DownloadManager {
             }
             break response;
         };
+        if resume_at > 0 && response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            partial.discard()?;
+            return Err(DownloadError::Request {
+                url: safe_url(&current_url),
+                message: "saved range is no longer valid; restarting from zero".into(),
+            });
+        }
         if !response.status().is_success() {
             return Err(DownloadError::HttpStatus {
                 url: safe_url(&current_url),
                 status: response.status().as_u16(),
             });
         }
-        let total = response.content_length();
-        let mut temp = TempFile::create(&request.destination)?;
+        let resumed = if resume_at > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        {
+            let etag = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|v| v.to_str().ok());
+            let range = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok());
+            if etag != saved_etag.as_deref()
+                || !range.is_some_and(|v| valid_content_range(v, resume_at, request.expected_size))
+            {
+                partial.discard()?;
+                return Err(DownloadError::Request {
+                    url: safe_url(&current_url),
+                    message: "range response did not match saved ETag and offset".into(),
+                });
+            }
+            true
+        } else {
+            if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                partial.discard()?;
+                return Err(DownloadError::Request {
+                    url: safe_url(&current_url),
+                    message: "unexpected partial response without a matching range request".into(),
+                });
+            }
+            false
+        };
+        if !resumed {
+            partial.discard()?;
+            if let Some(etag) = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|v| v.to_str().ok())
+            {
+                partial.save_etag(etag, &scope)?;
+            }
+        }
+        let resumable = saved_etag.is_some()
+            || response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(valid_strong_etag);
+        let total = request
+            .expected_size
+            .or_else(|| {
+                response
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.rsplit_once('/').and_then(|(_, total)| total.parse().ok()))
+            })
+            .or_else(|| {
+                response
+                    .content_length()
+                    .map(|n| n + if resumed { resume_at } else { 0 })
+            });
         let mut file = OpenOptions::new()
+            .read(resumed)
             .write(true)
-            .truncate(true)
-            .open(&temp.path)
-            .map_err(|e| io_error(&temp.path, e))?;
+            .append(resumed)
+            .truncate(!resumed)
+            .create_new(!resumed)
+            .open(&partial.path)
+            .map_err(|e| io_error(&partial.path, e))?;
         let mut hasher = Sha1::new();
         let mut sha512 = sha2::Sha512::new();
         let mut completed = 0u64;
+        if resumed {
+            ensure_partial_identity(&file, &partial)?;
+            let mut buffer = [0u8; 64 * 1024];
+            use std::io::{Read, Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0))
+                .map_err(|e| io_error(&partial.path, e))?;
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|e| io_error(&partial.path, e))?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+                sha512.update(&buffer[..count]);
+                completed += count as u64;
+            }
+        }
         loop {
             let chunk = tokio::select! {
                 result = response.chunk() => result.map_err(|e| DownloadError::Request {
                     url: safe_url(&current_url),
-                    message: e.to_string(),
+                    message: request_error_message(e),
                 })?,
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    check_cancelled(request)?;
+                    check_cancelled_partial(request, &partial, resumable)?;
                     continue;
                 }
             };
             let Some(chunk) = chunk else { break };
-            check_cancelled(request)?;
+            check_cancelled_partial(request, &partial, resumable)?;
             if request
                 .expected_size
                 .is_some_and(|size| completed.saturating_add(chunk.len() as u64) > size)
             {
+                partial.discard()?;
                 return Err(DownloadError::SizeMismatch {
                     path: request.destination.clone(),
                     expected: request.expected_size.unwrap(),
@@ -318,7 +479,7 @@ impl DownloadManager {
                 });
             }
             file.write_all(&chunk)
-                .map_err(|e| io_error(&temp.path, e))?;
+                .map_err(|e| io_error(&partial.path, e))?;
             hasher.update(&chunk);
             sha512.update(&chunk);
             completed += chunk.len() as u64;
@@ -329,14 +490,20 @@ impl DownloadManager {
                         completed,
                         total,
                     })
-                    .map_err(|_| DownloadError::Cancelled)?;
+                    .map_err(|_| {
+                        if !resumable {
+                            let _ = partial.discard();
+                        }
+                        DownloadError::Cancelled
+                    })?;
             }
         }
-        file.sync_all().map_err(|e| io_error(&temp.path, e))?;
-        check_cancelled(request)?;
+        file.sync_all().map_err(|e| io_error(&partial.path, e))?;
+        check_cancelled_partial(request, &partial, resumable)?;
         if let Some(expected) = request.expected_size
             && expected != completed
         {
+            partial.discard()?;
             return Err(DownloadError::SizeMismatch {
                 path: request.destination.clone(),
                 expected,
@@ -346,6 +513,7 @@ impl DownloadManager {
         if let Some(expected) = &request.expected_sha1 {
             let actual = format!("{:x}", hasher.finalize());
             if !expected.eq_ignore_ascii_case(&actual) {
+                partial.discard()?;
                 return Err(DownloadError::Sha1Mismatch {
                     path: request.destination.clone(),
                     expected: expected.clone(),
@@ -356,6 +524,7 @@ impl DownloadManager {
         if let Some(expected) = &request.expected_sha512 {
             let actual = format!("{:x}", sha512.finalize());
             if !expected.eq_ignore_ascii_case(&actual) {
+                partial.discard()?;
                 return Err(DownloadError::Sha512Mismatch {
                     path: request.destination.clone(),
                     expected: expected.clone(),
@@ -363,9 +532,10 @@ impl DownloadManager {
                 });
             }
         }
-        fs::rename(&temp.path, &request.destination)
+        ensure_partial_identity(&file, &partial)?;
+        fs::rename(&partial.path, &request.destination)
             .map_err(|e| io_error(&request.destination, e))?;
-        temp.disarm();
+        let _ = fs::remove_file(&partial.etag_path);
         if let Some(context) = &request.task_context {
             context
                 .emit(TaskEvent::Finished {
@@ -388,6 +558,25 @@ fn check_cancelled(request: &DownloadRequest) -> Result<(), DownloadError> {
         .as_ref()
         .is_some_and(|c| c.cancellation.is_cancelled())
     {
+        Err(DownloadError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn check_cancelled_partial(
+    request: &DownloadRequest,
+    partial: &PartialFile,
+    resumable: bool,
+) -> Result<(), DownloadError> {
+    if request
+        .task_context
+        .as_ref()
+        .is_some_and(|context| context.cancellation.is_cancelled())
+    {
+        if !resumable {
+            partial.discard()?;
+        }
         Err(DownloadError::Cancelled)
     } else {
         Ok(())
@@ -436,6 +625,34 @@ fn safe_url(url: &reqwest::Url) -> String {
     safe.to_string()
 }
 
+fn valid_strong_etag(etag: &str) -> bool {
+    etag.len() >= 2
+        && etag.len() < 2048
+        && etag.starts_with('"')
+        && etag.ends_with('"')
+        && !etag.bytes().any(|b| b.is_ascii_control())
+}
+fn resume_scope(url: &str, request: &DownloadRequest) -> String {
+    format!(
+        "{:x}",
+        sha2::Sha512::digest(
+            format!(
+                "{url}\n{:?}\n{:?}\n{:?}",
+                request.expected_sha1, request.expected_sha512, request.expected_size
+            )
+            .as_bytes()
+        )
+    )
+}
+
+fn request_error_message(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        "request timed out; check the connection or proxy and retry".into()
+    } else {
+        format!("connection or transfer failed: {}", error.without_url())
+    }
+}
+
 fn safe_url_text(url: &str) -> String {
     reqwest::Url::parse(url)
         .map(|url| safe_url(&url))
@@ -443,6 +660,13 @@ fn safe_url_text(url: &str) -> String {
 }
 
 fn check_url_policy(request: &DownloadRequest, url: &reqwest::Url) -> Result<(), DownloadError> {
+    if request.require_https
+        && (url.scheme() != "https" || !url.username().is_empty() || url.password().is_some())
+    {
+        return Err(DownloadError::InvalidRequest(
+            "download redirects must remain HTTPS without embedded credentials".into(),
+        ));
+    }
     if let Some(hosts) = &request.allowed_hosts {
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
         if url.scheme() != "https" || !hosts.iter().any(|allowed| allowed == &host) {
@@ -488,37 +712,180 @@ fn parent_dir(path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
-struct TempFile {
+struct PartialFile {
     path: PathBuf,
-    armed: bool,
+    etag_path: PathBuf,
+    lock_path: PathBuf,
 }
-impl TempFile {
-    fn create(destination: &Path) -> Result<Self, DownloadError> {
-        let parent = parent_dir(destination);
-        let name = destination
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("download");
+
+impl PartialFile {
+    fn for_destination(destination: &Path) -> Self {
+        let mut path = destination.as_os_str().to_owned();
+        path.push(".ccl-partial");
+        let path = PathBuf::from(path);
+        let mut etag = path.as_os_str().to_owned();
+        etag.push(".etag");
+        let mut lock = path.as_os_str().to_owned();
+        lock.push(".lock");
+        Self {
+            path,
+            etag_path: PathBuf::from(etag),
+            lock_path: PathBuf::from(lock),
+        }
+    }
+
+    async fn acquire(&self, request: &DownloadRequest) -> Result<PartialLock, DownloadError> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        let lock_metadata = fs::symlink_metadata(&self.lock_path);
+        if lock_metadata.is_ok_and(|m| m.file_type().is_symlink() || !m.is_file()) {
+            return Err(DownloadError::InvalidRequest(
+                "unsafe partial download lock path".into(),
+            ));
+        }
+        let file = options
+            .open(&self.lock_path)
+            .map_err(|e| io_error(&self.lock_path, e))?;
+        ensure_same_path_file(&file, &self.lock_path)?;
         loop {
-            let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path = parent.join(format!(".{name}.ccl-tmp-{}-{id}", std::process::id()));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(Self { path, armed: true }),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(io_error(&path, e)),
+            check_cancelled(request)?;
+            match fs2::FileExt::try_lock_exclusive(&file) {
+                Ok(()) => return Ok(PartialLock(file)),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => return Err(io_error(&self.lock_path, error)),
             }
         }
     }
-    fn disarm(&mut self) {
-        self.armed = false;
+
+    fn resume_state(&self, scope: &str) -> Result<(u64, Option<String>), DownloadError> {
+        let (Ok(metadata), Ok(sidecar)) = (
+            fs::symlink_metadata(&self.path),
+            fs::symlink_metadata(&self.etag_path),
+        ) else {
+            self.discard()?;
+            return Ok((0, None));
+        };
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || !sidecar.is_file()
+            || sidecar.file_type().is_symlink()
+            || sidecar.len() > 4096
+            || metadata.len() == 0
+        {
+            self.discard()?;
+            return Ok((0, None));
+        }
+        let mut etag_file = OpenOptions::new()
+            .read(true)
+            .open(&self.etag_path)
+            .map_err(|e| io_error(&self.etag_path, e))?;
+        ensure_same_path_file(&etag_file, &self.etag_path)?;
+        use std::io::Read;
+        let mut raw = String::new();
+        etag_file
+            .read_to_string(&mut raw)
+            .map_err(|e| io_error(&self.etag_path, e))?;
+        let parsed = serde_json::from_str::<(String, String)>(&raw).ok();
+        if let Some((etag, saved_scope)) = parsed
+            && saved_scope == scope
+            && valid_strong_etag(&etag)
+        {
+            return Ok((metadata.len(), Some(etag)));
+        }
+        self.discard()?;
+        Ok((0, None))
+    }
+    fn save_etag(&self, etag: &str, scope: &str) -> Result<(), DownloadError> {
+        if !valid_strong_etag(etag) {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec(&(etag, scope))
+            .map_err(|e| DownloadError::InvalidRequest(e.to_string()))?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.etag_path)
+            .map_err(|e| io_error(&self.etag_path, e))?;
+        file.write_all(&bytes)
+            .map_err(|e| io_error(&self.etag_path, e))
+    }
+
+    fn discard(&self) -> Result<(), DownloadError> {
+        for path in [&self.path, &self.etag_path] {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io_error(path, e)),
+            }
+        }
+        Ok(())
     }
 }
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = fs::remove_file(&self.path);
-        }
+
+fn ensure_partial_identity(file: &fs::File, partial: &PartialFile) -> Result<(), DownloadError> {
+    ensure_same_path_file(file, &partial.path)
+}
+
+fn ensure_same_path_file(file: &fs::File, path: &Path) -> Result<(), DownloadError> {
+    let opened = file.metadata().map_err(|e| io_error(path, e))?;
+    let linked = fs::symlink_metadata(path).map_err(|e| io_error(path, e))?;
+    if !opened.is_file()
+        || !linked.is_file()
+        || linked.file_type().is_symlink()
+        || !same_file(&opened, &linked)
+    {
+        return Err(DownloadError::InvalidRequest(format!(
+            "unsafe file path: {}",
+            path.display()
+        )));
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+struct PartialLock(fs::File);
+impl Drop for PartialLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+fn valid_content_range(value: &str, offset: u64, expected_total: Option<u64>) -> bool {
+    let Some(rest) = value.strip_prefix("bytes ") else {
+        return false;
+    };
+    let Some((range, total)) = rest.split_once('/') else {
+        return false;
+    };
+    let Some((start, end)) = range.split_once('-') else {
+        return false;
+    };
+    let (Ok(start), Ok(end), Ok(total)) = (
+        start.parse::<u64>(),
+        end.parse::<u64>(),
+        total.parse::<u64>(),
+    ) else {
+        return false;
+    };
+    start == offset
+        && end >= start
+        && end < total
+        && expected_total.is_none_or(|expected| expected == total)
 }
 
 #[cfg(test)]
@@ -655,6 +1022,332 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn offline_mode_reports_cold_cache_miss_without_network() {
+        let path = test_path();
+        let config = crate::config::DownloadConfig {
+            offline: true,
+            ..Default::default()
+        };
+        let manager = DownloadManager::new(&config).unwrap();
+        let result = manager
+            .download(DownloadRequest::new(
+                vec!["http://127.0.0.1:1/must-not-connect".into()],
+                &path,
+            ))
+            .await;
+        assert!(matches!(result, Err(DownloadError::OfflineCacheMiss(p)) if p == path));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn offline_mode_reuses_verified_cached_artifact() {
+        let path = test_path();
+        fs::write(&path, b"abc").unwrap();
+        let config = crate::config::DownloadConfig {
+            offline: true,
+            ..Default::default()
+        };
+        let manager = DownloadManager::new(&config).unwrap();
+        let outcome = manager
+            .download(
+                DownloadRequest::new(vec!["http://127.0.0.1:1/must-not-connect".into()], &path)
+                    .with_sha1("a9993e364706816aba3e25717850c26c9cd0d89d"),
+            )
+            .await
+            .unwrap();
+        assert!(outcome.reused_existing);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn resumes_interrupted_transfer_only_with_matching_etag_and_range() {
+        let body = b"complete verified artifact";
+        let split = 9;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = first.read(&mut request).unwrap();
+            write!(first, "HTTP/1.1 200 OK\r\nETag: \"stable-v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            first.write_all(&body[..split]).unwrap();
+            drop(first);
+
+            let (mut second, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = second.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains(&format!("range: bytes={split}-"))
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("if-range: \"stable-v1\"")
+            );
+            write!(second, "HTTP/1.1 206 Partial Content\r\nETag: \"stable-v1\"\r\nContent-Range: bytes {split}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()-1, body.len(), body.len()-split).unwrap();
+            second.write_all(&body[split..]).unwrap();
+        });
+        let path = test_path();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
+            .unwrap()
+            .with_retry_policy(1, Duration::ZERO);
+        let result = manager
+            .download(
+                DownloadRequest::new(vec![format!("http://{address}/artifact")], &path)
+                    .with_sha1(format!("{:x}", Sha1::digest(body)))
+                    .with_size(body.len() as u64),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), body);
+        assert_eq!(result.bytes, body.len() as u64);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn changed_etag_discards_partial_before_clean_retry() {
+        let body = b"same artifact, new representation";
+        let split = 7;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = first.read(&mut request).unwrap();
+            write!(first, "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            first.write_all(&body[..split]).unwrap();
+            drop(first);
+
+            let (mut second, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = second.read(&mut request).unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..count])
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=")
+            );
+            write!(second, "HTTP/1.1 206 Partial Content\r\nETag: \"v2\"\r\nContent-Range: bytes {split}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()-1, body.len(), body.len()-split).unwrap();
+            second.write_all(&body[split..]).unwrap();
+
+            let (mut third, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = third.read(&mut request).unwrap();
+            assert!(
+                !String::from_utf8_lossy(&request[..count])
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=")
+            );
+            write!(third, "HTTP/1.1 200 OK\r\nETag: \"v2\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            third.write_all(body).unwrap();
+        });
+        let path = test_path();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
+            .unwrap()
+            .with_retry_policy(2, Duration::ZERO);
+        manager
+            .download(
+                DownloadRequest::new(vec![format!("http://{address}/artifact")], &path)
+                    .with_sha1(format!("{:x}", Sha1::digest(body)))
+                    .with_size(body.len() as u64),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), body);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_ignoring_range_restarts_from_full_response_safely() {
+        let body = b"full body when range is ignored";
+        let split = 6;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = first.read(&mut request).unwrap();
+            write!(first, "HTTP/1.1 200 OK\r\nETag: \"same\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            first.write_all(&body[..split]).unwrap();
+            drop(first);
+
+            let (mut second, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = second.read(&mut request).unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..count])
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=")
+            );
+            write!(second, "HTTP/1.1 200 OK\r\nETag: \"same\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            second.write_all(body).unwrap();
+        });
+        let path = test_path();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
+            .unwrap()
+            .with_retry_policy(1, Duration::ZERO);
+        manager
+            .download(
+                DownloadRequest::new(vec![format!("http://{address}/artifact")], &path)
+                    .with_sha1(format!("{:x}", Sha1::digest(body)))
+                    .with_size(body.len() as u64),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), body);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn range_not_satisfiable_discards_partial_and_restarts_from_zero() {
+        let body = b"recovered from 416";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let path = test_path();
+        let url = format!("http://{address}/artifact");
+        let request = DownloadRequest::new(vec![url.clone()], &path)
+            .with_sha1(format!("{:x}", Sha1::digest(body)))
+            .with_size(body.len() as u64);
+        let partial = PartialFile::for_destination(&path);
+        fs::write(&partial.path, b"oldpartial").unwrap();
+        partial
+            .save_etag("\"old\"", &resume_scope(&url, &request))
+            .unwrap();
+        let worker = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = first.read(&mut request).unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..count])
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=")
+            );
+            first.write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            drop(first);
+            let (mut second, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = second.read(&mut request).unwrap();
+            assert!(
+                !String::from_utf8_lossy(&request[..count])
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=")
+            );
+            write!(second, "HTTP/1.1 200 OK\r\nETag: \"fresh\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            second.write_all(body).unwrap();
+        });
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
+            .unwrap()
+            .with_retry_policy(1, Duration::ZERO);
+        manager.download(request).await.unwrap();
+        worker.join().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), body);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(partial.lock_path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_for_one_destination_publish_only_one_transfer() {
+        let body = b"one atomic artifact";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = socket.read(&mut request).unwrap();
+            thread::sleep(Duration::from_millis(100));
+            write!(socket, "HTTP/1.1 200 OK\r\nETag: \"single\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            socket.write_all(body).unwrap();
+        });
+        let path = test_path();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default()).unwrap();
+        let make_request = || {
+            DownloadRequest::new(vec![format!("http://{address}/artifact")], &path)
+                .with_sha1(format!("{:x}", Sha1::digest(body)))
+        };
+        let (first, second) = tokio::join!(
+            manager.download(make_request()),
+            manager.download(make_request())
+        );
+        worker.join().unwrap();
+        assert!(
+            first.is_ok() && second.is_ok(),
+            "first: {first:?}; second: {second:?}"
+        );
+        assert_eq!(
+            usize::from(first.unwrap().reused_existing)
+                + usize::from(second.unwrap().reused_existing),
+            1
+        );
+        assert_eq!(fs::read(&path).unwrap(), body);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn content_range_must_match_offset_end_and_expected_total() {
+        assert!(valid_content_range("bytes 12-19/20", 12, Some(20)));
+        assert!(!valid_content_range("bytes 11-19/20", 12, Some(20)));
+        assert!(!valid_content_range("bytes 12-20/20", 12, Some(20)));
+        assert!(!valid_content_range("bytes 12-19/21", 12, Some(20)));
+        assert!(!valid_content_range("items 12-19/20", 12, Some(20)));
+    }
+
+    #[test]
+    fn partial_etag_cache_is_bound_to_url_and_integrity_request() {
+        let destination = test_path();
+        let part = PartialFile::for_destination(&destination);
+        let url = "https://cdn.example/artifact";
+        let request = DownloadRequest::new(vec![url.into()], &destination)
+            .with_sha1("a9993e364706816aba3e25717850c26c9cd0d89d")
+            .with_size(3);
+        let scope = resume_scope(url, &request);
+        fs::write(&part.path, b"ab").unwrap();
+        part.save_etag("\"stable\"", &scope).unwrap();
+        assert_eq!(
+            part.resume_state(&scope).unwrap(),
+            (2, Some("\"stable\"".into()))
+        );
+        assert_eq!(
+            part.resume_state("different-url-or-hash").unwrap(),
+            (0, None)
+        );
+        assert!(!part.path.exists());
+        fs::remove_file(&part.lock_path).ok();
+    }
+
+    #[test]
+    fn sensitive_headers_apply_only_to_the_exact_https_host() {
+        let request = DownloadRequest::new(vec![], test_path())
+            .with_api_key("do-not-log-this", vec!["api.example".into()])
+            .unwrap();
+        let header = &request.sensitive_headers[0];
+        assert!(header.applies(&reqwest::Url::parse("https://api.example/v1/file").unwrap()));
+        assert!(!header.applies(&reqwest::Url::parse("https://cdn.example/v1/file").unwrap()));
+        assert!(!header.applies(&reqwest::Url::parse("https://sub.api.example/v1/file").unwrap()));
+        assert!(!header.applies(&reqwest::Url::parse("http://api.example/v1/file").unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_cache_symlink_is_discarded_without_touching_target() {
+        use std::os::unix::fs::symlink;
+        let destination = test_path();
+        let partial = PartialFile::for_destination(&destination);
+        let victim = test_path();
+        fs::write(&victim, b"keep me").unwrap();
+        symlink(&victim, &partial.path).unwrap();
+        fs::write(&partial.etag_path, "\"stable\"").unwrap();
+        assert_eq!(partial.resume_state("fixture").unwrap(), (0, None));
+        assert_eq!(fs::read(&victim).unwrap(), b"keep me");
+        assert!(!partial.path.exists());
+        fs::remove_file(victim).unwrap();
+    }
+
+    #[tokio::test]
     async fn rejects_corrupt_http_body_and_cleans_temporary_file() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -682,7 +1375,16 @@ mod tests {
         assert!(matches!(result, Err(DownloadError::CandidatesExhausted(_))));
         assert_eq!(fs::read(&destination).unwrap(), b"keep");
         let parent = destination.parent().unwrap();
-        assert_eq!(fs::read_dir(parent).unwrap().count(), 1);
+        let artifacts = fs::read_dir(parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            artifacts.len(),
+            2,
+            "unexpected leftover transfer artifacts: {artifacts:?}"
+        ); // destination plus persistent per-file lock
+        fs::remove_file(PartialFile::for_destination(&destination).lock_path).unwrap();
         fs::remove_file(&destination).unwrap();
         fs::remove_dir(parent).unwrap();
     }
@@ -737,10 +1439,14 @@ mod tests {
         assert!(matches!(result, Err(DownloadError::Cancelled)));
         server.join().unwrap();
         assert!(!destination.exists());
+        let partial = PartialFile::for_destination(&destination);
+        assert!(!partial.path.exists());
+        assert!(!partial.etag_path.exists());
         assert_eq!(
             fs::read_dir(destination.parent().unwrap()).unwrap().count(),
-            0
+            1
         );
+        fs::remove_file(partial.lock_path).unwrap();
         fs::remove_dir(destination.parent().unwrap()).unwrap();
     }
 }

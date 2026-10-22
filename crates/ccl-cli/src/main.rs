@@ -15,12 +15,14 @@ use ccl_core::{
     config::{ConfigStore, LauncherConfig, default_config_path},
     content::{ContentKind, ContentService},
     directory::DirectoryInputs,
+    import_formats::{ImportFormatService, ImportOptionsExt},
     install::{InstallError, InstallOptions, InstallService},
     instances::InstanceService,
     launch::{self, LaunchError, LaunchRequest, LaunchService},
     loaders::{LoaderKind, LoaderRequest, LoaderService},
     modpacks::{ImportOptions, ModpackError, ModpackService},
     network::HttpClient,
+    online_content::{OnlineContentService, Provider, SearchQuery},
 };
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -35,6 +37,9 @@ struct Cli {
     /// Emit one JSON result on stdout.
     #[arg(long, global = true)]
     json: bool,
+    /// Disable HTTP requests and require verified local data (separate from launch --offline identity).
+    #[arg(long, global = true)]
+    network_offline: bool,
     /// Override the game directory selected by the normal search order.
     #[arg(long, global = true)]
     game_dir: Option<PathBuf>,
@@ -96,6 +101,11 @@ enum Command {
     Content {
         #[command(subcommand)]
         command: ContentCommand,
+    },
+    /// Search, resolve, install and inspect provider content.
+    Online {
+        #[command(subcommand)]
+        command: OnlineCommand,
     },
     /// Launch an installed version with the selected Microsoft account or offline identity.
     Launch {
@@ -163,6 +173,70 @@ enum PackCommand {
         #[arg(long)]
         include_local_content: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum OnlineCommand {
+    /// Resolve and install a mod plus required dependencies into an existing instance.
+    Install {
+        id: String,
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
+        project: String,
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Check versions recorded in the selected instance receipt.
+    Updates { id: String },
+    /// Analyze dependency and file conflicts in recorded online content.
+    Analyze { id: String },
+    /// Download a selected provider pack and create/update a managed instance.
+    PackInstall {
+        id: String,
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
+        project: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        include_optional: bool,
+    },
+    Search {
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
+        query: String,
+        #[arg(long)]
+        minecraft: Option<String>,
+        #[arg(long)]
+        loader: Vec<String>,
+        #[arg(long, default_value = "mod")]
+        kind: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Versions {
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
+        project: String,
+        #[arg(long)]
+        minecraft: Option<String>,
+        #[arg(long)]
+        loader: Option<String>,
+    },
+    Resolve {
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
+        project: String,
+        minecraft: String,
+        loader: String,
+    },
+}
+fn parse_provider(value: &str) -> std::result::Result<Provider, String> {
+    match value {
+        "modrinth" => Ok(Provider::Modrinth),
+        "curseforge" => Ok(Provider::CurseForge),
+        _ => Err("expected modrinth or curseforge".into()),
+    }
 }
 
 #[derive(Subcommand)]
@@ -245,6 +319,45 @@ enum InstanceCommand {
         loader: LoaderKind,
         loader_version: String,
     },
+    /// Rename the instance ID and keep all content and revisions.
+    Rename {
+        id: String,
+        destination: String,
+    },
+    /// Make an independent copy, including saves and retained revisions.
+    Copy {
+        id: String,
+        destination: String,
+    },
+    /// Delete this instance, including worlds. Requires --yes.
+    Delete {
+        id: String,
+        #[arg(long, required = true)]
+        yes: bool,
+    },
+    /// List current, previous and archived revisions.
+    History {
+        id: String,
+    },
+    /// Restore a retained snapshot as a new revision, including its userdata.
+    Restore {
+        id: String,
+        revision: String,
+    },
+    /// Show logical instance disk usage (hard-linked files may share disk blocks).
+    DiskUsage {
+        id: String,
+    },
+    /// Preview cleanup of retained history/stage; --apply performs it.
+    Clean {
+        id: String,
+        #[arg(long, default_value_t = 2)]
+        keep: usize,
+        #[arg(long)]
+        include_previous: bool,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Switch to the previous successful loader revision.
     Rollback {
         id: String,
@@ -260,7 +373,10 @@ fn parse_loader(value: &str) -> std::result::Result<LoaderKind, String> {
         "fabric" => Ok(LoaderKind::Fabric),
         "forge" => Ok(LoaderKind::Forge),
         "neoforge" => Ok(LoaderKind::NeoForge),
-        _ => Err("expected fabric, forge or neoforge".into()),
+        "quilt" => Ok(LoaderKind::Quilt),
+        "legacyfabric" | "legacy-fabric" => Ok(LoaderKind::LegacyFabric),
+        "optifine" => Ok(LoaderKind::OptiFine),
+        _ => Err("expected fabric, forge, neoforge, quilt, legacyfabric or optifine".into()),
     }
 }
 
@@ -359,13 +475,14 @@ async fn run(cli: &Cli) -> Result<Value> {
             command: SettingsCommand::Reset { all: true, .. }
         }
     );
-    let config = if reset_all {
+    let mut config = if reset_all {
         LauncherConfig::default()
     } else if cli.config.is_some() && !is_settings_write {
         LauncherConfig::read(&config_path)?
     } else {
         LauncherConfig::read_or_default(&config_path)?
     };
+    config.downloads.offline |= cli.network_offline;
     let _transport = HttpClient::new(&config.downloads)?;
 
     match &cli.command {
@@ -413,6 +530,9 @@ async fn run(cli: &Cli) -> Result<Value> {
                     Ok(json!({ "ok": true, "removed": id }))
                 }
                 AccountCommand::Login { client_id } => {
+                    if config.downloads.offline {
+                        return Err(Error::InvalidConfig("Microsoft login requires network access; disable --network-offline / downloads.offline".into()));
+                    }
                     let client_id = client_id.as_ref().or(config.auth.microsoft_client_id.as_ref()).ok_or_else(|| Error::InvalidConfig("set auth.microsoft_client_id to your registered CCL application ID before login; see docs/accounts.en.md".into()))?;
                     OsSecretStore::for_account_file(&config_path.with_file_name("accounts.json"))?
                         .probe()?;
@@ -439,6 +559,9 @@ async fn run(cli: &Cli) -> Result<Value> {
                     Ok(json!({ "ok": true, "account": metadata, "selected": metadata.id }))
                 }
                 AccountCommand::Refresh { id } => {
+                    if config.downloads.offline {
+                        return Err(Error::InvalidConfig("Microsoft refresh requires network access; disable --network-offline / downloads.offline".into()));
+                    }
                     let id = account_id(&store, id.as_deref())?;
                     let metadata = store
                         .list()?
@@ -478,7 +601,7 @@ async fn run(cli: &Cli) -> Result<Value> {
         }
         Command::Versions { limit } => {
             let manifest = InstallService::new(config.downloads)?
-                .list_versions()
+                .list_versions_for(&resolution.path)
                 .await?;
             let versions: Vec<_> = manifest.versions.iter().take(if *limit == 0 { usize::MAX } else { *limit })
                 .map(|v| json!({ "id": v.id, "type": v.version_type, "release_time": v.release_time }))
@@ -566,6 +689,33 @@ async fn run(cli: &Cli) -> Result<Value> {
                     let instance = service.install(id, &request, Some(context)).await?;
                     Ok(json!({ "ok": true, "instance": instance }))
                 }
+                InstanceCommand::Rename { id, destination } => {
+                    Ok(json!({"ok":true,"instance":service.rename(id,destination)?}))
+                }
+                InstanceCommand::Copy { id, destination } => {
+                    Ok(json!({"ok":true,"instance":service.duplicate(id,destination)?}))
+                }
+                InstanceCommand::Delete { id, .. } => {
+                    service.delete(id)?;
+                    Ok(json!({"ok":true,"deleted":id}))
+                }
+                InstanceCommand::History { id } => {
+                    Ok(json!({"ok":true,"history":service.history(id)?}))
+                }
+                InstanceCommand::Restore { id, revision } => {
+                    Ok(json!({"ok":true,"instance":service.restore_revision(id,revision)?}))
+                }
+                InstanceCommand::DiskUsage { id } => {
+                    Ok(json!({"ok":true,"disk_usage":service.disk_usage(id)?}))
+                }
+                InstanceCommand::Clean {
+                    id,
+                    keep,
+                    include_previous,
+                    apply,
+                } => Ok(
+                    json!({"ok":true,"cleanup":service.cleanup(id,*keep,*include_previous,*apply)?}),
+                ),
                 InstanceCommand::Rollback { id } => {
                     Ok(json!({ "ok": true, "instance": service.rollback(id).await? }))
                 }
@@ -579,11 +729,20 @@ async fn run(cli: &Cli) -> Result<Value> {
         }
         Command::Pack { command } => match command {
             PackCommand::Inspect { archive } => {
-                let manifest = ModpackService::inspect(archive)?;
+                let manifest = if archive
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|v| v.eq_ignore_ascii_case("mrpack"))
+                {
+                    json!(ModpackService::inspect(archive)?)
+                } else {
+                    ImportFormatService::inspect(archive)?
+                };
                 Ok(json!({ "ok": true, "manifest": manifest }))
             }
             PackCommand::Show { id } => {
-                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let service =
+                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
                 let receipt = service.show(id)?;
                 Ok(json!({ "ok": true, "receipt": receipt }))
             }
@@ -594,15 +753,37 @@ async fn run(cli: &Cli) -> Result<Value> {
                 replace_modified,
                 allow_hosts,
             } => {
-                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let service =
+                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
                 let options = ImportOptions {
                     include_optional: *include_optional,
                     replace_modified: *replace_modified,
                     allowed_hosts: allow_hosts.clone(),
                 };
-                let instance = service
-                    .import(id, archive, &options, Some(operation_context()))
-                    .await?;
+                let instance = if archive
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|v| v.eq_ignore_ascii_case("mrpack"))
+                    || ImportFormatService::is_modrinth(archive)?
+                {
+                    service
+                        .import(id, archive, &options, Some(operation_context()))
+                        .await?
+                } else {
+                    ImportFormatService::new(resolution.path, config.downloads.clone())
+                        .import(
+                            id,
+                            archive,
+                            &ImportOptionsExt {
+                                include_optional: *include_optional,
+                                replace_modified: *replace_modified,
+                                curseforge_api_key: env::var("CCL_CURSEFORGE_API_KEY").ok(),
+                                allowed_hosts: allow_hosts.clone(),
+                            },
+                            Some(operation_context()),
+                        )
+                        .await?
+                };
                 Ok(json!({ "ok": true, "instance": instance, "pack_imported": true }))
             }
             PackCommand::Export {
@@ -610,7 +791,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                 output,
                 include_local_content,
             } => {
-                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let service =
+                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
                 let manifest = service.export(id, output, *include_local_content)?;
                 Ok(json!({ "ok": true, "archive": output, "manifest": manifest }))
             }
@@ -650,6 +832,116 @@ async fn run(cli: &Cli) -> Result<Value> {
                 ContentCommand::Restore { id, archive } => {
                     service.restore(id, archive)?;
                     Ok(json!({ "ok": true, "id": id, "restored": true }))
+                }
+            }
+        }
+        Command::Online { command } => {
+            let service = OnlineContentService::from_download_config(
+                &config.downloads,
+                env::var("CCL_CURSEFORGE_API_KEY").ok(),
+            )?;
+            match command {
+                OnlineCommand::Install {
+                    id,
+                    provider,
+                    project,
+                    version,
+                } => {
+                    let installed = service
+                        .install_project(
+                            resolution.path,
+                            &config.downloads,
+                            id,
+                            *provider,
+                            project,
+                            version.as_deref(),
+                        )
+                        .await?;
+                    Ok(json!({"ok":true,"installed_content":installed}))
+                }
+                OnlineCommand::Updates { id } => Ok(
+                    json!({"ok":true,"updates":service.updates_for_instance(resolution.path,&config.downloads,id).await?}),
+                ),
+                OnlineCommand::Analyze { id } => Ok(
+                    json!({"ok":true,"conflicts":service.analyze_instance(resolution.path,&config.downloads,id).await?}),
+                ),
+                OnlineCommand::PackInstall {
+                    id,
+                    provider,
+                    project,
+                    version,
+                    include_optional,
+                } => {
+                    let selected = service
+                        .versions(*provider, project, None, None)
+                        .await?
+                        .into_iter()
+                        .find(|v| version.as_ref().is_none_or(|id| v.id == *id))
+                        .ok_or_else(|| {
+                            Error::InvalidConfig("requested pack version is unavailable".into())
+                        })?;
+                    let instance = service
+                        .download_and_import_pack(
+                            resolution.path,
+                            &config.downloads,
+                            id,
+                            &selected,
+                            *include_optional,
+                            Some(operation_context()),
+                        )
+                        .await?;
+                    Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                }
+                OnlineCommand::Search {
+                    provider,
+                    query,
+                    minecraft,
+                    loader,
+                    kind,
+                    limit,
+                } => {
+                    let projects = service
+                        .search(
+                            *provider,
+                            &SearchQuery {
+                                query: query.clone(),
+                                game_version: minecraft.clone(),
+                                loaders: loader.clone(),
+                                project_type: Some(kind.clone()),
+                                limit: *limit,
+                            },
+                        )
+                        .await?;
+                    Ok(json!({"ok":true,"projects":projects}))
+                }
+                OnlineCommand::Versions {
+                    provider,
+                    project,
+                    minecraft,
+                    loader,
+                } => Ok(
+                    json!({"ok":true,"content_versions":service.versions(*provider,project,minecraft.as_deref(),loader.as_deref()).await?}),
+                ),
+                OnlineCommand::Resolve {
+                    provider,
+                    project,
+                    minecraft,
+                    loader,
+                } => {
+                    let versions = match provider {
+                        Provider::Modrinth => {
+                            service
+                                .resolve_dependencies(project, minecraft, loader)
+                                .await?
+                        }
+                        Provider::CurseForge => {
+                            service
+                                .resolve_curseforge_dependencies(project, minecraft, Some(loader))
+                                .await?
+                        }
+                    };
+                    let conflicts = OnlineContentService::analyze_conflicts(&versions);
+                    Ok(json!({"ok":true,"resolved":versions,"conflicts":conflicts}))
                 }
             }
         }
@@ -702,7 +994,10 @@ async fn run(cli: &Cli) -> Result<Value> {
             let service = LaunchService::new(config.downloads.clone());
             let token = signal_token();
             let store = account_store(&config_path)?;
-            let selected = if *offline || username.is_some() {
+            if config.downloads.offline && account.is_some() {
+                return Err(Error::InvalidConfig("network offline mode cannot refresh a Microsoft account; launch with --offline identity, or disable --network-offline".into()));
+            }
+            let selected = if *offline || username.is_some() || config.downloads.offline {
                 None
             } else {
                 account.clone().or(store.selected()?)
@@ -803,8 +1098,26 @@ fn operation_context() -> TaskContext {
 }
 
 fn print_human(value: &Value) {
+    if [
+        "history",
+        "disk_usage",
+        "cleanup",
+        "deleted",
+        "projects",
+        "content_versions",
+        "installed_content",
+        "resolved",
+        "updates",
+        "conflicts",
+    ]
+    .iter()
+    .any(|key| value.get(key).is_some())
+    {
+        println!("{}", serde_json::to_string_pretty(value).unwrap());
+        return;
+    }
     if let Some(manifest) = value.get("manifest") {
-        println!("Modrinth manifest:");
+        println!("Pack manifest:");
         println!("{}", serde_json::to_string_pretty(manifest).unwrap());
         if let Some(archive) = value.get("archive") {
             println!("Archive: {}", archive.as_str().unwrap_or("?"));
@@ -953,6 +1266,45 @@ fn print_human(value: &Value) {
 
 fn error_code(error: &Error) -> &'static str {
     match error {
+        Error::Online(error) if error.is_cancelled() => "cancelled",
+        Error::Online(
+            ccl_core::online_content::OnlineError::Conflicts(_)
+            | ccl_core::online_content::OnlineError::Conflict { .. },
+        ) => "content_conflict",
+        Error::Online(ccl_core::online_content::OnlineError::Import(
+            ccl_core::import_formats::ImportFormatError::Pack(ModpackError::Conflict { .. }),
+        )) => "pack_conflict",
+        Error::Online(ccl_core::online_content::OnlineError::Import(
+            ccl_core::import_formats::ImportFormatError::Pack(
+                ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_))
+                | ModpackError::Install(InstallError::Conflict(_)),
+            ),
+        )) => "instance_conflict",
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(
+            ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)),
+        )) => "instance_conflict",
+        Error::Online(ccl_core::online_content::OnlineError::Instance(
+            ccl_core::instances::InstanceError::Conflict(_),
+        )) => "instance_conflict",
+        Error::Online(ccl_core::online_content::OnlineError::Download(
+            ccl_core::download::DownloadError::Cancelled,
+        )) => "cancelled",
+        Error::Online(_) => "online_content_error",
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(error))
+            if error.is_cancelled() =>
+        {
+            "cancelled"
+        }
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Download(
+            ccl_core::download::DownloadError::Cancelled,
+        )) => "cancelled",
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(
+            ModpackError::Conflict { .. },
+        )) => "pack_conflict",
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(_)) => {
+            "modpack_error"
+        }
+        Error::ImportFormat(_) => "import_format_error",
         Error::Modpack(error) if error.is_cancelled() => "cancelled",
         Error::Modpack(ModpackError::Conflict { .. }) => "pack_conflict",
         Error::Modpack(ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)))
@@ -1008,6 +1360,43 @@ fn error_code(error: &Error) -> &'static str {
 
 fn exit_code(error: &Error) -> u8 {
     match error {
+        Error::Online(error) if error.is_cancelled() => 130,
+        Error::Online(
+            ccl_core::online_content::OnlineError::Conflicts(_)
+            | ccl_core::online_content::OnlineError::Conflict { .. },
+        ) => 7,
+        Error::Online(ccl_core::online_content::OnlineError::Import(
+            ccl_core::import_formats::ImportFormatError::Pack(ModpackError::Conflict { .. }),
+        )) => 7,
+        Error::Online(ccl_core::online_content::OnlineError::Import(
+            ccl_core::import_formats::ImportFormatError::Pack(
+                ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_))
+                | ModpackError::Install(InstallError::Conflict(_)),
+            ),
+        )) => 7,
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(
+            ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)),
+        )) => 7,
+        Error::Online(ccl_core::online_content::OnlineError::Instance(
+            ccl_core::instances::InstanceError::Conflict(_),
+        )) => 7,
+        Error::Online(ccl_core::online_content::OnlineError::Download(
+            ccl_core::download::DownloadError::Cancelled,
+        )) => 130,
+        Error::Online(_) => 15,
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(error))
+            if error.is_cancelled() =>
+        {
+            130
+        }
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Download(
+            ccl_core::download::DownloadError::Cancelled,
+        )) => 130,
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(
+            ModpackError::Conflict { .. },
+        )) => 7,
+        Error::ImportFormat(ccl_core::import_formats::ImportFormatError::Pack(_)) => 13,
+        Error::ImportFormat(_) => 16,
         Error::Modpack(error) if error.is_cancelled() => 130,
         Error::Modpack(ModpackError::Conflict { .. })
         | Error::Modpack(ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)))

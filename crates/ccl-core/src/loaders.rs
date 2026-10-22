@@ -19,11 +19,16 @@ use crate::{
 };
 
 const FABRIC_META: &str = "https://meta.fabricmc.net";
+const QUILT_META: &str = "https://meta.quiltmc.org";
+const LEGACY_FABRIC_META: &str = "https://meta.legacyfabric.net";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LoaderKind {
     Fabric,
+    Quilt,
+    LegacyFabric,
+    OptiFine,
     Forge,
     NeoForge,
 }
@@ -71,6 +76,8 @@ pub struct LoaderService {
     config: DownloadConfig,
     http: HttpClient,
     fabric_meta_url: String,
+    quilt_meta_url: String,
+    legacy_fabric_meta_url: String,
     manifest_url: String,
 }
 
@@ -80,6 +87,8 @@ impl LoaderService {
             http: HttpClient::new(&config).map_err(core_network_error)?,
             config,
             fabric_meta_url: FABRIC_META.into(),
+            quilt_meta_url: QUILT_META.into(),
+            legacy_fabric_meta_url: LEGACY_FABRIC_META.into(),
             manifest_url: crate::install::VERSION_MANIFEST_URL.into(),
         })
     }
@@ -95,6 +104,18 @@ impl LoaderService {
         self
     }
 
+    /// Override Quilt's official metadata endpoint for local service fixtures.
+    pub fn with_quilt_endpoint(mut self, meta_url: impl Into<String>) -> Self {
+        self.quilt_meta_url = meta_url.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// Override Legacy Fabric's official metadata endpoint for local service fixtures.
+    pub fn with_legacy_fabric_endpoint(mut self, meta_url: impl Into<String>) -> Self {
+        self.legacy_fabric_meta_url = meta_url.into().trim_end_matches('/').to_owned();
+        self
+    }
+
     pub async fn versions(
         &self,
         kind: LoaderKind,
@@ -104,6 +125,27 @@ impl LoaderService {
             LoaderKind::Fabric => {
                 fabric_versions(&self.config, &self.http, &self.fabric_meta_url, minecraft).await
             }
+            LoaderKind::Quilt => {
+                profile_loader_versions(
+                    &self.config,
+                    &self.http,
+                    &self.quilt_meta_url,
+                    minecraft,
+                    "v3",
+                )
+                .await
+            }
+            LoaderKind::LegacyFabric => {
+                profile_loader_versions(
+                    &self.config,
+                    &self.http,
+                    &self.legacy_fabric_meta_url,
+                    minecraft,
+                    "v2",
+                )
+                .await
+            }
+            LoaderKind::OptiFine => crate::optifine::versions(&self.config, minecraft).await,
             LoaderKind::Forge | LoaderKind::NeoForge => {
                 forge_versions(&self.config, kind, minecraft).await
             }
@@ -129,6 +171,29 @@ impl LoaderService {
                     context,
                 )
                 .await
+            }
+            LoaderKind::Quilt | LoaderKind::LegacyFabric => {
+                install_profile_loader(
+                    &self.config,
+                    &self.http,
+                    if request.kind == LoaderKind::Quilt {
+                        &self.quilt_meta_url
+                    } else {
+                        &self.legacy_fabric_meta_url
+                    },
+                    if request.kind == LoaderKind::Quilt {
+                        "v3"
+                    } else {
+                        "v2"
+                    },
+                    request,
+                    options,
+                    context,
+                )
+                .await
+            }
+            LoaderKind::OptiFine => {
+                crate::optifine::install(&self.config, request, options, context).await
             }
             LoaderKind::Forge | LoaderKind::NeoForge => {
                 forge_install(&self.config, request, options, context).await
@@ -200,6 +265,151 @@ async fn fabric_versions(
         "Fabric versions unavailable: {}",
         errors.join("; ")
     )))
+}
+
+async fn profile_loader_versions(
+    config: &DownloadConfig,
+    http: &HttpClient,
+    meta_url: &str,
+    minecraft: &str,
+    api_version: &str,
+) -> Result<Vec<LoaderVersion>, LoaderError> {
+    safe_segment(minecraft)?;
+    let url = format!(
+        "{meta_url}/{api_version}/versions/loader/{}",
+        encode_segment(minecraft)
+    );
+    let mut failures = Vec::new();
+    for candidate in url_candidates(&url, DownloadKind::VersionList, config) {
+        match http.get_json::<Vec<serde_json::Value>>(&candidate).await {
+            Ok(entries) => {
+                let versions = map_profile_loader_versions(entries);
+                if !versions.is_empty() {
+                    return Ok(versions);
+                }
+                failures.push(format!("{candidate}: no loader versions returned"));
+            }
+            Err(error) => failures.push(format!("{candidate}: {error}")),
+        }
+    }
+    Err(LoaderError::Unsupported(format!(
+        "loader versions unavailable: {}",
+        failures.join("; ")
+    )))
+}
+
+fn map_profile_loader_versions(entries: Vec<serde_json::Value>) -> Vec<LoaderVersion> {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let loader = entry.get("loader")?;
+            Some(LoaderVersion {
+                version: loader.get("version")?.as_str()?.to_owned(),
+                stable: loader
+                    .get("stable")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+async fn install_profile_loader(
+    config: &DownloadConfig,
+    http: &HttpClient,
+    meta_url: &str,
+    api_version: &str,
+    request: &LoaderRequest,
+    options: &InstallOptions,
+    context: Option<TaskContext>,
+) -> Result<String, LoaderError> {
+    safe_segment(&request.minecraft)?;
+    safe_segment(&request.version)?;
+    ensure_install_roots_safe(&options.game_directory, &request.minecraft)?;
+    let available =
+        profile_loader_versions(config, http, meta_url, &request.minecraft, api_version).await?;
+    if !available
+        .iter()
+        .any(|entry| entry.version == request.version)
+    {
+        return Err(LoaderError::Unsupported(format!(
+            "{} {} does not support Minecraft {}",
+            loader_label(request.kind),
+            request.version,
+            request.minecraft
+        )));
+    }
+    InstallService::new(config.clone())?
+        .install(&request.minecraft, options, context.clone())
+        .await?;
+    check_cancelled(&context)?;
+
+    let url = format!(
+        "{meta_url}/{api_version}/versions/loader/{}/{}/profile/json",
+        encode_segment(&request.minecraft),
+        encode_segment(&request.version)
+    );
+    let mut profile = None;
+    let mut failures = Vec::new();
+    for candidate in url_candidates(&url, DownloadKind::File, config) {
+        match http.get_json::<serde_json::Value>(&candidate).await {
+            Ok(value) => match VersionMetadata::parse(&value.to_string()) {
+                Ok(parsed) => {
+                    profile = Some(parsed);
+                    break;
+                }
+                Err(error) => failures.push(format!("{candidate}: {error}")),
+            },
+            Err(error) => failures.push(format!("{candidate}: {error}")),
+        }
+    }
+    let mut profile = profile.ok_or_else(|| {
+        LoaderError::Unsupported(format!(
+            "{} profile unavailable: {}",
+            loader_label(request.kind),
+            failures.join("; ")
+        ))
+    })?;
+    let id = validate_fabric_profile(&profile, &request.minecraft)?;
+    install_libraries(
+        config,
+        &options.game_directory,
+        &mut profile,
+        options,
+        &context,
+    )
+    .await?;
+    check_cancelled(&context)?;
+    let version_dir = options.game_directory.join("versions").join(&id);
+    fs::create_dir_all(&version_dir).map_err(|source| io(&version_dir, source))?;
+    let path = version_dir.join(format!("{id}.json"));
+    if path.exists() {
+        let existing = fs::read(&path).map_err(|source| io(&path, source))?;
+        if !same_fabric_profile(&existing, &profile) {
+            return Err(LoaderError::Conflict(format!(
+                "version metadata already exists with different contents: {}",
+                path.display()
+            )));
+        }
+    } else {
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&profile).map_err(metadata::MetadataError::from)?,
+        )
+        .map_err(|source| io(&path, source))?;
+    }
+    Ok(id)
+}
+
+fn loader_label(kind: LoaderKind) -> &'static str {
+    match kind {
+        LoaderKind::Fabric => "Fabric",
+        LoaderKind::Quilt => "Quilt",
+        LoaderKind::LegacyFabric => "Legacy Fabric",
+        LoaderKind::OptiFine => "OptiFine",
+        LoaderKind::Forge => "Forge",
+        LoaderKind::NeoForge => "NeoForge",
+    }
 }
 
 async fn install_fabric(
@@ -350,6 +560,60 @@ pub(crate) async fn install_libraries(
         if !metadata::library_allowed(&library.rules, &rule) {
             continue;
         }
+        if library.downloads.artifact.is_none() && !library.natives.is_empty() {
+            if let Some(template) = library.natives.get(&options.os) {
+                let classifier = template.replace(
+                    "${arch}",
+                    if matches!(
+                        options.arch.as_str(),
+                        "x86" | "i386" | "i486" | "i586" | "i686"
+                    ) {
+                        "32"
+                    } else {
+                        "64"
+                    },
+                );
+                let coordinate = format!("{}:{classifier}", library.name);
+                let (relative, base, version, filename) =
+                    maven_artifact(&coordinate, library.url.as_deref())?;
+                let group = library
+                    .name
+                    .split(':')
+                    .next()
+                    .unwrap_or_default()
+                    .replace('.', "/");
+                let url = format!(
+                    "{base}{group}/{}/{version}/{filename}",
+                    library.name.split(':').nth(1).unwrap_or_default()
+                );
+                let existing = library.downloads.classifiers.get(&classifier);
+                let hash = match existing.and_then(|a| a.sha1.as_ref()) {
+                    Some(hash) => hash.clone(),
+                    None => fetch_maven_sha1(config, &format!("{url}.sha1")).await?,
+                };
+                let destination = game_dir.join("libraries").join(&relative);
+                ensure_path_has_no_symlinks(&destination, game_dir)?;
+                let mut request = DownloadRequest::new(
+                    url_candidates(&url, DownloadKind::File, config),
+                    &destination,
+                )
+                .with_sha1(&hash);
+                if let Some(context) = context {
+                    request = request.with_task_context(context.clone());
+                }
+                manager.download(request).await?;
+                library.downloads.classifiers.insert(
+                    classifier,
+                    metadata::DownloadInfo {
+                        path: Some(relative.to_string_lossy().replace('\\', "/")),
+                        url: Some(url),
+                        sha1: Some(hash),
+                        ..Default::default()
+                    },
+                );
+            }
+            continue;
+        }
         let (relative, url, sha1, size, maven_form) = if let Some(artifact) =
             &library.downloads.artifact
         {
@@ -477,6 +741,11 @@ fn maven_artifact(
 }
 
 async fn fetch_maven_sha1(config: &DownloadConfig, url: &str) -> Result<String, LoaderError> {
+    if config.offline {
+        return Err(LoaderError::Unsupported(
+            "loader library checksum metadata is unavailable in offline mode".into(),
+        ));
+    }
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")));
     if let Some(proxy) = &config.http_proxy {
@@ -694,5 +963,62 @@ mod tests {
         assert!(
             LoaderError::Install(InstallError::Download(DownloadError::Cancelled)).is_cancelled()
         );
+    }
+
+    #[test]
+    fn maps_quilt_and_legacy_fabric_provider_version_shapes() {
+        let versions = map_profile_loader_versions(vec![
+            serde_json::json!({"loader":{"version":"0.28.1","stable":true},"intermediary":{"version":"1.21.4"}}),
+            serde_json::json!({"loader":{"version":"0.28.0","stable":false}}),
+        ]);
+        assert_eq!(
+            versions,
+            vec![
+                LoaderVersion {
+                    version: "0.28.1".into(),
+                    stable: true
+                },
+                LoaderVersion {
+                    version: "0.28.0".into(),
+                    stable: false
+                },
+            ]
+        );
+        assert!(map_profile_loader_versions(vec![serde_json::json!({"oops":true})]).is_empty());
+    }
+
+    #[test]
+    fn quilt_and_legacy_fabric_profile_fixtures_validate_as_launcher_metadata() {
+        let fixtures = [
+            (
+                "1.21.4",
+                serde_json::json!({
+                    "id":"quilt-loader-0.20.0-beta.9-1.21.4",
+                    "inheritsFrom":"1.21.4",
+                    "mainClass":"org.quiltmc.loader.impl.launch.knot.KnotClient",
+                    "type":"release",
+                    "arguments":{"game":[],"jvm":[]},
+                    "libraries":[{"name":"org.quiltmc:quilt-loader:0.20.0-beta.9","url":"https://maven.quiltmc.org/repository/release/"}],
+                    "quilt":{"loader":{"version":"0.20.0-beta.9"}}
+                }),
+            ),
+            (
+                "1.8.9",
+                serde_json::json!({
+                    "id":"legacyfabric-loader-0.20.1-1.8.9",
+                    "inheritsFrom":"1.8.9",
+                    "mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient",
+                    "minecraftArguments":"--username ${auth_player_name} --version ${version_name}",
+                    "libraries":[{"name":"net.fabricmc:fabric-loader:0.20.1","url":"https://maven.fabricmc.net/"}]
+                }),
+            ),
+        ];
+        for (minecraft, value) in fixtures {
+            let profile = VersionMetadata::parse(&value.to_string()).unwrap();
+            assert_eq!(
+                validate_fabric_profile(&profile, minecraft).unwrap(),
+                profile.id.unwrap()
+            );
+        }
     }
 }
