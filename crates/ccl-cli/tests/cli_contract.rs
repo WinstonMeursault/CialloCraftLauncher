@@ -41,6 +41,25 @@ fn write_instance(root: &Path, id: &str, major: u32) {
     ).unwrap();
 }
 
+fn write_managed_instance(root: &Path, id: &str) -> PathBuf {
+    let instance = root.join(".ccl/instances").join(id);
+    let game = instance.join("game");
+    fs::create_dir_all(&game).unwrap();
+    fs::write(
+        instance.join("instance.json"),
+        serde_json::json!({
+            "id": id,
+            "minecraft": "1.21.1",
+            "loader": null,
+            "loader_version": null,
+            "game_directory": fs::canonicalize(&game).unwrap(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    game
+}
+
 fn json_output(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -477,5 +496,122 @@ fn reset_all_recovers_a_corrupt_configuration() {
         2048
     );
     assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(&config).unwrap()).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn malformed_mrpack_inspection_returns_one_json_error() {
+    let root = sandbox();
+    let archive = root.join("broken.mrpack");
+    fs::write(&archive, b"not a zip archive").unwrap();
+    let output = command(&root)
+        .args(["--json", "pack", "inspect"])
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(13));
+    let value = json_output(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "modpack_error");
+    assert!(output.stderr.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn malformed_pack_import_fails_preflight_before_creating_instance() {
+    let root = sandbox();
+    let game = root.join("game");
+    let archive = root.join("broken.mrpack");
+    fs::write(&archive, b"not a zip archive").unwrap();
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["pack", "import", "new-pack"])
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(13));
+    assert_eq!(json_output(&output)["error"]["code"], "modpack_error");
+    assert!(!game.join(".ccl/instances/new-pack").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_list_does_not_create_missing_collection() {
+    let root = sandbox();
+    let game = root.join("game");
+    let instance_game = write_managed_instance(&game, "read-only");
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["content", "list", "read-only", "mods"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value = json_output(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["content"], serde_json::json!([]));
+    assert!(!instance_game.join("mods").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn modpack_conflict_has_stable_json_error_and_exit_code() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_managed_instance(&game, "ordinary");
+    let archive = root.join("valid.mrpack");
+    let manifest = ccl_core::modpack_format::Manifest {
+        format_version: 1,
+        game: "minecraft".into(),
+        version_id: "v1".into(),
+        name: "Pack".into(),
+        summary: None,
+        files: vec![],
+        dependencies: [("minecraft".into(), "1.21.1".into())].into(),
+    };
+    ccl_core::modpack_format::write_pack(&archive, &manifest, &Default::default()).unwrap();
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["pack", "import", "ordinary"])
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    let value = json_output(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "pack_conflict");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a managed modpack")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn pack_import_parser_exposes_safety_controls_and_content_kind_is_checked() {
+    let root = sandbox();
+    let output = command(&root)
+        .args(["pack", "import", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--include-optional"));
+    assert!(help.contains("--replace-modified"));
+    assert!(help.contains("--allow-host"));
+    let invalid = command(&root)
+        .args(["content", "list", "some-instance", "unknown"])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("expected mods"));
     fs::remove_dir_all(root).unwrap();
 }

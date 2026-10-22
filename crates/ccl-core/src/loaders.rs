@@ -269,9 +269,7 @@ async fn install_fabric(
     let path = version_dir.join(format!("{id}.json"));
     if path.exists() {
         let existing = fs::read(&path).map_err(|source| io(&path, source))?;
-        let incoming =
-            serde_json::to_vec_pretty(&profile).map_err(metadata::MetadataError::from)?;
-        if existing != incoming {
+        if !same_fabric_profile(&existing, &profile) {
             return Err(LoaderError::Conflict(format!(
                 "version metadata already exists with different contents: {}",
                 path.display()
@@ -282,6 +280,27 @@ async fn install_fabric(
         fs::write(&path, bytes).map_err(|source| io(&path, source))?;
     }
     Ok(id)
+}
+
+fn same_fabric_profile(existing: &[u8], incoming: &VersionMetadata) -> bool {
+    let Ok(mut existing) = serde_json::from_slice::<serde_json::Value>(existing) else {
+        return false;
+    };
+    let Ok(mut incoming) = serde_json::to_value(incoming) else {
+        return false;
+    };
+    // Fabric refreshes these timestamps for the same loader profile. Compare the parsed
+    // documents so formatting and object key order are immaterial, while preserving all
+    // launch-relevant fields and library metadata as conflict checks.
+    for field in ["time", "releaseTime"] {
+        if let Some(object) = existing.as_object_mut() {
+            object.remove(field);
+        }
+        if let Some(object) = incoming.as_object_mut() {
+            object.remove(field);
+        }
+    }
+    existing == incoming
 }
 
 fn validate_fabric_profile(
