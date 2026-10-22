@@ -4,7 +4,7 @@ CCL can query upstream loader metadata and install Fabric, Forge, and NeoForge i
 
 Fabric profiles come from Fabric Meta. Forge and NeoForge use their supported modern installer formats. Legacy installer formats that the current installer path cannot process return an unsupported-format error.
 
-Validated menu launches on macOS: Minecraft `1.21.1` with Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234`. On Linux, Fabric and Forge reached the menu and exited normally with code `0`; a macOS NeoForge run also exited normally. Linux NeoForge cold installation encountered an unavailable official checksum endpoint and a missing mirror checksum sidecar; installation requires access to that metadata or a matching verified installer cache. These results do not certify other versions, platforms, or third-party mods. Windows is covered by compilation and automated tests.
+Validated menu launches on macOS: Minecraft `1.21.1` with Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234`. On Linux, Fabric `0.20.1`, Forge `52.1.0`, and NeoForge `21.1.234` reached the menu and exited normally with code `0`. The Linux NeoForge run reused an installer with a matching verified integrity record; a cold run could not obtain the official checksum sidecar, and the mirror did not provide it. These results do not certify other versions, platforms, or third-party mods. Windows is covered by compilation and automated tests.
 
 ## Query loader releases
 

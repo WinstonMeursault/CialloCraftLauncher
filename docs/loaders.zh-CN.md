@@ -4,7 +4,7 @@ CCL 可以查询上游加载器元数据，并将 Fabric、Forge 和 NeoForge �
 
 Fabric 配置文件来自 Fabric Meta。Forge 和 NeoForge 使用当前支持的现代安装器格式。当前安装流程无法处理的旧版安装器格式会返回不支持格式的错误。
 
-macOS 已验证进入主菜单的组合：Minecraft `1.21.1` 搭配 Fabric `0.20.1`、Forge `52.1.0` 和 NeoForge `21.1.234`。Linux 上 Fabric 和 Forge 均进入主菜单并以退出码 `0` 正常结束；macOS 上的一次 NeoForge 运行也正常退出。Linux NeoForge 从空缓存安装时遇到官方校验和端点不可用、镜像缺少校验和文件的情况；安装需要能访问该元数据或具有匹配的已验证安装器缓存。这些结果不代表其他版本、平台或第三方模组已验证。Windows 由编译和自动化测试覆盖。
+macOS 已验证进入主菜单的组合：Minecraft `1.21.1` 搭配 Fabric `0.20.1`、Forge `52.1.0` 和 NeoForge `21.1.234`。Linux 上 Fabric `0.20.1`、Forge `52.1.0` 和 NeoForge `21.1.234` 均进入主菜单并以退出码 `0` 正常结束。Linux NeoForge 使用了具有匹配完整性记录的已验证安装器；从空缓存安装时，官方校验和文件不可用，镜像也未提供该文件。这些结果不代表其他版本、平台或第三方模组已验证。Windows 由编译和自动化测试覆盖。
 
 ## 查询加载器版本
 
