@@ -612,7 +612,13 @@ async fn export_reports_a_missing_receipt_owned_file_with_its_path() {
         .export("missing", &temp.path().join("missing-export.mrpack"), false)
         .unwrap_err();
     assert!(matches!(error, ModpackError::Io { .. }));
-    assert!(error.to_string().contains(missing));
+    match error {
+        ModpackError::Io { path, source } => {
+            assert!(path.ends_with(Path::new(missing)), "{}", path.display());
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("expected missing-file diagnostic, got {other}"),
+    }
 }
 
 #[tokio::test]
