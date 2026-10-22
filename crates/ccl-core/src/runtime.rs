@@ -795,7 +795,10 @@ impl InstallLock {
             check_context(context)?;
             match fs2::FileExt::try_lock_exclusive(&file) {
                 Ok(()) => return Ok(Self { file }),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                {
                     tokio::time::sleep(Duration::from_millis(100)).await
                 }
                 Err(e) => return Err(io(&path, e)),

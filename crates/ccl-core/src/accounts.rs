@@ -218,7 +218,12 @@ impl<S: SecretStore> AccountStore<S> {
             .open(self.path.with_file_name(name))?;
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => Ok(Some(AccountRefreshLock(file))),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(e.into()),
         }
     }

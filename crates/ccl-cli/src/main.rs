@@ -16,7 +16,6 @@ use ccl_core::{
     directory::DirectoryInputs,
     install::{InstallError, InstallOptions, InstallService},
     launch::{self, LaunchError, LaunchRequest, LaunchService},
-    launch_plan::MicrosoftIdentity,
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -396,29 +395,16 @@ async fn run(cli: &Cli) -> Result<Value> {
                     .into_iter()
                     .find(|a| a.id == id)
                     .ok_or(ccl_core::accounts::AccountError::Invalid)?;
-                let metadata = auth_service(
-                    metadata
-                        .oauth_client_id
-                        .as_deref()
-                        .ok_or(ccl_core::accounts::AccountError::Invalid)?,
-                    &config,
-                )?
-                .refresh_if_expiring(&store, &id, &token, std::time::Duration::from_secs(60))
-                .await?;
-                let credentials = store
-                    .credentials(&id)?
-                    .ok_or(ccl_core::accounts::AccountError::Invalid)?;
                 Some(
-                    MicrosoftIdentity::new(
-                        metadata.username,
-                        metadata.uuid,
-                        metadata.xuid.unwrap_or_default(),
+                    auth_service(
                         metadata
                             .oauth_client_id
+                            .as_deref()
                             .ok_or(ccl_core::accounts::AccountError::Invalid)?,
-                        credentials.access_token().to_owned(),
-                    )
-                    .map_err(LaunchError::from)?,
+                        &config,
+                    )?
+                    .launch_identity(&store, &id, &token)
+                    .await?,
                 )
             } else {
                 None

@@ -297,6 +297,28 @@ impl MicrosoftAuth {
         self.refresh_account_locked(store, id, cancel).await
     }
 
+    /// Resolve a saved account into an in-memory launch identity, refreshing it if
+    /// necessary. Interfaces do not need to read or map credential values themselves.
+    pub async fn launch_identity<S: SecretStore>(
+        &self,
+        store: &crate::accounts::AccountStore<S>,
+        id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<crate::launch_plan::MicrosoftIdentity, AuthError> {
+        let metadata = self
+            .refresh_if_expiring(store, id, cancel, Duration::from_secs(60))
+            .await?;
+        let credentials = store.credentials(id)?.ok_or(AuthError::InvalidResponse)?;
+        crate::launch_plan::MicrosoftIdentity::new(
+            metadata.username,
+            metadata.uuid,
+            metadata.xuid.unwrap_or_default(),
+            metadata.oauth_client_id.ok_or(AuthError::InvalidResponse)?,
+            credentials.access_token().to_owned(),
+        )
+        .map_err(|_| AuthError::InvalidResponse)
+    }
+
     async fn refresh_account_locked<S: SecretStore>(
         &self,
         store: &crate::accounts::AccountStore<S>,
@@ -994,5 +1016,47 @@ mod tests {
             auth.begin_device_login_cancellable(&token).await,
             Err(AuthError::Cancelled)
         ));
+    }
+
+    #[tokio::test]
+    async fn core_prepares_saved_launch_identity_without_exposing_credentials() {
+        let directory = std::env::temp_dir().join(format!(
+            "ccl-core-identity-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        let store = crate::accounts::AccountStore::new(
+            directory.join("accounts.json"),
+            std::sync::Arc::new(crate::accounts::MemorySecretStore::default()),
+        );
+        let id = "0123456789abcdef0123456789abcdef";
+        store
+            .upsert(
+                AccountMetadata {
+                    id: id.into(),
+                    username: "OnlinePlayer".into(),
+                    uuid: id.into(),
+                    xuid: Some("123456789".into()),
+                    account_type: "microsoft".into(),
+                    oauth_client_id: Some("registered-client".into()),
+                    last_used_unix: None,
+                },
+                AccountSecrets::new(
+                    "private-access-sentinel".into(),
+                    "private-refresh-sentinel".into(),
+                    now() + 3600,
+                ),
+            )
+            .unwrap();
+        let identity = MicrosoftAuth::new(AuthConfig::new("test-client"))
+            .unwrap()
+            .launch_identity(&store, id, &CancellationToken::default())
+            .await
+            .unwrap();
+        assert_eq!(identity.username, "OnlinePlayer");
+        assert_eq!(identity.uuid, id);
+        assert_eq!(identity.client_id, "registered-client");
+        assert!(!format!("{identity:?}").contains("private-"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
