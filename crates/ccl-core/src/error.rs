@@ -29,6 +29,10 @@ pub enum Error {
     Loader(#[from] crate::loaders::LoaderError),
     #[error(transparent)]
     Instance(#[from] crate::instances::InstanceError),
+    #[error(transparent)]
+    Modpack(#[from] crate::modpacks::ModpackError),
+    #[error(transparent)]
+    Content(#[from] crate::content::ContentError),
     #[error("task cancelled")]
     Cancelled,
     #[error(transparent)]

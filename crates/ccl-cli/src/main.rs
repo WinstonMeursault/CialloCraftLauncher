@@ -13,11 +13,13 @@ use ccl_core::{
     accounts::{AccountStore, OsSecretStore},
     auth::{AuthConfig, MicrosoftAuth},
     config::{ConfigStore, LauncherConfig, default_config_path},
+    content::{ContentKind, ContentService},
     directory::DirectoryInputs,
     install::{InstallError, InstallOptions, InstallService},
     instances::InstanceService,
     launch::{self, LaunchError, LaunchRequest, LaunchService},
     loaders::{LoaderKind, LoaderRequest, LoaderService},
+    modpacks::{ImportOptions, ModpackError, ModpackService},
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -85,6 +87,16 @@ enum Command {
         #[command(subcommand)]
         command: InstanceCommand,
     },
+    /// Inspect, import and export Modrinth modpacks.
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+    /// Manage content and portable userdata backups for isolated instances.
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
     /// Launch an installed version with the selected Microsoft account or offline identity.
     Launch {
         #[arg(required_unless_present = "instance", conflicts_with = "instance")]
@@ -123,6 +135,74 @@ enum Command {
         run: Option<String>,
         #[arg(long, default_value_t = 100)]
         lines: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackCommand {
+    /// Read and validate a Modrinth archive without installing it.
+    Inspect { archive: PathBuf },
+    /// Show the receipt for an imported pack instance.
+    Show { id: String },
+    /// Import a Modrinth archive into a managed instance.
+    Import {
+        id: String,
+        archive: PathBuf,
+        #[arg(long)]
+        include_optional: bool,
+        #[arg(long)]
+        replace_modified: bool,
+        /// Permit downloads from this additional exact HTTPS hostname (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+    /// Export a managed pack. Local modified content requires explicit redistribution permission.
+    Export {
+        id: String,
+        output: PathBuf,
+        #[arg(long)]
+        include_local_content: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContentCommand {
+    /// List instance content in one collection.
+    List {
+        id: String,
+        #[arg(value_parser = parse_content_kind)]
+        kind: ContentKind,
+    },
+    /// Copy a local mod, resource pack, shader pack or save into an instance.
+    Add {
+        id: String,
+        #[arg(value_parser = parse_content_kind)]
+        kind: ContentKind,
+        source: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    Remove {
+        id: String,
+        #[arg(value_parser = parse_content_kind)]
+        kind: ContentKind,
+        name: String,
+    },
+    Enable {
+        id: String,
+        name: String,
+    },
+    Disable {
+        id: String,
+        name: String,
+    },
+    Backup {
+        id: String,
+        output: PathBuf,
+    },
+    Restore {
+        id: String,
+        archive: PathBuf,
     },
 }
 
@@ -181,6 +261,16 @@ fn parse_loader(value: &str) -> std::result::Result<LoaderKind, String> {
         "forge" => Ok(LoaderKind::Forge),
         "neoforge" => Ok(LoaderKind::NeoForge),
         _ => Err("expected fabric, forge or neoforge".into()),
+    }
+}
+
+fn parse_content_kind(value: &str) -> std::result::Result<ContentKind, String> {
+    match value {
+        "mods" => Ok(ContentKind::Mod),
+        "resourcepacks" => Ok(ContentKind::ResourcePack),
+        "shaderpacks" => Ok(ContentKind::ShaderPack),
+        "saves" => Ok(ContentKind::Save),
+        _ => Err("expected mods, resourcepacks, shaderpacks or saves".into()),
     }
 }
 
@@ -487,6 +577,82 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
             }
         }
+        Command::Pack { command } => match command {
+            PackCommand::Inspect { archive } => {
+                let manifest = ModpackService::inspect(archive)?;
+                Ok(json!({ "ok": true, "manifest": manifest }))
+            }
+            PackCommand::Show { id } => {
+                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let receipt = service.show(id)?;
+                Ok(json!({ "ok": true, "receipt": receipt }))
+            }
+            PackCommand::Import {
+                id,
+                archive,
+                include_optional,
+                replace_modified,
+                allow_hosts,
+            } => {
+                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let options = ImportOptions {
+                    include_optional: *include_optional,
+                    replace_modified: *replace_modified,
+                    allowed_hosts: allow_hosts.clone(),
+                };
+                let instance = service
+                    .import(id, archive, &options, Some(operation_context()))
+                    .await?;
+                Ok(json!({ "ok": true, "instance": instance, "pack_imported": true }))
+            }
+            PackCommand::Export {
+                id,
+                output,
+                include_local_content,
+            } => {
+                let service = ModpackService::new(resolution.path, config.downloads.clone())?;
+                let manifest = service.export(id, output, *include_local_content)?;
+                Ok(json!({ "ok": true, "archive": output, "manifest": manifest }))
+            }
+        },
+        Command::Content { command } => {
+            let service = ContentService::new(resolution.path, config.downloads.clone())?;
+            match command {
+                ContentCommand::List { id, kind } => {
+                    let content = service.list(id, *kind)?;
+                    Ok(json!({ "ok": true, "id": id, "kind": kind, "content": content }))
+                }
+                ContentCommand::Add {
+                    id,
+                    kind,
+                    source,
+                    name,
+                } => {
+                    let entry = service.add(id, *kind, source, name.as_deref())?;
+                    Ok(json!({ "ok": true, "id": id, "kind": kind, "entry": entry }))
+                }
+                ContentCommand::Remove { id, kind, name } => {
+                    service.remove(id, *kind, name)?;
+                    Ok(json!({ "ok": true, "id": id, "kind": kind, "removed": name }))
+                }
+                ContentCommand::Enable { id, name } => {
+                    let entry = service.set_enabled(id, name, true)?;
+                    Ok(json!({ "ok": true, "id": id, "entry": entry }))
+                }
+                ContentCommand::Disable { id, name } => {
+                    let entry = service.set_enabled(id, name, false)?;
+                    Ok(json!({ "ok": true, "id": id, "entry": entry }))
+                }
+                ContentCommand::Backup { id, output } => {
+                    service.backup(id, output)?;
+                    Ok(json!({ "ok": true, "id": id, "backup": output }))
+                }
+                ContentCommand::Restore { id, archive } => {
+                    service.restore(id, archive)?;
+                    Ok(json!({ "ok": true, "id": id, "restored": true }))
+                }
+            }
+        }
         Command::Logs {
             instance,
             run,
@@ -637,6 +803,70 @@ fn operation_context() -> TaskContext {
 }
 
 fn print_human(value: &Value) {
+    if let Some(manifest) = value.get("manifest") {
+        println!("Modrinth manifest:");
+        println!("{}", serde_json::to_string_pretty(manifest).unwrap());
+        if let Some(archive) = value.get("archive") {
+            println!("Archive: {}", archive.as_str().unwrap_or("?"));
+        }
+        return;
+    }
+    if let Some(receipt) = value.get("receipt") {
+        println!("Imported modpack receipt:");
+        println!("{}", serde_json::to_string_pretty(receipt).unwrap());
+        return;
+    }
+    if let Some(content) = value.get("content").and_then(Value::as_array) {
+        let kind = value["kind"].as_str().unwrap_or("content");
+        println!("{kind}:");
+        for entry in content {
+            println!(
+                "{}\t{} bytes{}",
+                entry["path"].as_str().unwrap_or("?"),
+                entry["bytes"].as_u64().unwrap_or(0),
+                if entry["enabled"].as_bool() == Some(false) {
+                    "\tdisabled"
+                } else {
+                    ""
+                }
+            );
+        }
+        return;
+    }
+    if let Some(entry) = value.get("entry") {
+        println!(
+            "Content {} ({} bytes)",
+            entry["path"].as_str().unwrap_or("?"),
+            entry["bytes"].as_u64().unwrap_or(0)
+        );
+        return;
+    }
+    if value.get("kind").is_some()
+        && let Some(removed) = value.get("removed").and_then(Value::as_str)
+    {
+        println!("Removed content {removed}");
+        return;
+    }
+    if let Some(backup) = value.get("backup") {
+        println!("Backup written to {}", backup.as_str().unwrap_or("?"));
+        return;
+    }
+    if value.get("restored") == Some(&Value::Bool(true)) {
+        println!(
+            "Userdata restored for instance {}",
+            value["id"].as_str().unwrap_or("?")
+        );
+        return;
+    }
+    if value.get("pack_imported") == Some(&Value::Bool(true)) {
+        let instance = &value["instance"];
+        println!(
+            "Modpack installed in instance {}",
+            instance["id"].as_str().unwrap_or("?")
+        );
+        println!("{}", serde_json::to_string_pretty(instance).unwrap());
+        return;
+    }
     if value.get("managed_instances").is_some()
         || value.get("instance").is_some()
         || value.get("loader_versions").is_some()
@@ -723,6 +953,20 @@ fn print_human(value: &Value) {
 
 fn error_code(error: &Error) -> &'static str {
     match error {
+        Error::Modpack(error) if error.is_cancelled() => "cancelled",
+        Error::Modpack(ModpackError::Conflict { .. }) => "pack_conflict",
+        Error::Modpack(ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)))
+        | Error::Modpack(ModpackError::Install(InstallError::Conflict(_))) => "instance_conflict",
+        Error::Modpack(_) => "modpack_error",
+        Error::Content(ccl_core::content::ContentError::Instance(error))
+            if error.is_cancelled() =>
+        {
+            "cancelled"
+        }
+        Error::Content(ccl_core::content::ContentError::Instance(
+            ccl_core::instances::InstanceError::Conflict(_),
+        )) => "instance_conflict",
+        Error::Content(_) => "content_error",
         Error::Loader(error) if error.is_cancelled() => "cancelled",
         Error::Instance(error) if error.is_cancelled() => "cancelled",
         Error::Loader(_) => "loader_error",
@@ -764,6 +1008,20 @@ fn error_code(error: &Error) -> &'static str {
 
 fn exit_code(error: &Error) -> u8 {
     match error {
+        Error::Modpack(error) if error.is_cancelled() => 130,
+        Error::Modpack(ModpackError::Conflict { .. })
+        | Error::Modpack(ModpackError::Instance(ccl_core::instances::InstanceError::Conflict(_)))
+        | Error::Modpack(ModpackError::Install(InstallError::Conflict(_))) => 7,
+        Error::Modpack(_) => 13,
+        Error::Content(ccl_core::content::ContentError::Instance(error))
+            if error.is_cancelled() =>
+        {
+            130
+        }
+        Error::Content(ccl_core::content::ContentError::Instance(
+            ccl_core::instances::InstanceError::Conflict(_),
+        )) => 7,
+        Error::Content(_) => 14,
         Error::Loader(error) if error.is_cancelled() => 130,
         Error::Instance(error) if error.is_cancelled() => 130,
         Error::Loader(_) => 11,

@@ -13,11 +13,11 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-CLI 提供 `doctor`、`init`、`settings`、`account`、`versions`、`install`、`instances`、`launch` 和 `logs`。运行 `cargo run -p ccl-cli -- --help` 查看当前参数。启动支持 Microsoft 或离线身份、兼容 Java 运行时探测和托管安装、dry-run 计划、进程日志捕获和取消。Microsoft 应用尚未完成验证和公开分发批准；参阅[账户注册指南](accounts.zh-CN.md)。
+CLI 提供 `doctor`、`init`、`settings`、`account`、`versions`、`install`、`instances`、`loaders`、`instance`、`pack`、`content`、`launch` 和 `logs`。运行 `cargo run -p ccl-cli -- --help` 查看当前参数。整合包导入/导出、本地内容管理和用户数据备份命令见 [Modrinth 整合包与内容指南](modpacks.zh-CN.md)。启动支持 Microsoft 或离线身份、兼容 Java 运行时探测和托管安装、dry-run 计划、进程日志捕获和取消。Microsoft 应用尚未完成验证和公开分发批准；参阅[账户注册指南](accounts.zh-CN.md)。
 
 ## 代码边界
 
-加载器发现与独立实例流程见[模组实例与加载器](loaders.zh-CN.md)。`loaders`、`instance` 及 `launch --instance` 与未来 GUI 复用相同核心服务。现代 Forge/NeoForge 处理器由核心启动，通过任务事件报告输出，不得直接写入 CLI 标准输出。
+加载器发现与独立实例流程见[模组实例与加载器](loaders.zh-CN.md)。`loaders`、`instance` 及 `launch --instance` 与未来 GUI 复用相同核心服务。`modpack_format` 负责 `.mrpack` 解析、校验和写入；`modpacks` 协调导入/导出并管理整合包收据；`content` 管理本地文件和用户数据备份。整合包导入和内容编辑使用与实例操作相同的暂存事务和跨进程锁。现代 Forge/NeoForge 处理器由核心启动，通过任务事件报告输出，不得直接写入 CLI 标准输出。
 
 - 可复用的领域逻辑放在 `crates/ccl-core`。
 - `crates/ccl-core` 不得依赖终端或图形界面库。
@@ -35,4 +35,4 @@ CLI 提供 `doctor`、`init`、`settings`、`account`、`versions`、`install`�
 
 ## 当前功能范围
 
-核心提供配置、目录选择、HTTP 下载、版本查询与安装、安装托管 Java 运行时到 `.ccl/runtimes`、Microsoft 账户身份验证、启动计划、原生库解压和子进程输出捕获。账户批准和实时端到端验证尚未完成；在这些条件满足前，不要把账户登录描述为可公开使用。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。
+核心提供配置、目录选择、HTTP 下载、版本查询与安装、安装托管 Java 运行时到 `.ccl/runtimes`、Microsoft 账户身份验证、启动计划、原生库解压、子进程输出捕获、Modrinth 整合包处理、本地内容管理和用户数据备份。整合包收据记录其拥有路径的哈希；更新会使用这些哈希检查本地修改、删除和路径冲突，然后再替换数据。用户数据备份与 Modrinth 导出用途不同：导出不包含存档和私有服务器列表，并且导出本地二进制文件需要明确授权重新分发。账户批准和实时端到端验证尚未完成；在这些条件满足前，不要把账户登录描述为可公开使用。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。

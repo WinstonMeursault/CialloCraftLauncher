@@ -6,6 +6,7 @@ on:
     branches:
       - codex/feature-p3-cli-accounts
       - codex/feature-p4-loaders
+      - codex/feature-p5-modpacks
 
 permissions:
   contents: read

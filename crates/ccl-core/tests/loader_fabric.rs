@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 use ccl_core::{
@@ -21,17 +24,22 @@ fn sha1(bytes: &[u8]) -> String {
     format!("{:x}", Sha1::digest(bytes))
 }
 
-async fn fixture_server(bad_library_hash: bool) -> (String, tokio::task::JoinHandle<()>) {
+async fn fixture_server(
+    bad_library_hash: bool,
+) -> (String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
     let routes = fixture_routes(&base, bad_library_hash);
+    let profile_requests = Arc::new(AtomicUsize::new(0));
+    let server_profile_requests = profile_requests.clone();
     let task = tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 break;
             };
             let routes = routes.clone();
+            let profile_requests = server_profile_requests.clone();
             tokio::spawn(async move {
                 let mut request = vec![0; 4096];
                 let n = stream.read(&mut request).await.unwrap_or(0);
@@ -41,7 +49,17 @@ async fn fixture_server(bad_library_hash: bool) -> (String, tokio::task::JoinHan
                     .unwrap_or("")
                     .to_owned();
                 let path = first.split_whitespace().nth(1).unwrap_or("/");
-                let body = routes.get(path).cloned();
+                let mut body = routes.get(path).cloned();
+                if path.ends_with("/profile/json")
+                    && let Some(bytes) = &mut body
+                {
+                    let request = profile_requests.fetch_add(1, Ordering::Relaxed) + 1;
+                    let mut profile: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+                    let timestamp = format!("2026-10-22T00:00:{request:02}+0000");
+                    profile["time"] = timestamp.clone().into();
+                    profile["releaseTime"] = timestamp.into();
+                    *bytes = serde_json::to_vec(&profile).unwrap();
+                }
                 let (status, body) = body
                     .map(|b| ("200 OK", b))
                     .unwrap_or_else(|| ("404 Not Found", b"missing".to_vec()));
@@ -54,7 +72,7 @@ async fn fixture_server(bad_library_hash: bool) -> (String, tokio::task::JoinHan
             });
         }
     });
-    (base, task)
+    (base, task, profile_requests)
 }
 
 fn fixture_routes(base: &str, bad_library_hash: bool) -> HashMap<String, Vec<u8>> {
@@ -138,7 +156,7 @@ fn temp_game_dir(label: &str) -> PathBuf {
 
 #[tokio::test]
 async fn installs_vanilla_and_official_fabric_profile_with_verified_maven_library() {
-    let (base, server) = fixture_server(false).await;
+    let (base, server, _) = fixture_server(false).await;
     let game = temp_game_dir("success");
     let options = InstallOptions::for_current_platform(&game);
     let request = LoaderRequest {
@@ -174,8 +192,77 @@ async fn installs_vanilla_and_official_fabric_profile_with_verified_maven_librar
 }
 
 #[tokio::test]
+async fn reinstalling_same_fabric_profile_ignores_refreshed_timestamps() {
+    let (base, server, profile_requests) = fixture_server(false).await;
+    let game = temp_game_dir("same-profile-reinstall");
+    let options = InstallOptions::for_current_platform(&game);
+    let request = LoaderRequest {
+        kind: LoaderKind::Fabric,
+        minecraft: "1.21.4".into(),
+        version: "0.16.10".into(),
+    };
+    let loader = service(&base);
+
+    assert_eq!(
+        loader.install(&request, &options, None).await.unwrap(),
+        "fabric-loader-0.16.10-1.21.4"
+    );
+    let profile_path =
+        game.join("versions/fabric-loader-0.16.10-1.21.4/fabric-loader-0.16.10-1.21.4.json");
+    let first: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&profile_path).unwrap()).unwrap();
+    // Reformat and reorder object keys without changing the profile's meaning.
+    std::fs::write(&profile_path, serde_json::to_vec(&first).unwrap()).unwrap();
+
+    assert_eq!(
+        loader.install(&request, &options, None).await.unwrap(),
+        "fabric-loader-0.16.10-1.21.4"
+    );
+    let second: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&profile_path).unwrap()).unwrap();
+    assert_eq!(profile_requests.load(Ordering::Relaxed), 2);
+    // The second response has a refreshed timestamp, but an equivalent installed profile is
+    // intentionally left in place rather than rewritten during an idempotent reinstall.
+    assert_eq!(first["time"], second["time"]);
+    assert_eq!(first["releaseTime"], second["releaseTime"]);
+    assert_eq!(first["mainClass"], second["mainClass"]);
+
+    let _ = std::fs::remove_dir_all(game);
+    server.abort();
+}
+
+#[tokio::test]
+async fn reinstall_still_rejects_different_fabric_launch_profile() {
+    let (base, server, _) = fixture_server(false).await;
+    let game = temp_game_dir("different-profile-conflict");
+    let options = InstallOptions::for_current_platform(&game);
+    let request = LoaderRequest {
+        kind: LoaderKind::Fabric,
+        minecraft: "1.21.4".into(),
+        version: "0.16.10".into(),
+    };
+    let loader = service(&base);
+    loader.install(&request, &options, None).await.unwrap();
+    let profile_path =
+        game.join("versions/fabric-loader-0.16.10-1.21.4/fabric-loader-0.16.10-1.21.4.json");
+    let mut existing: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&profile_path).unwrap()).unwrap();
+    existing["mainClass"] = "changed.launcher.Main".into();
+    std::fs::write(&profile_path, serde_json::to_vec_pretty(&existing).unwrap()).unwrap();
+
+    let result = loader.install(&request, &options, None).await;
+    assert!(matches!(result, Err(LoaderError::Conflict(_))));
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&profile_path).unwrap()).unwrap();
+    assert_eq!(after["mainClass"], "changed.launcher.Main");
+
+    let _ = std::fs::remove_dir_all(game);
+    server.abort();
+}
+
+#[tokio::test]
 async fn rejects_incompatible_loader_before_creating_game_files() {
-    let (base, server) = fixture_server(false).await;
+    let (base, server, _) = fixture_server(false).await;
     let game = temp_game_dir("incompatible");
     let request = LoaderRequest {
         kind: LoaderKind::Fabric,
@@ -195,7 +282,7 @@ async fn rejects_incompatible_loader_before_creating_game_files() {
 
 #[tokio::test]
 async fn rejects_a_library_with_a_wrong_sha1() {
-    let (base, server) = fixture_server(true).await;
+    let (base, server, _) = fixture_server(true).await;
     let game = temp_game_dir("bad-sha1");
     let request = LoaderRequest {
         kind: LoaderKind::Fabric,

@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod config;
+pub mod content;
 pub mod directory;
 pub mod download;
 pub mod error;
@@ -14,6 +15,8 @@ pub mod launch;
 pub mod launch_plan;
 pub mod loaders;
 pub mod metadata;
+pub mod modpack_format;
+pub mod modpacks;
 pub mod natives;
 pub mod network;
 pub mod runtime;

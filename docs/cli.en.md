@@ -3,7 +3,7 @@
 ## Usage
 
 ```text
-ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|launch|logs>
+ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|pack|content|launch|logs>
 ```
 
 Global options can be placed before the subcommand. Commands run non-interactively and do not wait for standard input.
@@ -19,12 +19,16 @@ Global options can be placed before the subcommand. Commands run non-interactive
 | `instances` | Lists installed vanilla versions and their required Java major versions. |
 | `loaders fabric\|forge\|neoforge MINECRAFT [--limit N]` | Lists loader releases advertised for the requested Minecraft version. |
 | `instance list\|show ID\|install ID MINECRAFT LOADER LOADER_VERSION\|update ID MINECRAFT LOADER LOADER_VERSION\|rollback ID\|uninstall-loader ID` | Manages isolated modded instances and loader revisions. See [modded instances and loaders](loaders.en.md). |
+| `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | Validates, imports, updates, inspects, and exports Modrinth `.mrpack` packs. See the [Modrinth and instance content guide](modpacks.en.md). |
+| `content list ID KIND\|add ID KIND SOURCE [--name NAME]\|remove ID KIND NAME\|enable ID NAME\|disable ID NAME\|backup ID OUTPUT\|restore ID ARCHIVE` | Manages local mods, resource packs, shader packs, saves, and portable userdata backups. `KIND` is `mods`, `resourcepacks`, `shaderpacks`, or `saves`. |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | Prepares or launches a vanilla version or an isolated instance. Uses the selected Microsoft account by default, or explicitly uses an offline profile. Java may be detected or installed from Mojang's runtime manifests. |
 | `logs [--instance ID] [--run ID] [--lines 100]` | Prints the most recent run log, or the selected run's log, limited to the requested number of lines. `--instance` selects a managed instance's logs. |
 
 Launch selects Java matching the version metadata's required major version and host architecture. Offline player UUIDs use the Java offline-player name-based UUID algorithm. Before launch, the launcher verifies the client JAR, applicable library artifacts, and asset index against available size and SHA-1 metadata. It prepares the asset projection, downloads and verifies the client logging configuration when specified, and extracts platform native libraries to a temporary directory. That directory is removed after the game exits; dry-run also removes it after printing the plan.
 
-Managed instances use separate game directories and can be launched with `ccl launch --instance ID`; do not provide a positional version in this form. Loader compatibility is checked against upstream metadata before install, but does not guarantee compatibility with every mod set or prove every game launch combination. Fabric API and other mods are not bundled. Current Forge and NeoForge install paths support modern installer formats; unsupported legacy formats are rejected. Updating, rollback, and loader removal preserve instance mods, configuration, and saves. `instance show` reports the resolved installed profile ID in `loader_version`, which can differ from the loader release string given to the command. Details and examples are in [loaders.en.md](loaders.en.md).
+Managed instances use separate game directories and can be launched with `ccl launch --instance ID`; do not provide a positional version in this form. Loader compatibility is checked against upstream metadata before install, but does not guarantee compatibility with every mod set or prove every game launch combination. Fabric API and other mods are not bundled. Current Forge and NeoForge install paths support modern installer formats; unsupported legacy formats are rejected. Loader updates and loader removal preserve current instance userdata. `instance rollback` after a pack or content change restores the exact previous instance snapshot, including its userdata and saves; back up first if you need newer saves. `instance show` reports the resolved installed profile ID in `loader_version`, which can differ from the loader release string given to the command. Details and examples are in [loaders.en.md](loaders.en.md).
+
+Pack updates check ownership hashes before replacing or removing files. Modified or deleted pack-owned files and a new pack path that collides with unowned local data stop the update with a conflict (exit code `7`); `--replace-modified` explicitly allows those local changes to be replaced or removed. Back up local data before using it. `pack export --include-local-content` includes local binary files only when you explicitly authorize redistribution. Content backups are the portable way to save userdata, including saves; they are separate from Modrinth exports.
 
 Game stdout and stderr are captured in `<game-directory>/.ccl/logs/<run-id>.log`. A JSON result record is written alongside it as `<run-id>.json`; it includes the version, process ID, actual game `exit_code`, cancellation state, log path, and start and finish timestamps. The `logs` JSON response has a `log` field containing the text. Microsoft account credentials are kept in the operating system credential store, separately from account metadata. On Linux, a persistent Secret Service and D-Bus session must be available; there is no plaintext fallback. Logging out removes local credentials but does not revoke Microsoft consent. `--offline` or `--username NAME` explicitly selects an offline identity.
 
@@ -54,6 +58,11 @@ ccl loaders fabric 1.21.1 --limit 10
 ccl instance install my-world 1.21.1 fabric 0.20.1
 ccl launch --instance my-world --dry-run
 ccl instance rollback my-world
+ccl pack inspect ./pack.mrpack
+ccl pack import my-pack ./pack.mrpack --include-optional
+ccl content list my-pack mods
+ccl content backup my-pack ./my-pack-userdata.zip
+ccl pack export my-pack ./my-pack.mrpack --include-local-content
 ```
 
 `settings get` and `settings show` redact proxy username/password. The config file stores the configured proxy URL for network use; keep that file private. On Unix, files written by the launcher use owner-only permissions. Configuration updates are validated and written atomically, with a lock to coordinate simultaneous CLI processes. `settings reset --all` also recovers a malformed configuration by replacing it with defaults.
@@ -68,14 +77,16 @@ ccl instance rollback my-world
 | `4` | Filesystem error |
 | `5` | Network or installation download error |
 | `6` | Invalid or unknown version |
-| `7` | Conflict with existing vanilla version metadata or a managed-instance operation |
+| `7` | Conflict with vanilla metadata, a managed-instance lock, or modpack ownership/update data |
 | `8` | Launch preparation or game failure, including a nonzero game exit |
 | `9` | Java runtime discovery or validation error |
 | `10` | Account or authentication error |
 | `11` | Loader installation or metadata error |
 | `12` | Managed instance error |
+| `13` | Modrinth pack error |
+| `14` | Local content or userdata backup error |
 | `130` | Operation cancelled |
 
-Existing vanilla version metadata conflicts and managed-instance conflicts use exit code `7`. Loader failures, including loader-profile conflicts, and other instance failures use `11` and `12`. Cancellation from loader or instance work uses `130`.
+Vanilla metadata conflicts, managed-instance lock conflicts, Modrinth pack conflicts (including ownership/update conflicts), and content or pack operations blocked by an instance lock use exit code `7`. Loader failures, including loader-profile conflicts, and other instance failures use `11` and `12`. Other Modrinth pack and local content errors use `13` and `14`; cancellation uses `130`.
 
 For a game failure, the JSON result record preserves the game's actual `exit_code`; CLI code `8` reports that the launch did not succeed. With `--json`, command execution results are JSON; clap help and argument parsing errors are text and use the argument-error exit code.

@@ -51,6 +51,9 @@ impl InstanceError {
             self,
             Self::Cancelled
                 | Self::Install(crate::install::InstallError::Cancelled)
+                | Self::Install(crate::install::InstallError::Download(
+                    crate::download::DownloadError::Cancelled
+                ))
                 | Self::Loader(crate::loaders::LoaderError::Cancelled)
                 | Self::Loader(crate::loaders::LoaderError::Download(
                     crate::download::DownloadError::Cancelled,
@@ -99,6 +102,91 @@ pub struct InstanceService {
 }
 
 impl InstanceService {
+    /// Apply an offline content edit as a complete revision, under the launch lock.
+    /// Failed edits leave the active revision untouched; rollback restores this snapshot.
+    pub fn edit_content<T, E, F>(&self, id: &str, edit: F) -> Result<T, E>
+    where
+        E: From<InstanceError>,
+        F: FnOnce(&Path) -> Result<T, E>,
+    {
+        let path = self.instance_path(id)?;
+        if !path.is_dir() {
+            return Err(InstanceError::NotFound(id.into()).into());
+        }
+        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        recover_instance(&path)?;
+        let metadata = read_metadata(&path.join("instance.json"))?;
+        let game = path.join("game");
+        let stage = path.join(".stage");
+        reject_symlink(&stage)?;
+        if stage.exists() {
+            fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
+        }
+        clone_game_generation(&game, &stage)?;
+        let result = edit(&stage)?;
+        mark_content_revision(&stage)?;
+        commit_generation(&path, &stage, &game, &path.join("previous"), &metadata)?;
+        Ok(result)
+    }
+
+    /// Prepare a modpack revision without exposing partial installation to readers.
+    pub(crate) async fn transact_pack<T, E, F, Fut>(
+        &self,
+        id: &str,
+        fingerprint: &str,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        E: From<InstanceError>,
+        F: FnOnce(PathBuf, Option<InstanceMetadata>) -> Fut,
+        Fut: std::future::Future<Output = Result<(InstanceMetadata, T), E>>,
+    {
+        let path = self.instance_path(id)?;
+        fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
+        let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
+        recover_instance(&path)?;
+        let metadata_path = path.join("instance.json");
+        reject_symlink(&metadata_path)?;
+        let current = if metadata_path.is_file() {
+            Some(read_metadata(&metadata_path)?)
+        } else {
+            None
+        };
+        let game = path.join("game");
+        let stage = path.join(".stage");
+        reject_symlink(&stage)?;
+        let marker = stage.join(".ccl/pack-request.json");
+        reject_symlink(&marker)?;
+        let resume = fs::read_to_string(&marker).ok().as_deref() == Some(fingerprint);
+        if stage.exists() && !resume {
+            fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
+        }
+        if !resume {
+            fs::create_dir_all(&stage).map_err(|e| io(&stage, e))?;
+            if game.exists() {
+                clone_game_generation(&game, &stage)?;
+            }
+        } else if game.exists() {
+            // Refresh mutable files after an interrupted attempt; downloaded resources remain.
+            replace_user_data(&game, &stage)?;
+        }
+        let marker_directory = stage.join(".ccl");
+        reject_symlink(&marker_directory)?;
+        fs::create_dir_all(&marker_directory).map_err(|e| io(&marker_directory, e))?;
+        atomic_write(&marker, fingerprint.as_bytes())?;
+        let (mut next, result) = operation(stage.clone(), current).await?;
+        next.id = id.into();
+        next.game_directory = game.clone();
+        validate_segment(&next.minecraft)?;
+        if let Some(version) = &next.loader_version {
+            validate_segment(version)?;
+        }
+        let _ = fs::remove_file(&marker);
+        mark_content_revision(&stage)?;
+        commit_generation(&path, &stage, &game, &path.join("previous"), &next)?;
+        Ok(result)
+    }
+
     pub fn new(root: PathBuf, config: DownloadConfig) -> InstanceResult<Self> {
         let root = absolute_path(root)?;
         Ok(Self { root, config })
@@ -237,6 +325,7 @@ impl InstanceService {
             loader_version: Some(loader_version),
             game_directory: game.clone(),
         };
+        clear_content_revision(&stage)?;
         commit_generation(&path, &stage, &game, &previous, &metadata)?;
         let _ = fs::remove_file(game.join(".ccl-instance-request.json"));
         Ok(metadata)
@@ -277,7 +366,14 @@ impl InstanceService {
                 source,
             })?,
         )?;
-        copy_latest_user_data(&game, &previous)?;
+        if game.join(".ccl/content-revision").is_file() {
+            // Content edits and pack updates roll back the complete user-data snapshot.
+            // Mark the reverse edge too, so a second rollback can redo the change.
+            mark_content_revision(&previous)?;
+        } else {
+            copy_latest_user_data(&game, &previous)?;
+            clear_content_revision(&previous)?;
+        }
         if let Err(error) = fs::rename(&game, &current_swap) {
             let _ = fs::remove_file(&journal_path);
             return Err(io(&game, error));
@@ -363,6 +459,7 @@ impl InstanceService {
             loader_version: None,
             game_directory: game.clone(),
         };
+        clear_content_revision(&stage)?;
         commit_generation(&path, &stage, &game, &previous, &meta)?;
         Ok(meta)
     }
@@ -379,6 +476,23 @@ impl InstanceService {
         reject_symlink(&instances)?;
         reject_symlink(&instance)?;
         Ok(instance)
+    }
+}
+
+fn mark_content_revision(game: &Path) -> InstanceResult<()> {
+    let directory = game.join(".ccl");
+    reject_symlink(&directory)?;
+    fs::create_dir_all(&directory).map_err(|e| io(&directory, e))?;
+    atomic_write(&game.join(".ccl/content-revision"), b"1")
+}
+
+fn clear_content_revision(game: &Path) -> InstanceResult<()> {
+    let marker = game.join(".ccl/content-revision");
+    reject_symlink(&marker)?;
+    match fs::remove_file(&marker) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io(marker, e)),
     }
 }
 

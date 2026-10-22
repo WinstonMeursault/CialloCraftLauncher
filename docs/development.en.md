@@ -13,11 +13,11 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-The CLI provides `doctor`, `init`, `settings`, `account`, `versions`, `install`, `instances`, `launch`, and `logs`. Run `cargo run -p ccl-cli -- --help` for the current arguments. Launch supports Microsoft or offline identity, compatible Java runtime discovery and managed installation, dry-run planning, process log capture, and cancellation. The Microsoft application is not yet verified or approved for public distribution; see the [account registration guide](accounts.en.md).
+The CLI provides `doctor`, `init`, `settings`, `account`, `versions`, `install`, `instances`, `loaders`, `instance`, `pack`, `content`, `launch`, and `logs`. Run `cargo run -p ccl-cli -- --help` for the current arguments. See the [Modrinth pack and content guide](modpacks.en.md) for pack import/export, local content, and userdata backup commands. Launch supports Microsoft or offline identity, compatible Java runtime discovery and managed installation, dry-run planning, process log capture, and cancellation. The Microsoft application is not yet verified or approved for public distribution; see the [account registration guide](accounts.en.md).
 
 ## Code boundaries
 
-For loader discovery and isolated instance workflows, see [modded instances and loaders](loaders.en.md). `loaders`, `instance`, and `launch --instance` reuse the same core services as a future GUI. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout.
+For loader discovery and isolated instance workflows, see [modded instances and loaders](loaders.en.md). `loaders`, `instance`, and `launch --instance` reuse the same core services as a future GUI. `modpack_format` owns `.mrpack` parsing, validation, and writing; `modpacks` coordinates import/export and pack receipts; `content` manages local files and userdata backups. Pack imports and content edits use the same staged instance transaction and cross-process lock as instance changes. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout.
 
 - Put reusable domain logic in `crates/ccl-core`.
 - `crates/ccl-core` must not depend on terminal or graphical-interface libraries.
@@ -35,4 +35,4 @@ The version-list and file-source preferences are independent and accept `auto`, 
 
 ## Current feature scope
 
-The core provides configuration, directory selection, HTTP downloads, version lookup and installation, managed Java runtime installation under `.ccl/runtimes`, Microsoft account authentication, launch planning, native extraction, and child-process output capture. Account approval and live end-to-end validation remain outstanding; don't describe account login as ready for public use until those gates are complete. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.
+The core provides configuration, directory selection, HTTP downloads, version lookup and installation, managed Java runtime installation under `.ccl/runtimes`, Microsoft account authentication, launch planning, native extraction, child-process output capture, Modrinth pack handling, local content management, and userdata backups. Pack receipts record hashes for pack-owned paths; updates use those hashes to detect local edits, deletions, and collisions before replacing data. Userdata backups are separate from Modrinth exports, which omit saves and private server lists and require explicit redistribution consent for local binaries. Account approval and live end-to-end validation remain outstanding; don't describe account login as ready for public use until those gates are complete. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.

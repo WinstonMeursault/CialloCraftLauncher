@@ -41,6 +41,12 @@ pub enum DownloadError {
         expected: String,
         actual: String,
     },
+    #[error("SHA-512 mismatch for {path}: expected {expected}, got {actual}")]
+    Sha512Mismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
     #[error("size mismatch for {path}: expected {expected}, got {actual}")]
     SizeMismatch {
         path: PathBuf,
@@ -57,7 +63,10 @@ pub struct DownloadRequest {
     pub urls: Vec<String>,
     pub destination: PathBuf,
     pub expected_sha1: Option<String>,
+    pub expected_sha512: Option<String>,
     pub expected_size: Option<u64>,
+    /// When present, require HTTPS and permit only these hosts, including redirects.
+    pub allowed_hosts: Option<Vec<String>>,
     /// Optional event and cancellation context shared with the caller.
     pub task_context: Option<TaskContext>,
 }
@@ -68,13 +77,25 @@ impl DownloadRequest {
             urls,
             destination: destination.into(),
             expected_sha1: None,
+            expected_sha512: None,
             expected_size: None,
+            allowed_hosts: None,
             task_context: None,
         }
     }
 
     pub fn with_sha1(mut self, sha1: impl Into<String>) -> Self {
         self.expected_sha1 = Some(sha1.into().to_ascii_lowercase());
+        self
+    }
+
+    pub fn with_sha512(mut self, sha512: impl Into<String>) -> Self {
+        self.expected_sha512 = Some(sha512.into().to_ascii_lowercase());
+        self
+    }
+
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.allowed_hosts = Some(hosts.into_iter().map(|h| h.to_ascii_lowercase()).collect());
         self
     }
 
@@ -114,6 +135,7 @@ impl DownloadManager {
             ));
         }
         let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(20))
             .read_timeout(Duration::from_secs(30));
@@ -192,9 +214,10 @@ impl DownloadManager {
                                     ..
                                 }
                                 | DownloadError::Sha1Mismatch { .. }
+                                | DownloadError::Sha512Mismatch { .. }
                                 | DownloadError::SizeMismatch { .. }
                         );
-                        failures.push(format!("{url}: {error}"));
+                        failures.push(format!("{}: {error}", safe_url_text(url)));
                         if !retryable || attempt == self.retries_per_candidate {
                             break;
                         }
@@ -225,22 +248,39 @@ impl DownloadManager {
                 })
                 .map_err(|_| DownloadError::Cancelled)?;
         }
-        let send = self.client.get(url).send();
-        tokio::pin!(send);
+        let mut current_url = reqwest::Url::parse(url)
+            .map_err(|_| DownloadError::InvalidRequest("invalid URL candidate".into()))?;
+        check_url_policy(request, &current_url)?;
+        let mut redirects = 0;
         let mut response = loop {
-            tokio::select! {
-                result = &mut send => {
-                    break result.map_err(|e| DownloadError::Request {
-                        url: url.into(),
-                        message: e.to_string(),
-                    })?;
+            let send = self.client.get(current_url.clone()).send();
+            tokio::pin!(send);
+            let response = loop {
+                tokio::select! {
+                    result = &mut send => break result.map_err(|e| DownloadError::Request {
+                        url: safe_url(&current_url), message: e.to_string(),
+                    })?,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => check_cancelled(request)?,
                 }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => check_cancelled(request)?,
+            };
+            if response.status().is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| DownloadError::Request {
+                        url: safe_url(&current_url),
+                        message: "redirect missing a valid Location".into(),
+                    })?;
+                current_url = next_redirect(request, &current_url, location, redirects)?;
+                redirects += 1;
+                continue;
             }
+            break response;
         };
         if !response.status().is_success() {
             return Err(DownloadError::HttpStatus {
-                url: url.into(),
+                url: safe_url(&current_url),
                 status: response.status().as_u16(),
             });
         }
@@ -252,11 +292,12 @@ impl DownloadManager {
             .open(&temp.path)
             .map_err(|e| io_error(&temp.path, e))?;
         let mut hasher = Sha1::new();
+        let mut sha512 = sha2::Sha512::new();
         let mut completed = 0u64;
         loop {
             let chunk = tokio::select! {
                 result = response.chunk() => result.map_err(|e| DownloadError::Request {
-                    url: url.into(),
+                    url: safe_url(&current_url),
                     message: e.to_string(),
                 })?,
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
@@ -266,9 +307,20 @@ impl DownloadManager {
             };
             let Some(chunk) = chunk else { break };
             check_cancelled(request)?;
+            if request
+                .expected_size
+                .is_some_and(|size| completed.saturating_add(chunk.len() as u64) > size)
+            {
+                return Err(DownloadError::SizeMismatch {
+                    path: request.destination.clone(),
+                    expected: request.expected_size.unwrap(),
+                    actual: completed + chunk.len() as u64,
+                });
+            }
             file.write_all(&chunk)
                 .map_err(|e| io_error(&temp.path, e))?;
             hasher.update(&chunk);
+            sha512.update(&chunk);
             completed += chunk.len() as u64;
             if let Some(context) = &request.task_context {
                 context
@@ -295,6 +347,16 @@ impl DownloadManager {
             let actual = format!("{:x}", hasher.finalize());
             if !expected.eq_ignore_ascii_case(&actual) {
                 return Err(DownloadError::Sha1Mismatch {
+                    path: request.destination.clone(),
+                    expected: expected.clone(),
+                    actual,
+                });
+            }
+        }
+        if let Some(expected) = &request.expected_sha512 {
+            let actual = format!("{:x}", sha512.finalize());
+            if !expected.eq_ignore_ascii_case(&actual) {
+                return Err(DownloadError::Sha512Mismatch {
                     path: request.destination.clone(),
                     expected: expected.clone(),
                     actual,
@@ -352,7 +414,65 @@ fn verify_bytes(request: &DownloadRequest, bytes: &[u8]) -> Result<(), DownloadE
             });
         }
     }
+    if let Some(expected) = &request.expected_sha512 {
+        let actual = format!("{:x}", sha2::Sha512::digest(bytes));
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(DownloadError::Sha512Mismatch {
+                path: request.destination.clone(),
+                expected: expected.clone(),
+                actual,
+            });
+        }
+    }
     Ok(())
+}
+
+fn safe_url(url: &reqwest::Url) -> String {
+    let mut safe = url.clone();
+    let _ = safe.set_username("");
+    let _ = safe.set_password(None);
+    safe.set_query(None);
+    safe.set_fragment(None);
+    safe.to_string()
+}
+
+fn safe_url_text(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .map(|url| safe_url(&url))
+        .unwrap_or_else(|_| "<invalid URL>".into())
+}
+
+fn check_url_policy(request: &DownloadRequest, url: &reqwest::Url) -> Result<(), DownloadError> {
+    if let Some(hosts) = &request.allowed_hosts {
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if url.scheme() != "https" || !hosts.iter().any(|allowed| allowed == &host) {
+            return Err(DownloadError::InvalidRequest(format!(
+                "URL source is not allowed: {}",
+                safe_url(url)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn next_redirect(
+    request: &DownloadRequest,
+    current: &reqwest::Url,
+    location: &str,
+    redirects: usize,
+) -> Result<reqwest::Url, DownloadError> {
+    if redirects >= 10 {
+        return Err(DownloadError::Request {
+            url: safe_url(current),
+            message: "too many redirects".into(),
+        });
+    }
+    let target = current.join(location).map_err(|e| DownloadError::Request {
+        url: safe_url(current),
+        message: e.to_string(),
+    })?;
+    check_url_policy(request, &target)?;
+    Ok(target)
 }
 
 fn io_error(path: &Path, source: std::io::Error) -> DownloadError {
@@ -440,6 +560,84 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verifies_sha512_for_cached_bytes_and_url_policy() {
+        let request = DownloadRequest::new(vec![], test_path())
+            .with_sha512("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+            .with_allowed_hosts(vec!["cdn.example".into()]);
+        assert!(verify_bytes(&request, b"abc").is_err());
+        let mut request = request;
+        request.expected_sha512 = Some(format!("{:x}", sha2::Sha512::digest(b"abc")));
+        assert!(verify_bytes(&request, b"abc").is_ok());
+        assert!(
+            check_url_policy(
+                &request,
+                &reqwest::Url::parse("http://cdn.example/file").unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            check_url_policy(
+                &request,
+                &reqwest::Url::parse("https://evil.example/file").unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            check_url_policy(
+                &request,
+                &reqwest::Url::parse("https://cdn.example/file").unwrap()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validates_every_https_redirect_and_limits_chain_to_ten() {
+        let request = DownloadRequest::new(vec![], test_path())
+            .with_allowed_hosts(vec!["cdn.example".into()]);
+        let mut current = reqwest::Url::parse("https://cdn.example/0").unwrap();
+        for redirects in 0..10 {
+            current = next_redirect(
+                &request,
+                &current,
+                &format!("/{}/", redirects + 1),
+                redirects,
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            next_redirect(&request, &current, "/11", 10),
+            Err(DownloadError::Request { .. })
+        ));
+        assert!(matches!(
+            next_redirect(&request, &current, "http://cdn.example/file", 0),
+            Err(DownloadError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            next_redirect(&request, &current, "https://attacker.example/file", 0),
+            Err(DownloadError::InvalidRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn sha512_mismatch_in_cache_preserves_file_if_replacement_fails() {
+        let path = test_path();
+        fs::write(&path, b"cached but wrong").unwrap();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
+            .unwrap()
+            .with_retry_policy(0, Duration::ZERO);
+        let result = manager
+            .download(
+                DownloadRequest::new(vec!["http://127.0.0.1:1/unreachable".into()], &path)
+                    .with_sha512(format!("{:x}", sha2::Sha512::digest(b"expected"))),
+            )
+            .await;
+        assert!(matches!(result, Err(DownloadError::CandidatesExhausted(_))));
+        assert_eq!(fs::read(&path).unwrap(), b"cached but wrong");
+        fs::remove_file(path).unwrap();
+    }
+
     #[tokio::test]
     async fn reuses_a_valid_existing_file_without_network() {
         let path = test_path();
@@ -469,6 +667,8 @@ mod tests {
                 .unwrap();
         });
         let destination = test_path().join("artifact.jar");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"keep").unwrap();
         let manager = DownloadManager::new(&crate::config::DownloadConfig::default())
             .unwrap()
             .with_retry_policy(0, Duration::ZERO);
@@ -480,9 +680,10 @@ mod tests {
             .await;
         server.join().unwrap();
         assert!(matches!(result, Err(DownloadError::CandidatesExhausted(_))));
-        assert!(!destination.exists());
+        assert_eq!(fs::read(&destination).unwrap(), b"keep");
         let parent = destination.parent().unwrap();
-        assert_eq!(fs::read_dir(parent).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(parent).unwrap().count(), 1);
+        fs::remove_file(&destination).unwrap();
         fs::remove_dir(parent).unwrap();
     }
 
