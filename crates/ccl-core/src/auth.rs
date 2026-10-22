@@ -94,6 +94,14 @@ impl AuthenticatedAccount {
         store.upsert(self.metadata, self.secrets)?;
         Ok(())
     }
+    pub fn persist_cancellable<S: SecretStore>(
+        self,
+        store: &crate::accounts::AccountStore<S>,
+        cancel: &CancellationToken,
+    ) -> Result<(), AuthError> {
+        store.upsert_cancellable(self.metadata, self.secrets, cancel)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -272,8 +280,9 @@ impl MicrosoftAuth {
         id: &str,
         cancel: &CancellationToken,
     ) -> Result<AccountMetadata, AuthError> {
-        let _refresh_lock = acquire_refresh_lock(store, id, cancel).await?;
-        self.refresh_account_locked(store, id, cancel).await
+        let refresh_lock = acquire_refresh_lock(store, id, cancel).await?;
+        self.refresh_account_locked(store, id, cancel, &refresh_lock)
+            .await
     }
 
     /// Rechecks token expiry after acquiring the account lock so concurrent launchers reuse
@@ -285,7 +294,7 @@ impl MicrosoftAuth {
         cancel: &CancellationToken,
         skew: Duration,
     ) -> Result<AccountMetadata, AuthError> {
-        let _refresh_lock = acquire_refresh_lock(store, id, cancel).await?;
+        let refresh_lock = acquire_refresh_lock(store, id, cancel).await?;
         let secrets = store.credentials(id)?.ok_or(AuthError::InvalidResponse)?;
         if secrets.expires_at_unix() > now().saturating_add(skew.as_secs()) {
             return store
@@ -294,7 +303,8 @@ impl MicrosoftAuth {
                 .find(|a| a.id == id)
                 .ok_or(AuthError::InvalidResponse);
         }
-        self.refresh_account_locked(store, id, cancel).await
+        self.refresh_account_locked(store, id, cancel, &refresh_lock)
+            .await
     }
 
     /// Resolve a saved account into an in-memory launch identity, refreshing it if
@@ -324,6 +334,7 @@ impl MicrosoftAuth {
         store: &crate::accounts::AccountStore<S>,
         id: &str,
         cancel: &CancellationToken,
+        refresh_lock: &crate::accounts::AccountRefreshLock,
     ) -> Result<AccountMetadata, AuthError> {
         if cancel.is_cancelled() {
             return Err(AuthError::Cancelled);
@@ -364,7 +375,7 @@ impl MicrosoftAuth {
             old.expires_at_unix(),
         );
         oauth.refresh_token = Some(refresh_token);
-        store.upsert(metadata.clone(), rotated)?;
+        store.upsert_with_refresh_lock(metadata.clone(), rotated, refresh_lock)?;
         if cancel.is_cancelled() {
             return Err(AuthError::Cancelled);
         }
@@ -377,7 +388,7 @@ impl MicrosoftAuth {
             ));
         }
         metadata = renewed.metadata;
-        store.upsert(metadata.clone(), renewed.secrets)?;
+        store.upsert_with_refresh_lock(metadata.clone(), renewed.secrets, refresh_lock)?;
         Ok(metadata)
     }
     async fn minecraft_exchange(

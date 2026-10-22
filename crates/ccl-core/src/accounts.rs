@@ -89,10 +89,14 @@ pub struct AccountStore<S: SecretStore> {
 }
 
 /// Per-account advisory lock held during credential refresh.
-pub struct AccountRefreshLock(std::fs::File);
+pub struct AccountRefreshLock {
+    file: std::fs::File,
+    account_index: PathBuf,
+    account_id: String,
+}
 impl AccountRefreshLock {
     pub fn unlock(self) -> Result<(), AccountError> {
-        fs2::FileExt::unlock(&self.0)?;
+        fs2::FileExt::unlock(&self.file)?;
         Ok(())
     }
 }
@@ -153,7 +157,28 @@ impl<S: SecretStore> AccountStore<S> {
         metadata: AccountMetadata,
         secrets: AccountSecrets,
     ) -> Result<(), AccountError> {
+        let refresh_lock = self.lock_refresh(&metadata.id, None)?;
+        self.upsert_with_refresh_lock(metadata, secrets, &refresh_lock)
+    }
+    pub fn upsert_cancellable(
+        &self,
+        metadata: AccountMetadata,
+        secrets: AccountSecrets,
+        cancel: &crate::task::CancellationToken,
+    ) -> Result<(), AccountError> {
+        let refresh_lock = self.lock_refresh(&metadata.id, Some(cancel))?;
+        self.upsert_with_refresh_lock(metadata, secrets, &refresh_lock)
+    }
+    pub(crate) fn upsert_with_refresh_lock(
+        &self,
+        metadata: AccountMetadata,
+        secrets: AccountSecrets,
+        refresh_lock: &AccountRefreshLock,
+    ) -> Result<(), AccountError> {
         validate(&metadata)?;
+        if refresh_lock.account_index != self.path || refresh_lock.account_id != metadata.id {
+            return Err(AccountError::Invalid);
+        }
         let _g = self.lock.lock().unwrap();
         let _file_lock = self.file_lock()?;
         let mut i = self.read()?;
@@ -217,7 +242,11 @@ impl<S: SecretStore> AccountStore<S> {
             .write(true)
             .open(self.path.with_file_name(name))?;
         match fs2::FileExt::try_lock_exclusive(&file) {
-            Ok(()) => Ok(Some(AccountRefreshLock(file))),
+            Ok(()) => Ok(Some(AccountRefreshLock {
+                file,
+                account_index: self.path.clone(),
+                account_id: account_id.to_owned(),
+            })),
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
@@ -688,6 +717,94 @@ mod tests {
         worker.join().unwrap();
         assert!(store.list().unwrap().is_empty());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn login_upsert_waits_for_refresh_and_then_replaces_credentials_without_deadlock() {
+        let path = std::env::temp_dir().join(format!(
+            "ccl-acct-login-refresh-{}",
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let secrets = Arc::new(MemorySecretStore::default());
+        let store = AccountStore::new(&path, secrets.clone());
+        store
+            .upsert(
+                meta(),
+                AccountSecrets::new("old-access".into(), "old-refresh".into(), 1),
+            )
+            .unwrap();
+        let held = store.try_lock_refresh("one").unwrap().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        let worker_secrets = secrets.clone();
+        let worker = std::thread::spawn(move || {
+            let worker_store = AccountStore::new(worker_path, worker_secrets);
+            let mut updated = meta();
+            updated.username = "NewLogin".into();
+            worker_store
+                .upsert(
+                    updated,
+                    AccountSecrets::new("fresh-access".into(), "fresh-refresh".into(), 2),
+                )
+                .unwrap();
+            tx.send(()).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(100))
+                .is_err()
+        );
+        drop(held);
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            store.credentials("one").unwrap().unwrap().access_token(),
+            "fresh-access"
+        );
+        assert_eq!(store.list().unwrap()[0].username, "NewLogin");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cancellable_login_upsert_stops_while_waiting_for_refresh_lock() {
+        let path = std::env::temp_dir().join(format!(
+            "ccl-acct-login-cancel-{}",
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let secrets = Arc::new(MemorySecretStore::default());
+        let store = AccountStore::new(&path, secrets.clone());
+        store
+            .upsert(
+                meta(),
+                AccountSecrets::new("old-access".into(), "old-refresh".into(), 1),
+            )
+            .unwrap();
+        let held = store.try_lock_refresh("one").unwrap().unwrap();
+        let cancellation = crate::task::CancellationToken::default();
+        let worker_cancel = cancellation.clone();
+        let worker_path = path.clone();
+        let worker_secrets = secrets.clone();
+        let worker = std::thread::spawn(move || {
+            let worker_store = AccountStore::new(worker_path, worker_secrets);
+            let mut updated = meta();
+            updated.username = "CancelledLogin".into();
+            worker_store.upsert_cancellable(
+                updated,
+                AccountSecrets::new("new-access".into(), "new-refresh".into(), 2),
+                &worker_cancel,
+            )
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cancellation.cancel();
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(AccountError::Cancelled)
+        ));
+        drop(held);
+        assert_eq!(
+            store.credentials("one").unwrap().unwrap().access_token(),
+            "old-access"
+        );
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

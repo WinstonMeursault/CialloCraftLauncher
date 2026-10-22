@@ -12,7 +12,7 @@ The launcher uses Microsoft's device authorization flow. It is a public desktop 
 4. Register the application and copy its **Application (client) ID**. This GUID is public configuration, not a password.
 5. Open **Authentication**. Under **Advanced settings**, set **Allow public client flows** to **Yes**, then save. Device-code clients do not use a client secret or a browser redirect URI.
 6. Do not create a client secret, and do not put access or refresh tokens in launcher settings.
-7. Complete any application review, publisher verification, service access approval, and policy review Microsoft requires before public distribution. Registration by itself does not establish approval to use Xbox or Minecraft services.
+7. Confirm the current Xbox and Minecraft service access requirements for your application. Registration alone does not prove that the complete sign-in flow will work. If a service rejects the application, resolve access using the returned error and that service’s official support process.
 
 Microsoft's [app registration quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app) describes supported account types. The desktop guide explains when a desktop client is a public client and how to enable public-client flows. This project has not yet validated whether its application registration and API access are approved for public users.
 
@@ -46,7 +46,7 @@ With a selected account, `launch` uses it by default and refreshes credentials w
 
 ## Credential storage
 
-Access and refresh tokens are stored only through the operating system credential store. Account names and IDs are kept separately in `accounts.json`; that metadata file contains no tokens. On macOS and Windows the operating system credential vault is used. On Linux, a Secret Service implementation reachable through the active D-Bus session must be installed and unlocked. A headless system without a persistent Secret Service cannot use Microsoft login. There is no plaintext credential fallback.
+Access and refresh tokens are stored only through the operating system credential store. Account names and IDs are kept separately in `accounts.json`; that metadata file contains no tokens. On macOS and Windows the operating system credential vault is used. On Linux, a Secret Service implementation reachable through the active D-Bus session must be installed and unlocked. A headless system without a persistent Secret Service cannot use Microsoft login. There is no plaintext credential fallback. A graphical desktop is not required if you provide and unlock a persistent Secret Service in your session.
 
 If secure storage is unavailable, login or refresh fails with an error. Start a desktop session with an unlocked keyring, or use offline launch until secure storage is available. Do not work around this by copying tokens into a file or shell command.
 

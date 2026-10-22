@@ -281,7 +281,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     }
                     let authenticated = auth.complete_device_login(device, &token).await?;
                     let metadata = authenticated.metadata.clone();
-                    authenticated.persist(&store)?;
+                    authenticated.persist_cancellable(&store, &token)?;
                     store.select(&metadata.id)?;
                     Ok(json!({ "ok": true, "account": metadata, "selected": metadata.id }))
                 }
