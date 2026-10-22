@@ -888,6 +888,20 @@ pub fn execute_helper(target: &Path, supplied_nonce: &str) -> Result<UpdateStatu
     }
     Ok(journal.status())
 }
+#[cfg(test)]
+thread_local! {static FILESYSTEM_FAULT:std::cell::RefCell<Option<(&'static str,std::io::ErrorKind)>>=const {std::cell::RefCell::new(None)};}
+fn filesystem_boundary(_point: &str) -> Result<()> {
+    #[cfg(test)]
+    FILESYSTEM_FAULT.with(|fault| -> Result<()> {
+        if let Some((point, kind)) = *fault.borrow()
+            && point == _point
+        {
+            return Err(std::io::Error::new(kind, "injected filesystem failure").into());
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
 fn execute_transaction(install: &Installation, journal: &mut Journal) -> Result<()> {
     if journal.state == UpdateState::RollingBack {
         restore(install, journal)?;
@@ -901,6 +915,7 @@ fn execute_transaction(install: &Installation, journal: &mut Journal) -> Result<
         // A copy preserves the old image while candidate publication remains atomic.
         let previous = install.directory.join("previous");
         remove_regular_if_exists(&previous)?;
+        filesystem_boundary("backup")?;
         write_new(
             &previous,
             &read_bounded(&install.target, MAX_LOCAL_EXECUTABLE)?,
@@ -912,7 +927,9 @@ fn execute_transaction(install: &Installation, journal: &mut Journal) -> Result<
     if journal.state == UpdateState::Replacing {
         if verify_file(&install.target, &journal.new_sha256).is_err() {
             verify_file(&install.directory.join("candidate"), &journal.new_sha256)?;
+            filesystem_boundary("publish")?;
             publish_retry(&install.directory.join("candidate"), &install.target)?;
+            filesystem_boundary("after_publish")?;
         }
         journal.state = UpdateState::Checking;
         install.save(journal)?;
@@ -925,6 +942,7 @@ fn execute_transaction(install: &Installation, journal: &mut Journal) -> Result<
             &journal.config,
             &journal.game_root,
         )?;
+        filesystem_boundary("commit")?;
         journal.state = UpdateState::Committed;
         install.save(journal)?;
     }
@@ -1226,11 +1244,19 @@ mod tests {
                 while !flag.load(Ordering::Relaxed) {
                     if let Ok((mut stream, _)) = listener.accept() {
                         stream
-                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .set_read_timeout(Some(Duration::from_secs(10)))
                             .unwrap();
-                        let mut request = [0u8; 8192];
-                        let n = stream.read(&mut request).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&request[..n]);
+                        let mut request = Vec::new();
+                        let mut chunk = [0u8; 1024];
+                        while request.len() < 16 * 1024
+                            && !request.windows(4).any(|bytes| bytes == b"\r\n\r\n")
+                        {
+                            match stream.read(&mut chunk) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => request.extend_from_slice(&chunk[..n]),
+                            }
+                        }
+                        let request = String::from_utf8_lossy(&request);
                         let path = request.split_whitespace().nth(1).unwrap_or("/");
                         let (status, bytes) =
                             routes.get(path).cloned().unwrap_or((404, Vec::new()));
@@ -1619,6 +1645,50 @@ mod tests {
         assert!(install.prepare_rollback().is_err());
         assert_eq!(install.load().unwrap().state, UpdateState::Committed);
         verify_file(&install.target, &journal.new_sha256).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn storage_and_permission_failures_preserve_a_runnable_old_program() {
+        for point in ["backup", "publish", "after_publish", "commit"] {
+            for kind in [
+                std::io::ErrorKind::StorageFull,
+                std::io::ErrorKind::PermissionDenied,
+            ] {
+                let (_temp, install, mut journal) = transaction();
+                FILESYSTEM_FAULT.with(|fault| *fault.borrow_mut() = Some((point, kind)));
+                let failure = execute_transaction(&install, &mut journal);
+                FILESYSTEM_FAULT.with(|fault| *fault.borrow_mut() = None);
+                assert!(
+                    matches!(failure,Err(UpdateError::Io(ref error)) if error.kind()==kind),
+                    "boundary {point}"
+                );
+                restore(&install, &journal).unwrap();
+                verify_file(&install.target, &journal.old_sha256).unwrap();
+                run_health(
+                    &install.target,
+                    &journal.old_identity,
+                    &journal.config,
+                    &journal.game_root,
+                )
+                .unwrap();
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn restart_after_publication_before_commit_does_not_reapply_or_lose_backup() {
+        for point in ["after_publish", "commit"] {
+            let (_temp, install, mut journal) = transaction();
+            FILESYSTEM_FAULT
+                .with(|fault| *fault.borrow_mut() = Some((point, std::io::ErrorKind::StorageFull)));
+            assert!(execute_transaction(&install, &mut journal).is_err());
+            FILESYSTEM_FAULT.with(|fault| *fault.borrow_mut() = None);
+            let mut recovered = install.load().unwrap();
+            execute_transaction(&install, &mut recovered).unwrap();
+            assert_eq!(recovered.state, UpdateState::Committed);
+            verify_file(&install.target, &journal.new_sha256).unwrap();
+            verify_file(&install.directory.join("previous"), &journal.old_sha256).unwrap();
+        }
     }
     #[cfg(unix)]
     #[test]

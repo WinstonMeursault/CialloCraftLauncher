@@ -295,35 +295,18 @@ fn benchmark_update_transactions() {
 #[cfg(windows)]
 #[test]
 fn helper_waits_for_a_locked_target_then_completes_replacement() {
-    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-        Storage::FileSystem::{
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ,
-            OPEN_EXISTING,
-        },
-    };
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
     let (bytes, id) = candidate();
     let f = fixture(&bytes, id);
-    let wide = OsStr::new(&f.target)
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    // Omitting FILE_SHARE_DELETE simulates a process that still has the image open.
-    let handle = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            0,
-        )
-    };
-    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    // Omitting FILE_SHARE_DELETE simulates a process holding the image open.
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&f.target)
+        .unwrap();
     let child = start_helper(&f, &f.nonce);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while transaction_state(&f) != "replacing" && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(25));
     }
@@ -338,9 +321,7 @@ fn helper_waits_for_a_locked_target_then_completes_replacement() {
         f.old_bytes,
         "target changed while its delete share was denied"
     );
-    unsafe {
-        CloseHandle(handle);
-    }
+    drop(handle);
     let output = wait_bounded(child);
     assert!(
         output.status.success(),

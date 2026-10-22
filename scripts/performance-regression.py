@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import statistics
 import subprocess
@@ -23,7 +24,7 @@ FIXTURE_MANIFEST = {
     "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.14"},
 }
 UPDATE_TEST = [
-    "cargo", "test", "--locked", "-p", "ccl-cli", "--test", "update_process",
+    "cargo", "test", "--release", "--locked", "-p", "ccl-cli", "--test", "update_process",
     "benchmark_update_transactions", "--", "--ignored", "--nocapture",
 ]
 
@@ -215,6 +216,7 @@ def compatible_observations(current, candidate):
         and candidate.get("runner_os") == current.get("runner_os")
         and candidate.get("runner_arch") == current.get("runner_arch")
         and candidate.get("toolchain") == current.get("toolchain")
+        and candidate.get("build_profile") == current.get("build_profile")
         and candidate.get("fixtures", {}).get("install_sha256") == current.get("fixtures", {}).get("install_sha256")
         and candidate.get("fixtures", {}).get("metadata_parser_sha256") == current.get("fixtures", {}).get("metadata_parser_sha256")
         and candidate.get("fixtures", {}).get("update_candidate_bytes") == current.get("fixtures", {}).get("update_candidate_bytes")
@@ -262,8 +264,8 @@ def main():
     report = {
         "schema_version": 1,
         "benchmark_suite": "p7_deterministic_local_performance",
-        "runner_os": os.environ.get("RUNNER_OS", os.name),
-        "runner_arch": os.environ.get("RUNNER_ARCH", "unknown"),
+        "runner_os": os.environ.get("RUNNER_OS", platform.system()),
+        "runner_arch": os.environ.get("RUNNER_ARCH", platform.machine()),
         "toolchain": toolchain_version(),
         "commit": os.environ.get("GITHUB_SHA", "local"),
         "install": install,
@@ -281,6 +283,7 @@ def main():
         "runner_os": report["runner_os"],
         "runner_arch": report["runner_arch"],
         "toolchain": report["toolchain"],
+        "build_profile": "release",
         "fixtures": {
             "install_sha256": install["fixture_sha256"],
             "metadata_parser_sha256": metadata_parser["fixture_sha256"],
