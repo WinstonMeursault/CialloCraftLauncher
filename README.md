@@ -8,17 +8,9 @@ The project is in early development. The CLI provides vanilla installation and l
 
 ## Documentation
 
-- [Instance lifecycle and cleanup](docs/instances.en.md) · [简体中文](docs/instances.zh-CN.md)
-- [Additional pack imports](docs/imports.en.md) · [简体中文](docs/imports.zh-CN.md)
-- [Online content](docs/online-content.en.md) · [简体中文](docs/online-content.zh-CN.md)
-- [Networking and offline use](docs/networking.en.md) · [简体中文](docs/networking.zh-CN.md)
-
-- [Architecture and design boundaries (English)](docs/architecture.en.md) · [简体中文](docs/architecture.zh-CN.md)
-- [CLI commands and output (English)](docs/cli.en.md) · [简体中文](docs/cli.zh-CN.md)
-- [Development guide (English)](docs/development.en.md) · [简体中文](docs/development.zh-CN.md)
-- [Microsoft account setup (English)](docs/accounts.en.md) · [简体中文](docs/accounts.zh-CN.md)
-- [Modded instances and loaders (English)](docs/loaders.en.md) · [模组实例与加载器（简体中文）](docs/loaders.zh-CN.md)
-- [Modrinth packs and instance content (English)](docs/modpacks.en.md) · [Modrinth 整合包与实例内容（简体中文）](docs/modpacks.zh-CN.md)
+- [User guide](docs/user-guide.en.md) · [简体中文](docs/user-guide.zh-CN.md) — installation, instances, packs, online content, accounts and offline use.
+- [API reference](docs/api.en.md) · [简体中文](docs/api.zh-CN.md) — CLI commands, JSON output, core services, events and exit codes.
+- [Development guide](docs/development.en.md) · [简体中文](docs/development.zh-CN.md) — architecture, build, validation and application registration.
 - [简体中文项目说明](README.zh-CN.md)
 
 ## Acknowledgements

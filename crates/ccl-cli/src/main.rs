@@ -533,7 +533,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     if config.downloads.offline {
                         return Err(Error::InvalidConfig("Microsoft login requires network access; disable --network-offline / downloads.offline".into()));
                     }
-                    let client_id = client_id.as_ref().or(config.auth.microsoft_client_id.as_ref()).ok_or_else(|| Error::InvalidConfig("set auth.microsoft_client_id to your registered CCL application ID before login; see docs/accounts.en.md".into()))?;
+                    let client_id = client_id.as_ref().or(config.auth.microsoft_client_id.as_ref()).ok_or_else(|| Error::InvalidConfig("set auth.microsoft_client_id to your registered CCL application ID before login; see docs/development.en.md#microsoft-application".into()))?;
                     OsSecretStore::for_account_file(&config_path.with_file_name("accounts.json"))?
                         .probe()?;
                     let auth = auth_service(client_id, &config)?;

@@ -21,7 +21,9 @@ for document in "${documents[@]}"; do
   cp "$document" "$stage/docs/"
 done
 "$stage/ccl" --help >/dev/null
-test -s "$stage/LICENSE" && test -s "$stage/README.md" && test -s "$stage/docs/cli.en.md" && test -s "$stage/docs/cli.zh-CN.md" && test -s "$stage/docs/development.en.md" && test -s "$stage/docs/development.zh-CN.md" && test -s "$stage/docs/accounts.en.md" && test -s "$stage/docs/accounts.zh-CN.md" && test -s "$stage/docs/loaders.en.md" && test -s "$stage/docs/loaders.zh-CN.md" && test -s "$stage/docs/modpacks.en.md" && test -s "$stage/docs/modpacks.zh-CN.md"
+for required in LICENSE README.md README.zh-CN.md docs/user-guide.en.md docs/user-guide.zh-CN.md docs/api.en.md docs/api.zh-CN.md docs/development.en.md docs/development.zh-CN.md; do
+  test -s "$stage/$required"
+done
 archive="dist/${name}.${extension}"
 if [[ "$extension" == zip ]]; then
   (cd dist && zip -qr "${name}.zip" "$name")

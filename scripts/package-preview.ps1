@@ -15,6 +15,10 @@ foreach ($document in $documents) {
     if (-not (Test-Path $counterpart)) { throw "Missing paired document for $($document.Name)" }
     Copy-Item $document.FullName (Join-Path $stage 'docs')
 }
+$requiredGuides = @('user-guide.en.md', 'user-guide.zh-CN.md', 'api.en.md', 'api.zh-CN.md', 'development.en.md', 'development.zh-CN.md')
+foreach ($guide in $requiredGuides) {
+    if (-not (Test-Path (Join-Path $stage "docs/$guide"))) { throw "Missing guide: $guide" }
+}
 $requiredFiles = @('ccl.exe', 'LICENSE', 'README.md', 'README.zh-CN.md') + @($documents | ForEach-Object { "docs/$($_.Name)" })
 & (Join-Path $stage 'ccl.exe') --help | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Packaged ccl --help failed' }

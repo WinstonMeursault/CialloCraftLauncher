@@ -8,17 +8,9 @@
 
 ## 文档
 
-- [实例生命周期与清理](docs/instances.zh-CN.md) · [English](docs/instances.en.md)
-- [其他整合包导入](docs/imports.zh-CN.md) · [English](docs/imports.en.md)
-- [在线内容](docs/online-content.zh-CN.md) · [English](docs/online-content.en.md)
-- [网络与离线](docs/networking.zh-CN.md) · [English](docs/networking.en.md)
-
-- [架构与设计边界（简体中文）](docs/architecture.zh-CN.md) · [English](docs/architecture.en.md)
-- [命令行与输出（简体中文）](docs/cli.zh-CN.md) · [English](docs/cli.en.md)
-- [开发指南（简体中文）](docs/development.zh-CN.md) · [English](docs/development.en.md)
-- [Microsoft 账户设置（简体中文）](docs/accounts.zh-CN.md) · [English](docs/accounts.en.md)
-- [模组实例与加载器（简体中文）](docs/loaders.zh-CN.md) · [English](docs/loaders.en.md)
-- [Modrinth 整合包与实例内容（简体中文）](docs/modpacks.zh-CN.md) · [English](docs/modpacks.en.md)
+- [使用指南](docs/user-guide.zh-CN.md) · [English](docs/user-guide.en.md) — 安装、实例、整合包、在线内容、账户与离线使用。
+- [API 文档](docs/api.zh-CN.md) · [English](docs/api.en.md) — CLI 命令、JSON 输出、核心服务、事件和退出码。
+- [开发指南](docs/development.zh-CN.md) · [English](docs/development.en.md) — 架构、构建、验证与应用注册。
 - [English project overview](README.md)
 
 ## 致谢
