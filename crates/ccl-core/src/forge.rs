@@ -18,12 +18,14 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
     process::Stdio,
+    sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const FORGE_MAVEN: &str = "https://maven.minecraftforge.net";
 const NEO_MAVEN: &str = "https://maven.neoforged.net/releases";
+static NEXT_EMBEDDED_TEMP: AtomicU64 = AtomicU64::new(0);
 
 /// List installable versions for a Forge family and Minecraft release.
 pub async fn versions(
@@ -562,17 +564,33 @@ pub async fn install(
         )?;
         ensure_artifact(
             &mut archive,
-            &downloader,
-            config,
-            &jar,
-            processor.jar.as_deref().unwrap(),
-            &context,
+            EnsureArtifact {
+                downloader: &downloader,
+                config,
+                library_root: &lib_root,
+                path: &jar,
+                coordinate: processor.jar.as_deref().unwrap(),
+                libraries: &profile.libraries,
+                context: &context,
+            },
         )
         .await?;
         let mut cp = Vec::new();
         for coord in &processor.classpath {
             let p = artifact_path(&lib_root, coord)?;
-            ensure_artifact(&mut archive, &downloader, config, &p, coord, &context).await?;
+            ensure_artifact(
+                &mut archive,
+                EnsureArtifact {
+                    downloader: &downloader,
+                    config,
+                    library_root: &lib_root,
+                    path: &p,
+                    coordinate: coord,
+                    libraries: &profile.libraries,
+                    context: &context,
+                },
+            )
+            .await?;
             cp.push(p);
         }
         cp.push(jar.clone());
@@ -1118,44 +1136,214 @@ fn artifact_path(lib: &Path, coord: &str) -> Result<PathBuf, LoaderError> {
     rel.push(name);
     Ok(lib.join(rel))
 }
+struct EnsureArtifact<'a> {
+    downloader: &'a DownloadManager,
+    config: &'a DownloadConfig,
+    library_root: &'a Path,
+    path: &'a Path,
+    coordinate: &'a str,
+    libraries: &'a [ProfileLibrary],
+    context: &'a Option<TaskContext>,
+}
+
 async fn ensure_artifact(
     z: &mut zip::ZipArchive<fs::File>,
-    d: &DownloadManager,
-    c: &DownloadConfig,
-    path: &Path,
-    coord: &str,
-    ctx: &Option<TaskContext>,
+    input: EnsureArtifact<'_>,
 ) -> Result<(), LoaderError> {
-    let rel = artifact_relative(coord)?;
+    let EnsureArtifact {
+        downloader,
+        config,
+        library_root,
+        path,
+        coordinate,
+        libraries,
+        context,
+    } = input;
+    let rel = artifact_relative(coordinate)?;
     let embedded = format!("maven/{rel}");
-    if let Ok(mut src) = z.by_name(&embedded) {
-        if path.is_file() {
-            return Ok(());
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| io(parent, e))?
-        }
-        let mut out = fs::File::create(path).map_err(|e| io(path, e))?;
-        std::io::copy(&mut src, &mut out).map_err(|e| io(path, e))?;
-        return Ok(());
-    }
-    let root = if coord.starts_with("net.neoforged") {
+    let root = if coordinate.starts_with("net.neoforged") {
         NEO_MAVEN
     } else {
         FORGE_MAVEN
     };
-    let url = format!("{root}/{rel}");
-    let expected = fetch_sha1(c, &format!("{url}.sha1"), ctx).await?;
-    if file_hash(path).as_deref() == Some(expected.as_str()) {
+    let descriptor = profile_artifact_for_coordinate(libraries, coordinate)?;
+    let (url, integrity, size) = if let Some(descriptor) = descriptor {
+        let descriptor_rel = match descriptor.path.as_deref() {
+            Some(path) => safe_zip_entry(path)?,
+            None => rel.clone(),
+        };
+        if descriptor_rel != rel || library_root.join(&descriptor_rel) != path {
+            return Err(LoaderError::Unsupported(format!(
+                "profile library path does not match processor coordinate {coordinate}"
+            )));
+        }
+        let integrity = profile_artifact_integrity(descriptor)?;
+        let url = descriptor
+            .url
+            .as_deref()
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{root}/{rel}"));
+        (url, integrity, descriptor.size)
+    } else {
+        (format!("{root}/{rel}"), None, None)
+    };
+
+    if let Some(integrity) = &integrity
+        && file_matches_integrity(path, integrity)
+    {
         return Ok(());
     }
-    let mut req = DownloadRequest::new(maven_candidates(&url, DownloadKind::File, c), path)
+    if extract_embedded_artifact(z, &embedded, path, integrity.as_ref(), size)? {
+        return Ok(());
+    }
+
+    let expected = match integrity {
+        Some(integrity) => integrity.sha1.clone(),
+        None => fetch_sha1(config, &format!("{url}.sha1"), context).await?,
+    };
+    if file_matches_integrity(
+        path,
+        &ArtifactIntegrity {
+            sha1: expected.clone(),
+            size,
+        },
+    ) {
+        return Ok(());
+    }
+    let mut req = DownloadRequest::new(maven_candidates(&url, DownloadKind::File, config), path)
         .with_sha1(expected);
-    if let Some(context) = ctx.clone() {
+    if let Some(size) = size {
+        req = req.with_size(size);
+    }
+    if let Some(context) = context.clone() {
         req = req.with_task_context(context)
     }
-    d.download(req).await?;
+    downloader.download(req).await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactIntegrity {
+    sha1: String,
+    size: Option<u64>,
+}
+
+fn profile_artifact_for_coordinate<'a>(
+    libraries: &'a [ProfileLibrary],
+    coord: &str,
+) -> Result<Option<&'a ProfileArtifact>, LoaderError> {
+    let mut matches = libraries.iter().filter(|library| library.name == coord);
+    let Some(library) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(LoaderError::Unsupported(format!(
+            "installer contains duplicate profile library coordinate {coord}"
+        )));
+    }
+    Ok(library
+        .downloads
+        .as_ref()
+        .and_then(|downloads| downloads.artifact.as_ref()))
+}
+
+fn profile_artifact_integrity(
+    descriptor: &ProfileArtifact,
+) -> Result<Option<ArtifactIntegrity>, LoaderError> {
+    let Some(sha1) = descriptor.sha1.as_deref() else {
+        return Ok(None);
+    };
+    if sha1.len() != 40 || !sha1.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(LoaderError::Unsupported(
+            "profile artifact descriptor has an invalid SHA-1".into(),
+        ));
+    }
+    Ok(Some(ArtifactIntegrity {
+        sha1: sha1.to_ascii_lowercase(),
+        size: descriptor.size,
+    }))
+}
+
+fn file_matches_integrity(path: &Path, expected: &ArtifactIntegrity) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    metadata.file_type().is_file()
+        && expected.size.is_none_or(|size| metadata.len() == size)
+        && file_hash(path).as_deref() == Some(expected.sha1.as_str())
+}
+
+fn extract_embedded_artifact(
+    archive: &mut zip::ZipArchive<fs::File>,
+    embedded: &str,
+    destination: &Path,
+    expected: Option<&ArtifactIntegrity>,
+    expected_size: Option<u64>,
+) -> Result<bool, LoaderError> {
+    let mut source = match archive.by_name(embedded) {
+        Ok(source) => source,
+        Err(_) => return Ok(false),
+    };
+    if source.size() > 1024 * 1024 * 1024
+        || expected_size
+            .or_else(|| expected.and_then(|integrity| integrity.size))
+            .is_some_and(|size| source.size() != size)
+    {
+        return Ok(false);
+    }
+    let parent = destination.parent().ok_or_else(|| {
+        LoaderError::Unsupported("embedded artifact destination has no parent".into())
+    })?;
+    fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| LoaderError::Unsupported("embedded artifact has no file name".into()))?
+        .to_string_lossy();
+    let temporary = parent.join(format!(
+        ".{file_name}.{}.{}.embedded.tmp",
+        std::process::id(),
+        NEXT_EMBEDDED_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let copy_result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| io(&temporary, e))?;
+        std::io::copy(&mut source, &mut file).map_err(|e| io(&temporary, e))?;
+        file.sync_all().map_err(|e| io(&temporary, e))?;
+        Ok::<_, LoaderError>(())
+    })();
+    if let Err(error) = copy_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    let temp_matches = if let Some(expected) = expected {
+        file_matches_integrity(&temporary, expected)
+    } else {
+        true
+    };
+    if !temp_matches {
+        let _ = fs::remove_file(&temporary);
+        return Ok(false);
+    }
+    let existing_is_same = fs::symlink_metadata(destination)
+        .ok()
+        .is_some_and(|metadata| {
+            metadata.file_type().is_file()
+                && file_hash(destination) == file_hash(&temporary)
+                && metadata.len() == fs::metadata(&temporary).map(|m| m.len()).unwrap_or(0)
+        });
+    if expected.is_none() && existing_is_same {
+        let _ = fs::remove_file(&temporary);
+        return Ok(true);
+    }
+    if fs::symlink_metadata(destination).is_ok() {
+        fs::remove_file(destination).map_err(|e| io(destination, e))?;
+    }
+    fs::rename(&temporary, destination).map_err(|e| io(destination, e))?;
+    Ok(true)
 }
 
 async fn download_profile_libraries(
@@ -1203,7 +1391,11 @@ async fn download_profile_libraries(
             }
             None => fetch_sha1(config, &format!("{url}.sha1"), context).await?,
         };
-        if file_hash(&destination).as_deref() == Some(expected.as_str()) {
+        let integrity = ArtifactIntegrity {
+            sha1: expected.clone(),
+            size: descriptor.and_then(|artifact| artifact.size),
+        };
+        if file_matches_integrity(&destination, &integrity) {
             continue;
         }
         let urls = source::url_candidates(&url, DownloadKind::File, config);
@@ -1792,6 +1984,50 @@ mod tests {
             )
         );
         assert!(artifact_path(Path::new("/tmp/libraries"), "../../evil:artifact:1").is_err());
+    }
+
+    #[test]
+    fn profile_library_hash_avoids_sidecar_and_rejects_corrupt_cached_artifact() {
+        let root = std::env::temp_dir().join(format!(
+            "ccl-profile-artifact-integrity-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let coord = "net.neoforged.installertools:installertools:2.1.2";
+        let bytes = b"profile verified processor artifact";
+        let expected_sha1 = format!("{:x}", Sha1::digest(bytes));
+        let libraries = vec![ProfileLibrary {
+            name: coord.into(),
+            downloads: Some(ProfileLibraryDownloads {
+                artifact: Some(ProfileArtifact {
+                    path: Some("net/neoforged/installertools/installertools/2.1.2/installertools-2.1.2.jar".into()),
+                    url: Some("https://maven.neoforged.net/releases/net/neoforged/installertools/installertools/2.1.2/installertools-2.1.2.jar".into()),
+                    sha1: Some(expected_sha1.clone()),
+                    size: Some(bytes.len() as u64),
+                }),
+            }),
+        }];
+        let descriptor = profile_artifact_for_coordinate(&libraries, coord)
+            .unwrap()
+            .unwrap();
+        let integrity = profile_artifact_integrity(descriptor).unwrap().unwrap();
+        assert_eq!(integrity.sha1, expected_sha1);
+        assert_eq!(integrity.size, Some(bytes.len() as u64));
+
+        let artifact = root.join("installertools-2.1.2.jar");
+        fs::write(&artifact, bytes).unwrap();
+        assert!(file_matches_integrity(&artifact, &integrity));
+        fs::write(&artifact, b"corrupt cached processor").unwrap();
+        assert!(!file_matches_integrity(&artifact, &integrity));
+
+        let no_hash = ProfileArtifact {
+            path: None,
+            url: None,
+            sha1: None,
+            size: None,
+        };
+        assert!(profile_artifact_integrity(&no_hash).unwrap().is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
