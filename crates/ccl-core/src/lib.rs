@@ -2,8 +2,10 @@
 
 pub mod accounts;
 pub mod auth;
+pub mod compatibility;
 pub mod config;
 pub mod content;
+pub mod diagnostics;
 pub mod directory;
 pub mod download;
 pub mod error;
@@ -25,6 +27,7 @@ pub mod optifine;
 pub mod runtime;
 pub mod source;
 pub mod task;
+pub mod update;
 
 pub use error::{Error, Result};
 pub use task::{CancellationToken, EventSink, TaskContext, TaskEvent};

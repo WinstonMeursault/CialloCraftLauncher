@@ -3,6 +3,10 @@ use std::path::PathBuf;
 /// Errors returned by reusable launcher services.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Update(#[from] crate::update::UpdateError),
+    #[error(transparent)]
+    Diagnostic(#[from] crate::diagnostics::DiagnosticError),
     #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,

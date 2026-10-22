@@ -7,6 +7,7 @@
 - [Core service index](#core)
 - [Events, cancellation and errors](#tasks)
 - [Online content contracts](#online-contract)
+- [Updates, compatibility and diagnostics](#maintenance)
 - [Exit codes](#exit-codes)
 
 <a id="cli"></a>
@@ -14,14 +15,17 @@
 ## CLI commands
 
 ```text
-ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
+ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
 ```
 
 Global options can be placed before the subcommand. Commands run non-interactively and do not wait for standard input.
 
 | Command | Behavior |
 | --- | --- |
-| `doctor` | Read-only checks of configuration and game directory state; does not create a directory. |
+| `doctor [--network-probe] [--write-probe]` | Read-only checks of configuration, Java, directory access and credential-store capability. Network and temporary write probes require explicit flags; it does not create the game directory. |
+| `diagnose [--run ID] [--export PATH] [--include-log-preview]` | Classifies a saved run or writes a local, allowlisted diagnostic export. Raw log preview requires explicit opt-in and may disclose secrets. |
+| `update check|apply [--channel stable|dev]` | Checks or stages a verified package from the selected GitHub channel. `apply` starts a helper and completes after the CLI exits. |
+| `update status|rollback|recover` | Inspects the update transaction, starts a compatible rollback, or resumes interrupted helper work. |
 | `init` | Selects and creates a game directory using the [directory priority](user-guide.en.md#directories). |
 | `settings show\|get\|set\|reset` | Displays, reads, changes, or resets persisted settings. Proxy credentials are hidden in displayed settings. |
 | `account check-storage\|login\|list\|select\|refresh\|logout` | Checks the OS credential vault, signs in with a Microsoft account using device code, lists/selects accounts, refreshes, or removes local credentials. Login checks the vault before contacting Microsoft. See [Microsoft account setup](user-guide.en.md#accounts). |
@@ -48,6 +52,10 @@ Game stdout and stderr are captured in `<game-directory>/.ccl/logs/<run-id>.log`
 `--game-dir PATH` explicitly selects the game directory and takes precedence over default selection. `--config PATH` selects a configuration file. If omitted, the platform default is read and defaults are used when it is missing. A missing file explicitly selected with `--config` is a filesystem error (exit code `4`), except that `settings set` and `settings reset` can create it.
 
 `--json`, `--network-offline`, `--game-dir`, and `--config` are global options and can be placed before the subcommand. `--network-offline` disables HTTP requests and requires verified local data; it is separate from `launch --offline`, which selects an offline player identity. Downloads resume only when the saved strong ETag and server range response validate the partial transfer. `--json` outputs command execution results as JSON. Progress goes to standard error. clap-generated help and argument parsing errors remain text.
+
+`update --channel` persists the selected channel. Stable uses `main` and version tags of the form `v<VERSION>`; developer builds follow `dev` and are published only after all three platform validation/package jobs succeed. The updater binds metadata to repository, branch, commit, target and data-reader range, then checks archive size, SHA-256 and paths before staging. Packages are unsigned: HTTPS and hashes detect corruption but do not independently authenticate the publisher. `apply` exits after launching a restricted helper; use `update status` to inspect completion, and `update recover` after an interrupted transaction. `update rollback` first checks whether the retained executable can read current launcher metadata. It does not restore the game directory. Update commands require network access except `status`, `rollback` and recovery; `--network-offline` prevents update checks and downloads.
+
+`doctor` does not probe the network or write by default. `--network-probe` checks the official version metadata endpoint; `--write-probe` creates and removes a temporary empty file under launcher data. `diagnose --run ID` reads the saved run record and a bounded log prefix to classify known failure patterns. `diagnose --export PATH` creates a new local file containing allowlisted structured fields. Adding `--include-log-preview` includes up to 16 KiB of raw game output; review it before sharing because arbitrary game/mod logs may contain secrets. No report is uploaded.
 
 <a id="output"></a>
 
@@ -86,6 +94,9 @@ cargo doc -p ccl-core --no-deps --open
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | Provider content, dependency resolution and transactions |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | Device authorization and launch identity |
 | `accounts::AccountStore / accounts::OsSecretStore` | `list / select / credentials / remove; probe` | Account metadata and OS-protected credentials |
+| `compatibility::inspect_compatibility` | `inspect_compatibility(config_path, game_root)` | Read-only compatibility report for config, account metadata, instances and receipts; no credential access |
+| `update::UpdateService / update::Installation` | `check / stage; status / set_channel / prepare_rollback / launch_helper` | Release checks and executable update transaction |
+| `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | Local health checks, bounded run classification and allowlisted exports |
 
 <a id="tasks"></a>
 
@@ -127,6 +138,18 @@ Search results can be filtered by project type, Minecraft version, and loader. B
 
 `updates_for_instance` checks receipt projects against their providers. `analyze_instance` uses the version metadata stored in the receipt and reports missing required dependencies, incompatible selections, duplicate project versions, and different files claiming the same filename. Modpack versions can be downloaded and passed to the existing Modrinth or CurseForge import converter.
 
+<a id="maintenance"></a>
+
+## Updates, compatibility and diagnostics
+
+The updater fetches from this project's GitHub repository only. Stable releases are created from a `v<VERSION>` tag on `main`; developer releases are created for `dev` commits after Windows x64, macOS arm64 and Linux x86_64 validation succeeds. It retains the ten newest developer releases. Update manifests declare data schema range `1..=1`; the current readers preserve existing schema-less config, account metadata and instance metadata, and accept receipt schema 1. Unknown future fields in strict metadata or future receipt schemas block compatibility and updater rollback.
+
+`compatibility::inspect_compatibility` is read-only. It inspects the supplied config, adjacent account metadata and CCL-owned instance generations/receipts. It does not open the OS credential store or inspect saves and general game files. There is currently no data migration. A future format migration must lock and back up affected metadata, stage and atomically commit the change, support interruption recovery, and reject binary rollback when the retained reader cannot consume the resulting data.
+
+`DiagnosticsService::doctor` checks Java candidates, directory access and whether a credential-store adapter is compiled in; it does not verify that a user vault is unlocked. Network and write probes are opt-in. `diagnose_run` checks a bounded game-log prefix and crash reports whose timestamps fall near the saved run; it reports known categories/evidence and leaves unknown causes unknown. Structured export replaces paths and omits accounts, credentials, worlds and server lists. Raw log preview is a separate opt-in field with best-effort redaction, not comprehensive redaction.
+
+P7 implementation is in progress. Updater and diagnostics APIs are available, while complete three-platform replacement/rollback fault acceptance, physical upgrade evidence, broader performance baselines, OS signing and release acceptance are not yet complete. All current CCL release assets are unsigned; integrity checks do not establish publisher identity.
+
 <a id="exit-codes"></a>
 
 ## Exit codes
@@ -149,6 +172,8 @@ Search results can be filtered by project type, Minecraft version, and loader. B
 | `14` | Local content or userdata backup error |
 | `15` | Online content provider or operation error |
 | `16` | Archive import format error |
+| `17` | Launcher updater error, such as network, invalid release or recovery failure |
+| `18` | Diagnostic inspection, diagnosis or export error |
 | `130` | Operation cancelled |
 
 Vanilla metadata conflicts, managed-instance lock conflicts, Modrinth pack conflicts (including ownership/update conflicts), and content or pack operations blocked by an instance lock use exit code `7`. Loader failures, including loader-profile conflicts, and other instance failures use `11` and `12`. Other Modrinth pack and local content errors use `13` and `14`; online-content errors use `15`, archive import format errors use `16`, and cancellation uses `130`.
