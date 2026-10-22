@@ -17,6 +17,8 @@ CLI 提供 `doctor`、`init`、`settings`、`account`、`versions`、`install`�
 
 ## 代码边界
 
+加载器发现与独立实例流程见[模组实例与加载器](loaders.zh-CN.md)。`loaders`、`instance` 及 `launch --instance` 与未来 GUI 复用相同核心服务。现代 Forge/NeoForge 处理器由核心启动，通过任务事件报告输出，不得直接写入 CLI 标准输出。
+
 - 可复用的领域逻辑放在 `crates/ccl-core`。
 - `crates/ccl-core` 不得依赖终端或图形界面库。
 - CLI 负责解析参数、格式化输出和映射退出码，不复制核心业务规则。

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - codex/feature-p3-cli-accounts
+      - codex/feature-p4-loaders
 
 permissions:
   contents: read

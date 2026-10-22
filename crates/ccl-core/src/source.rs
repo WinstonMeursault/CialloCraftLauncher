@@ -55,6 +55,14 @@ pub fn mirror_url(official_url: &str, mirror_root: &str) -> Option<String> {
         }
         "libraries.minecraft.net" => format!("libraries/{path}"),
         "resources.download.minecraft.net" => format!("assets/{path}"),
+        "meta.fabricmc.net" => format!("fabric-meta/{path}"),
+        "maven.fabricmc.net" | "maven.minecraftforge.net" => format!("maven/{path}"),
+        "maven.neoforged.net" => {
+            format!("maven/{}", path.strip_prefix("releases/")?)
+        }
+        "files.minecraftforge.net" => {
+            format!("maven/{}", path.strip_prefix("maven/")?)
+        }
         _ => return None,
     };
     let mut root = reqwest::Url::parse(mirror_root).ok()?;
@@ -108,6 +116,40 @@ mod tests {
             )
             .as_deref(),
             Some("https://mirror.example/mc/game/version_manifest.json")
+        );
+    }
+
+    #[test]
+    fn maps_loader_metadata_and_maven_roots_without_duplicate_prefixes() {
+        for (url, path) in [
+            (
+                "https://meta.fabricmc.net/v2/versions/loader/1.21.1",
+                "fabric-meta/v2/versions/loader/1.21.1",
+            ),
+            (
+                "https://maven.fabricmc.net/net/fabricmc/a.jar",
+                "maven/net/fabricmc/a.jar",
+            ),
+            (
+                "https://maven.minecraftforge.net/net/minecraftforge/a.jar",
+                "maven/net/minecraftforge/a.jar",
+            ),
+            (
+                "https://maven.neoforged.net/releases/net/neoforged/a.jar",
+                "maven/net/neoforged/a.jar",
+            ),
+        ] {
+            assert_eq!(
+                mirror_url(url, "https://mirror.example/base").unwrap(),
+                format!("https://mirror.example/base/{path}")
+            );
+        }
+        assert!(
+            mirror_url(
+                "https://maven.neoforged.net/api/maven",
+                "https://mirror.example"
+            )
+            .is_none()
         );
     }
 }

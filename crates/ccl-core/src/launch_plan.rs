@@ -310,10 +310,23 @@ fn build_plan(
     metadata
         .client()
         .ok_or(PlanError::Missing("downloads.client"))?;
+    let client_version = metadata
+        .extra
+        .get("jar")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&options.version);
+    if client_version.is_empty()
+        || client_version == "."
+        || client_version == ".."
+        || client_version.contains(['/', '\\', ':'])
+        || client_version.chars().any(char::is_control)
+    {
+        return Err(PlanError::InvalidVersion);
+    }
     let client_path = game
         .join("versions")
-        .join(&options.version)
-        .join(format!("{}.jar", options.version));
+        .join(client_version)
+        .join(format!("{client_version}.jar"));
     let client_path = client_path
         .canonicalize()
         .map_err(|e| PlanError::Path(client_path.display().to_string(), e))?;
@@ -325,6 +338,16 @@ fn build_plan(
         ":"
     });
     let mut values = placeholders(metadata, options, &game, &natives, &cp);
+    values.insert("primary_jar".into(), path_text(&client_path));
+    values.insert(
+        "file_separator".into(),
+        if options.platform.os == "windows" {
+            "\\"
+        } else {
+            "/"
+        }
+        .into(),
+    );
     if let Some(identity) = identity {
         values.insert("auth_player_name".into(), identity.username.clone());
         values.insert("auth_uuid".into(), identity.uuid.clone());
@@ -426,6 +449,9 @@ fn build_plan(
             ]);
         }
     }
+    if main == "cpw.mods.bootstraplauncher.BootstrapLauncher" && client_version != options.version {
+        add_bootstrap_client_exclusion(&mut args, &format!("{client_version}.jar"));
+    }
     args.push(format!("-Xmx{}M", options.max_memory_mb));
     args.push(main.to_owned());
     args.extend(game_args);
@@ -437,6 +463,24 @@ fn build_plan(
             .map(|i| vec![i.access_token.clone()])
             .unwrap_or_default(),
     })
+}
+
+fn add_bootstrap_client_exclusion(args: &mut Vec<String>, filename: &str) {
+    // BootstrapLauncher builds modules from the legacy classpath. Its profile
+    // excludes the primary client by file name; inheritance changes that name.
+    if let Some(argument) = args.iter_mut().find(|a| a.starts_with("-DignoreList=")) {
+        let mut entries: Vec<_> = argument[13..]
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if !entries.iter().any(|entry| filename.starts_with(entry)) {
+            entries.push(filename.into());
+        }
+        *argument = format!("-DignoreList={}", entries.join(","));
+    } else {
+        args.push(format!("-DignoreList=asm,securejarhandler,{filename}"));
+    }
 }
 
 fn placeholders(
@@ -653,6 +697,21 @@ fn resolve_artifact(base: &Path, path: Option<&str>, name: &str) -> Result<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bootstrap_excludes_actual_inherited_client_without_changing_other_arguments() {
+        let mut args = vec![
+            "-DignoreList=client-extra,neoforge-21.1.234.jar".into(),
+            "--version".into(),
+            "neoforge-21.1.234".into(),
+        ];
+        add_bootstrap_client_exclusion(&mut args, "1.21.1.jar");
+        add_bootstrap_client_exclusion(&mut args, "1.21.1.jar");
+        assert_eq!(
+            args[0],
+            "-DignoreList=client-extra,neoforge-21.1.234.jar,1.21.1.jar"
+        );
+        assert_eq!(args[2], "neoforge-21.1.234");
+    }
     use crate::metadata::VersionMetadata;
     use std::{
         fs,

@@ -4,7 +4,7 @@ A libre, open-source, cross-platform Minecraft launcher written in Rust.
 
 ## Project status
 
-The project is in early development. The `ccl` CLI provides settings and account management, version listing, verified installation, Java runtime discovery/installation, and game launch. Microsoft account sign-in is implemented but has not been verified with a project-owned registered application and a real account; the account-enabled preview has not met its public preview acceptance gate. See the [Microsoft account setup guide](docs/accounts.en.md).
+The project is in early development. The `ccl` CLI provides settings and account management, version listing, verified vanilla installation, Java runtime discovery/installation, isolated Fabric/Forge/NeoForge instance management, and game launch. Minecraft 1.21.1 reached the game menu with Fabric 0.20.1 and Forge 52.1.0 on Linux, and with NeoForge 21.1.234 on macOS and Linux. The Linux NeoForge run reused an installer with a matching verified integrity record; a cold run could not retrieve the upstream checksum sidecar and the mirror lacked it. These results do not establish broad compatibility. Loader metadata checks do not guarantee every mod set or loader/platform combination. Fabric API and mods are not bundled. Microsoft account sign-in is implemented but has not been verified with a project-owned registered application and a real account; the account-enabled preview has not met its public preview acceptance gate. See the [Microsoft account setup guide](docs/accounts.en.md) and the [loader guide](docs/loaders.en.md).
 
 ## Documentation
 
@@ -12,6 +12,7 @@ The project is in early development. The `ccl` CLI provides settings and account
 - [CLI commands and output (English)](docs/cli.en.md) · [简体中文](docs/cli.zh-CN.md)
 - [Development guide (English)](docs/development.en.md) · [简体中文](docs/development.zh-CN.md)
 - [Microsoft account setup (English)](docs/accounts.en.md) · [简体中文](docs/accounts.zh-CN.md)
+- [Modded instances and loaders (English)](docs/loaders.en.md) · [模组实例与加载器（简体中文）](docs/loaders.zh-CN.md)
 - [简体中文项目说明](README.zh-CN.md)
 
 ## Acknowledgements

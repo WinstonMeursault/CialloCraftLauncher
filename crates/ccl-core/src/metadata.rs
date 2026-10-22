@@ -437,6 +437,21 @@ pub fn resolve_inheritance(
     visit(id, versions, &mut Vec::new())
 }
 fn merge_child(base: &mut VersionMetadata, child: &VersionMetadata) {
+    // Inherited clients remain in their owning version directory. A modded profile
+    // normally supplies only arguments and libraries, not another client archive.
+    if child.client().is_none() && !child.extra.contains_key("jar") && base.client().is_some() {
+        let owner = base
+            .extra
+            .get("jar")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| base.id.clone());
+        if let Some(owner) = owner {
+            base.extra.insert("jar".into(), Value::String(owner));
+        }
+    } else if child.client().is_some() && !child.extra.contains_key("jar") {
+        base.extra.remove("jar");
+    }
     macro_rules! scalar { ($($f:ident),*) => {$(if child.$f.is_some(){base.$f=child.$f.clone();})*}; }
     scalar!(
         id,
@@ -456,7 +471,10 @@ fn merge_child(base: &mut VersionMetadata, child: &VersionMetadata) {
     }
     let mut libs = child.libraries.clone();
     for inherited in base.libraries.drain(..) {
-        if !libs.iter().any(|library| library.name == inherited.name) {
+        if !libs
+            .iter()
+            .any(|library| library_key(&library.name) == library_key(&inherited.name))
+        {
             libs.push(inherited);
         }
     }
@@ -482,6 +500,23 @@ fn merge_child(base: &mut VersionMetadata, child: &VersionMetadata) {
         base.arguments = child.arguments.clone();
     }
     base.extra.extend(child.extra.clone());
+}
+
+// A loader may replace the vanilla release of an artifact. Retain distinct
+// classifiers (especially native libraries), while preferring the child's version.
+fn library_key(name: &str) -> (String, String, String, String) {
+    let (coordinate, extension) = name.split_once('@').unwrap_or((name, "jar"));
+    let fields: Vec<_> = coordinate.split(':').collect();
+    if (3..=4).contains(&fields.len()) {
+        (
+            fields[0].into(),
+            fields[1].into(),
+            fields.get(3).copied().unwrap_or("").into(),
+            extension.into(),
+        )
+    } else {
+        (name.into(), String::new(), String::new(), String::new())
+    }
 }
 
 /// Generic merge utility for callers that need to retain metadata fields unknown to this version.
@@ -512,6 +547,41 @@ fn merge_value(child: Value, parent: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn loader_replaces_library_version_but_retains_native_classifier() {
+        let parent = VersionMetadata::parse(r#"{"id":"base","libraries":[{"name":"org.example:lib:1"},{"name":"org.example:lib:1:natives-linux"}]}"#).unwrap();
+        let child = VersionMetadata::parse(
+            r#"{"id":"modded","inheritsFrom":"base","libraries":[{"name":"org.example:lib:2"}]}"#,
+        )
+        .unwrap();
+        let resolved = resolve_inheritance(
+            "modded",
+            &HashMap::from([("base".into(), parent), ("modded".into(), child)]),
+        )
+        .unwrap();
+        let names: Vec<_> = resolved.libraries.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["org.example:lib:2", "org.example:lib:1:natives-linux"]
+        );
+    }
+    #[test]
+    fn inherited_client_retains_owning_version_through_multiple_profiles() {
+        let docs = [
+            r#"{"id":"base","downloads":{"client":{"sha1":"abc"}}}"#,
+            r#"{"id":"loader","inheritsFrom":"base"}"#,
+            r#"{"id":"profile","inheritsFrom":"loader"}"#,
+        ];
+        let docs: HashMap<_, _> = docs
+            .iter()
+            .map(|s| {
+                let m = VersionMetadata::parse(s).unwrap();
+                (m.id.clone().unwrap(), m)
+            })
+            .collect();
+        let resolved = resolve_inheritance("profile", &docs).unwrap();
+        assert_eq!(resolved.extra["jar"], "base");
+    }
     #[test]
     fn parses_legacy_and_modern_arguments() {
         let old = VersionMetadata::parse(
