@@ -1,0 +1,190 @@
+name: Developer Build Release
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: developer-release
+  cancel-in-progress: false
+
+jobs:
+  validate-package:
+    name: Validate and package (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - label: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - label: Linux x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - name: Confirm tested commit is the current dev tip
+        shell: bash
+        run: |
+          git fetch origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+      - name: Validate source
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+          cargo test --workspace --all-targets --locked --target ${{ matrix.target }}
+      - name: Verify Windows credential vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} os_secure_store_probe_round_trips_without_account_credentials -- --ignored
+      - name: Set package version
+        id: identity
+        shell: bash
+        run: |
+          version="$(python3 scripts/check-package-versions.py --cli-version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build release executable
+        env:
+          CCL_BUILD_CHANNEL: dev
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli
+      - name: Assemble ZIP and checksum
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: zip
+        run: bash scripts/package-preview.sh
+      - name: Assemble ZIP and checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: ./scripts/package-preview.ps1
+      - name: Confirm packaged executable reports its Cargo version
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          binary="target/$TARGET/release/ccl"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="$binary.exe"; fi
+          output="$("$binary" --version)"
+          test "$output" = "ccl $VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ccl-release-${{ matrix.target }}
+          path: dist/*.zip*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified developer build
+    needs: validate-package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ccl-release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify dev tip and construct immutable release identity
+        id: release
+        run: |
+          git fetch origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          echo "tag=dev-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          version="$(python3 scripts/check-package-versions.py --cli-version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build per-platform updater manifests
+        env:
+          CCL_BUILD_CHANNEL: dev
+          CCL_BUILD_BRANCH: dev
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_VERSION: ${{ steps.release.outputs.version }}
+          CCL_RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          python3 scripts/check-package-versions.py --expected "$CCL_BUILD_VERSION"
+          python3 - <<'PY'
+          import os, subprocess
+          targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+          for target in targets:
+              subprocess.run(["python3", "scripts/release-manifest.py", "--target", target,
+                              "--archive", f"dist/ccl-{target}.zip"], check=True, env=os.environ)
+          PY
+      - name: Create, verify, publish, and retain the latest ten developer releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git fetch origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          test "$(find dist -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name 'manifest-*.json' | wc -l)" -eq 3
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing immutable release $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git tag "$RELEASE_TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$RELEASE_TAG"
+          cleanup_draft() { gh release delete "$RELEASE_TAG" --yes --cleanup-tag >/dev/null 2>&1 || git push origin --delete "$RELEASE_TAG" >/dev/null 2>&1 || true; }
+          trap cleanup_draft ERR
+          gh release create "$RELEASE_TAG" --draft dist/*.zip dist/*.sha256 dist/manifest-*.json \
+            --verify-tag --prerelease --title "CCL ${RELEASE_VERSION} dev ${GITHUB_SHA}" \
+            --notes "Unsigned developer build from dev commit ${GITHUB_SHA}. All three target packages passed validation."
+          mkdir -p verify
+          gh release download "$RELEASE_TAG" --dir verify
+          (cd verify && sha256sum -c *.sha256)
+          python3 - <<'PY'
+          import hashlib, json, pathlib, zipfile
+          root = pathlib.Path("verify")
+          manifests = list(root.glob("manifest-*.json"))
+          archives = list(root.glob("ccl-*.zip"))
+          assert len(manifests) == 3 and len(archives) == 3
+          for path in manifests:
+              manifest = json.loads(path.read_text())
+              archive = root / manifest["asset"]["name"]
+              data = archive.read_bytes()
+              assert len(data) == manifest["asset"]["size"]
+              assert hashlib.sha256(data).hexdigest() == manifest["asset"]["sha256"]
+              target = manifest["target"]
+              binary = "ccl.exe" if "windows" in target else "ccl"
+              executable = zipfile.ZipFile(archive).read(f"ccl-{target}/{binary}")
+              assert len(executable) == manifest["executable_size"]
+              assert hashlib.sha256(executable).hexdigest() == manifest["executable_sha256"]
+              assert manifest["commit"] == "${{ github.sha }}"
+              assert manifest["channel"] == "dev" and manifest["branch"] == "dev"
+          PY
+          git fetch origin dev
+          if test "$(git rev-parse origin/dev)" != "$GITHUB_SHA"; then
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+            trap - ERR
+            exit 1
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          trap - ERR
+          gh release list --limit 100 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease) | select(.tagName | test("^dev-[0-9a-f]{40}$"))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' \
+            | while IFS= read -r old_tag; do
+                test -z "$old_tag" || gh release delete "$old_tag" --cleanup-tag --yes
+              done

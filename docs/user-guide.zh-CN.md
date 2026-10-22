@@ -11,6 +11,7 @@
 - [CurseForge 与 MultiMC/Prism 导入](#imports)
 - [在线搜索、依赖与更新](#online)
 - [网络与离线模式](#networking)
+- [启动器更新与诊断](#maintenance)
 - [Microsoft 账户](#accounts)
 
 <a id="quickstart"></a>
@@ -320,6 +321,42 @@ CCL 将 Minecraft 启动身份与网络连接状态分开处理。将 `downloads
 ccl --network-offline versions --limit 10
 ccl --network-offline launch --instance my-world --offline
 ```
+
+<a id="maintenance"></a>
+
+## 启动器更新与诊断
+
+首次安装 P7 需要执行一次引导步骤：P7 之前的 CCL 没有更新命令，因此需要按照项目的发行或安装说明手动安装启用 P7 的程序。P7 会复用已有设置、账户元数据和凭据，以及游戏实例；兼容性检查覆盖了由旧版 `2edbf0e` 配置和账户写入器生成的脱敏数据。完成首次替换后，启用 P7 的版本即可通过更新器升级和回退。
+
+只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定版跟随 `main`；开发版跟随 `dev`。稳定版使用 `v0.1.0` 形式的版本标签。`dev` 上的提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；开发版发行保留最近十个。
+
+```sh
+ccl update check
+ccl update check --channel stable
+ccl update apply
+ccl update status
+ccl update rollback
+ccl update recover
+ccl update recover --installation /path/to/ccl
+```
+
+使用 `--channel` 选择渠道会保存该设置。`check` 报告是否有兼容的已发布程序包。`apply` 下载并校验当前目标平台的归档，然后启动助手；助手会等待当前 CLI 退出后替换程序。命令返回后可用 `update status` 查看状态。助手或替换过程被中断时用 `recover` 恢复；若常规程序无法运行，可通过保留的助手执行恢复，并用 `--installation` 指定原程序路径。`rollback` 只有在当前配置、账户元数据、实例和收据可由保留的旧程序读取时才会使用旧程序。二进制回退不会恢复游戏目录、存档或内容。启动器更新包未签名：HTTPS、大小和 SHA-256 校验可发现传输或文件损坏，但不能独立验证发行者身份。`--network-offline` 会阻止更新检查和下载。通过包管理器安装或只读目录中的程序应通过原有安装方式更新。
+
+`doctor` 检查 Java 候选、启动器/游戏目录访问情况以及是否编译了系统凭据库适配器。它不会登录，也不验证凭据库是否解锁。添加 `--network-probe` 可访问 Mojang 版本元数据端点；添加 `--write-probe` 会在 CCL 数据目录创建并删除临时空文件。这两种探测都需显式启用。
+
+```sh
+ccl doctor
+ccl doctor --network-probe
+ccl doctor --write-probe
+ccl diagnose --run RUN-ID
+ccl diagnose --instance INSTANCE-ID --run RUN-ID
+ccl diagnose --export ./ccl-diagnostic.json
+ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
+```
+
+运行诊断根据保存的运行记录、有大小限制的游戏日志前缀以及时间戳与该运行接近的崩溃报告，识别少数常见故障模式，并提供证据与建议；未知故障不会被强行归类。结构化诊断导出只含白名单字段，并替换本地路径；不会包含账户库、凭据库、存档或服务器列表。可选原始日志预览最多包含 16 KiB 游戏输出，并进行尽力脱敏，但仍可能包含账户名、令牌或游戏/模组写入的其他内容。分享前请检查文件。CCL 不会上传诊断报告。
+
+这些 P7 功能已经实现，但尚未完成全部发行验收矩阵。当前数据兼容范围见 [API 文档](api.zh-CN.md#maintenance)，发行和验证细节见[开发指南](development.zh-CN.md#maintenance)。
 
 <a id="accounts"></a>
 

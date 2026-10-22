@@ -53,7 +53,33 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Inspect the platform, configuration, and selected game directory without changing files.
-    Doctor,
+    Doctor {
+        /// Probe the official version metadata endpoint (otherwise no network probe).
+        #[arg(long)]
+        network_probe: bool,
+        /// Test a temporary write in launcher-owned data.
+        #[arg(long)]
+        write_probe: bool,
+    },
+    /// Diagnose a saved run or export an allowlisted local diagnostic report.
+    Diagnose {
+        /// Select a managed instance instead of the shared game root.
+        #[arg(long)]
+        instance: Option<String>,
+        #[arg(long)]
+        run: Option<String>,
+        /// Write the structured report to a new local file.
+        #[arg(long)]
+        export: Option<PathBuf>,
+        /// Include an opt-in, redacted raw log preview; review before sharing.
+        #[arg(long, requires = "export")]
+        include_log_preview: bool,
+    },
+    /// Check GitHub branches and update this CCL installation.
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
+    },
     /// Create the selected game directory if it is missing.
     Init,
     /// View or persist launcher settings.
@@ -145,6 +171,26 @@ enum Command {
         run: Option<String>,
         #[arg(long, default_value_t = 100)]
         lines: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum UpdateCommand {
+    Check {
+        #[arg(long, value_parser = ["stable", "dev"])]
+        channel: Option<String>,
+    },
+    Apply {
+        #[arg(long, value_parser = ["stable", "dev"])]
+        channel: Option<String>,
+    },
+    Status,
+    Rollback,
+    /// Resume a transaction after an interrupted update helper.
+    Recover {
+        /// Original executable path when running recovery from a retained helper.
+        #[arg(long)]
+        installation: Option<PathBuf>,
     },
 }
 
@@ -414,6 +460,9 @@ enum AccountCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    if let Some(code) = internal_update_command() {
+        return ExitCode::from(code);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
@@ -463,6 +512,20 @@ async fn run(cli: &Cli) -> Result<Value> {
             env::var_os("XDG_CONFIG_HOME").as_deref().map(Path::new),
         )
     });
+    if let Command::Update { command } = &cli.command
+        && matches!(
+            command,
+            UpdateCommand::Status | UpdateCommand::Rollback | UpdateCommand::Recover { .. }
+        )
+    {
+        return run_update(
+            command,
+            &LauncherConfig::default(),
+            &config_path,
+            &resolution.path,
+        )
+        .await;
+    }
     let is_settings_write = matches!(
         &cli.command,
         Command::Settings {
@@ -580,19 +643,86 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
             }
         }
-        Command::Doctor => Ok(json!({
-            "ok": true,
-            "platform": { "os": env::consts::OS, "architecture": env::consts::ARCH },
-            "game_directory": resolution,
-            "config": { "path": config_path, "exists": config_path.is_file() },
-            "downloads": {
-                "version_list_source": config.downloads.version_list_source,
-                "file_source": config.downloads.file_source,
-                "mirror_root": config.downloads.mirror_root,
-                "http_proxy_configured": config.downloads.http_proxy.is_some(),
-                "max_parallel": config.downloads.max_parallel,
+        Command::Doctor {
+            network_probe,
+            write_probe,
+        } => {
+            if *network_probe && config.downloads.offline {
+                return Err(Error::InvalidConfig(
+                    "network probe cannot run in offline mode".into(),
+                ));
             }
-        })),
+            let diagnostics = ccl_core::diagnostics::DiagnosticsService::new(
+                &resolution.path,
+                resolution.path.join(".ccl"),
+            );
+            let report = diagnostics.doctor(&ccl_core::diagnostics::DoctorOptions {
+                java: config.launch.java.clone(),
+                http_proxy: config.downloads.http_proxy.clone(),
+                network_url: network_probe.then(|| {
+                    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".into()
+                }),
+                write_probe: *write_probe,
+                ..Default::default()
+            });
+            Ok(
+                json!({ "ok": true, "platform": { "os":env::consts::OS,"architecture":env::consts::ARCH }, "game_directory":resolution,
+                "config":{ "path":config_path,"exists":config_path.is_file() },
+                "downloads":{"version_list_source":config.downloads.version_list_source,"file_source":config.downloads.file_source,"mirror_root":config.downloads.mirror_root,"http_proxy_configured":config.downloads.http_proxy.is_some(),"max_parallel":config.downloads.max_parallel},
+                "diagnostics":report }),
+            )
+        }
+        Command::Diagnose {
+            instance,
+            run,
+            export,
+            include_log_preview,
+        } => {
+            let diagnostic_root = if let Some(id) = instance {
+                InstanceService::new(resolution.path.clone(), config.downloads.clone())?
+                    .game_directory(id)?
+            } else {
+                resolution.path.clone()
+            };
+            let service = ccl_core::diagnostics::DiagnosticsService::new(
+                &diagnostic_root,
+                diagnostic_root.join(".ccl"),
+            );
+            if let Some(path) = export {
+                let report = service.export(&ccl_core::diagnostics::ExportOptions {
+                    run_id: run.clone(),
+                    include_raw_log_preview: *include_log_preview,
+                })?;
+                let mut options = std::fs::OpenOptions::new();
+                options.create_new(true).write(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(path).map_err(|source| Error::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                use std::io::Write;
+                file.write_all(serde_json::to_string_pretty(&report).unwrap().as_bytes())
+                    .and_then(|_| file.sync_all())
+                    .map_err(|source| Error::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
+                Ok(
+                    json!({"ok":true,"diagnostic_export":path,"notice":report.raw_log_preview_notice}),
+                )
+            } else if let Some(id) = run {
+                Ok(json!({"ok":true,"diagnosis":service.diagnose_run(id)?}))
+            } else {
+                Ok(json!({"ok":true,"diagnostics":service.doctor(&Default::default())}))
+            }
+        }
+        Command::Update { command } => {
+            run_update(command, &config, &config_path, &resolution.path).await
+        }
         Command::Init => {
             resolution.ensure_exists()?;
             Ok(
@@ -1099,6 +1229,11 @@ fn operation_context() -> TaskContext {
 
 fn print_human(value: &Value) {
     if [
+        "update",
+        "update_status",
+        "diagnosis",
+        "diagnostics",
+        "diagnostic_export",
         "history",
         "disk_usage",
         "cleanup",
@@ -1266,6 +1401,9 @@ fn print_human(value: &Value) {
 
 fn error_code(error: &Error) -> &'static str {
     match error {
+        Error::Update(ccl_core::update::UpdateError::Cancelled) => "cancelled",
+        Error::Update(_) => "update_error",
+        Error::Diagnostic(_) => "diagnostic_error",
         Error::Online(error) if error.is_cancelled() => "cancelled",
         Error::Online(
             ccl_core::online_content::OnlineError::Conflicts(_)
@@ -1360,6 +1498,9 @@ fn error_code(error: &Error) -> &'static str {
 
 fn exit_code(error: &Error) -> u8 {
     match error {
+        Error::Update(ccl_core::update::UpdateError::Cancelled) => 130,
+        Error::Update(_) => 17,
+        Error::Diagnostic(_) => 18,
         Error::Online(error) if error.is_cancelled() => 130,
         Error::Online(
             ccl_core::online_content::OnlineError::Conflicts(_)
@@ -1446,5 +1587,116 @@ fn exit_code(error: &Error) -> u8 {
             | InstallError::Download(ccl_core::download::DownloadError::Cancelled) => 130,
             _ => 5,
         },
+    }
+}
+
+fn internal_update_command() -> Option<u8> {
+    let args: Vec<_> = env::args_os().collect();
+    let mode = args.get(1)?.to_str()?;
+    if !matches!(
+        mode,
+        "__build-identity" | "__update-health" | "__update-helper"
+    ) {
+        return None;
+    }
+    let result: std::result::Result<Value, String> = (|| match mode {
+        "__build-identity" if args.len() == 2 => {
+            Ok(serde_json::to_value(ccl_core::update::BuildIdentity::current()).unwrap())
+        }
+        "__update-health" if args.len() == 5 => {
+            let nonce = args[2].to_str().ok_or("invalid nonce")?;
+            if nonce.len() != 64 || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("invalid nonce".into());
+            }
+            let report = ccl_core::compatibility::inspect_compatibility(
+                Path::new(&args[3]),
+                Path::new(&args[4]),
+            );
+            Ok(
+                json!({"nonce":nonce,"build":ccl_core::update::BuildIdentity::current(),"compatible":report.compatible}),
+            )
+        }
+        "__update-helper" if args.len() == 4 => {
+            let status = ccl_core::update::execute_helper(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("invalid nonce")?,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(serde_json::to_value(status).unwrap())
+        }
+        _ => Err("invalid internal update invocation".into()),
+    })();
+    match result {
+        Ok(value) => {
+            println!("{value}");
+            Some(0)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            Some(17)
+        }
+    }
+}
+
+async fn run_update(
+    command: &UpdateCommand,
+    config: &LauncherConfig,
+    config_path: &Path,
+    game_root: &Path,
+) -> Result<Value> {
+    use ccl_core::update::{BuildIdentity, Channel, Installation, UpdateService};
+    let install = if let UpdateCommand::Recover {
+        installation: Some(path),
+    } = command
+    {
+        Installation::for_recovery(path)?
+    } else {
+        Installation::for_current_process()?
+    };
+    match command {
+        UpdateCommand::Status => Ok(
+            json!({"ok":true,"update_status":install.status()?,"build":BuildIdentity::current()}),
+        ),
+        UpdateCommand::Rollback => {
+            let status = install.prepare_rollback()?;
+            let helper_pid = install.launch_helper()?;
+            Ok(
+                json!({"ok":true,"update_status":status,"helper_pid":helper_pid,"note":"helper completes rollback after this process exits; inspect update status"}),
+            )
+        }
+        UpdateCommand::Recover { .. } => {
+            let status = install.status()?;
+            let helper_pid = install.launch_helper()?;
+            Ok(json!({"ok":true,"update_status":status,"helper_pid":helper_pid}))
+        }
+        UpdateCommand::Check { channel } | UpdateCommand::Apply { channel } => {
+            let selected = match channel.as_deref() {
+                Some("stable") => Channel::Stable,
+                Some("dev") => Channel::Dev,
+                _ => install.channel()?,
+            };
+            if channel.is_some() {
+                install.set_channel(selected)?;
+            }
+            let service =
+                UpdateService::new(&config.downloads)?.with_task_context(operation_context());
+            let check = service
+                .check(selected, BuildIdentity::current(), &signal_token())
+                .await?;
+            if matches!(command, UpdateCommand::Check { .. }) || !check.available {
+                return Ok(json!({"ok":true,"update":check}));
+            }
+            let candidate = check
+                .candidate
+                .as_ref()
+                .ok_or_else(|| Error::InvalidConfig("no published update".into()))?;
+            let status = service
+                .stage(candidate, &install, config_path, game_root, &signal_token())
+                .await?;
+            let helper_pid = install.launch_helper()?;
+            Ok(
+                json!({"ok":true,"update_status":status,"helper_pid":helper_pid,"note":"helper completes update after this process exits; inspect update status"}),
+            )
+        }
     }
 }

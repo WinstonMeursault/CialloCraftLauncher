@@ -11,6 +11,7 @@
 - [CurseForge and MultiMC/Prism imports](#imports)
 - [Online search, dependencies and updates](#online)
 - [Networking and offline mode](#networking)
+- [Launcher updates and diagnostics](#maintenance)
 - [Microsoft accounts](#accounts)
 
 <a id="quickstart"></a>
@@ -320,6 +321,42 @@ After the required files have been cached:
 ccl --network-offline versions --limit 10
 ccl --network-offline launch --instance my-world --offline
 ```
+
+<a id="maintenance"></a>
+
+## Launcher updates and diagnostics
+
+The first P7 installation is a one-time bootstrap step: pre-P7 CCL builds do not have an update command, so install a P7-enabled binary manually using the project's release or installation instructions. P7 reuses the existing settings, account metadata and credentials, and instances; sanitized files written by the older `2edbf0e` config and account writers are covered by compatibility checks. After that first replacement, P7-enabled builds can update and roll back through the updater.
+
+CCL checks for its own updates only when you run an update command. Stable follows the `main` branch; developer builds follow `dev`. Stable releases use version tags such as `v0.1.0`. A developer release is published for a `dev` commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
+
+```sh
+ccl update check
+ccl update check --channel stable
+ccl update apply
+ccl update status
+ccl update rollback
+ccl update recover
+ccl update recover --installation /path/to/ccl
+```
+
+Selecting a channel with `--channel` saves that choice. `check` reports whether a compatible published package is available. `apply` downloads and validates its target-specific archive, then starts a helper that waits for the current CLI to exit before replacing the executable. Check `update status` after the command returns. Use `recover` after an interrupted helper or replacement; if the normal executable is unavailable, run recovery from the retained helper with `--installation` pointing to the original executable path. `rollback` uses the retained previous executable only when the current config/account metadata, instances and receipts are readable by that older binary. A binary rollback never restores your game directory, saves or content. Launcher update packages are unsigned: HTTPS, size checks and SHA-256 detect transport or file corruption, but do not independently verify who published a package. `--network-offline` blocks update checks and downloads. Package-manager or read-only installs should be updated through their installation method.
+
+`doctor` checks Java candidates, launcher/game directory access and whether a system credential-store adapter is present. It does not log in or test whether the vault is unlocked. Add `--network-probe` to contact Mojang's version metadata endpoint, or `--write-probe` to create and remove a temporary empty file under CCL-owned data. Both probes are explicit.
+
+```sh
+ccl doctor
+ccl doctor --network-probe
+ccl doctor --write-probe
+ccl diagnose --run RUN-ID
+ccl diagnose --instance INSTANCE-ID --run RUN-ID
+ccl diagnose --export ./ccl-diagnostic.json
+ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
+```
+
+Run diagnosis uses the saved run record, a bounded game-log prefix and timestamp-correlated crash reports to recognize a small set of common failure patterns. It reports evidence and suggestions; an unknown failure is not forced into a category. Structured diagnostic export uses allowlisted fields and replaces local paths. It excludes account databases, credential stores, worlds and server lists. The optional raw preview includes up to 16 KiB of game output and applies best-effort redaction, but may still contain account names, tokens or other content written by the game or mods. Review the file before sharing it. CCL does not upload diagnostic reports.
+
+These P7 features are implemented but have not completed the full release acceptance matrix. See the [API reference](api.en.md#maintenance) for current data compatibility limits and the [development guide](development.en.md#maintenance) for release and validation details.
 
 <a id="accounts"></a>
 

@@ -8,6 +8,7 @@
 - [代码边界](#boundaries)
 - [配置与数据目录](#data)
 - [实例与事务](#transactions)
+- [更新、兼容性与诊断](#maintenance)
 - [Microsoft 应用注册与验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [当前功能范围](#scope)
@@ -92,6 +93,22 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 在线内容服务支持 Modrinth 和 CurseForge 的搜索、版本查询、依赖解析、更新检查、冲突分析及事务化安装/更新。CurseForge 密钥可用或请求头范围测试均不代表真实密钥已获得生产授权。参阅[在线内容](user-guide.zh-CN.md#online)。
 
 `modpack_format` 模块读取和写入 Modrinth 格式版本 1 归档，校验清单和目标路径，限制 ZIP 解压规模，并按顺序应用 `overrides/` 与客户端覆盖。`modpacks` 会事务性导入所选文件和覆盖内容，并在收据中记录整合包拥有路径的哈希。更新会把当前文件与归属哈希比较；整合包拥有的文件被修改或删除，或新路径与未托管本地内容冲突时，会停止更新，除非调用者明确授权替换。整合包或内容变更后，`instance rollback` 会恢复上一份完整实例快照，包括用户数据和存档；如果要保留较新的存档，应先备份。`content` 管理本地内容和可移植用户数据备份。备份包含用户数据与存档，但不包含游戏/加载器文件、Java 运行时或账户凭据。Modrinth 导出与备份用途不同：导出不包含存档和私有服务器列表，本地二进制文件需要明确授权重新分发。命令和安全说明见[Modrinth 整合包与实例内容](user-guide.zh-CN.md#packs)。命令及支持边界另见[加载器与实例](user-guide.zh-CN.md#loaders)。
+
+<a id="maintenance"></a>
+
+## 更新、兼容性与诊断
+
+`update::UpdateService` 只查询 `WinstonMeursault/CialloCraftLauncher`。稳定版使用 `main` 上的 `v<VERSION>` 标签。每次向 `dev` 推送都会启动 Windows x64、macOS arm64 和 Linux x86_64 的验证与打包；所有任务通过后，才会将对应提交发布为不可变的 `dev-<完整 SHA>`。工作流保留最近十个开发版发行。稳定标签必须匹配 CLI crate 版本，且其提交位于 `main`。清单绑定仓库、渠道、分支、完整 commit、目标平台、程序哈希和数据读取范围（`1..=1`）。
+
+`UpdateService::check` 会区分可用程序包与尚未完成发行的分支提交。`stage` 下载并校验有大小限制的 ZIP、归档路径及哈希，然后暂存候选程序。`Installation` 管理渠道选择和持久事务日志；`launch_helper` 启动受限旧程序助手，父进程退出后由 `execute_helper` 执行替换、健康检查或回滚。`prepare_rollback` 会先检查当前数据兼容性。二进制更新器不会恢复游戏数据。当前格式无需迁移；读取器保留无 schema 配置/账户/实例元数据的读取能力，并接受 schema 1 收据。未知的未来配置或实例字段以及大于 1 的收据 schema 会被拒绝。首轮回归使用从基线 `2edbf0e` 的 Git 归档生成的配置与账户元数据；夹具已脱敏，测试账户凭据没有写入文件。
+
+发行归档未签名。HTTPS、大小和 SHA-256 检查可以发现损坏，但不能认证发布者身份；不得将其称为签名或发布者验证。尚未实现系统签名或公证。`update status`、`rollback` 和 `recover` 不需要网络；`check` 和 `apply` 需要网络，且会被 `--network-offline` 阻止。
+
+`compatibility::inspect_compatibility(config_path, game_root)` 是只读检查，不访问操作系统凭据库，只检查 CCL 管理的元数据。未来迁移必须锁定并备份受影响数据、暂存并原子提交、支持安全的中断恢复；若保留的旧读取器无法读取新数据，则拒绝回退。不得通过恢复整个游戏目录来回退启动器。
+
+`DiagnosticsService::doctor` 报告 Java 候选、目录访问和是否编译凭据库适配器；不探测凭据库解锁状态。网络与写入探测需显式启用。`diagnose_run` 检查有大小限制的运行日志和时间戳接近的崩溃报告，仅识别已支持模式。导出只序列化白名单字段并替换路径；原始输出预览需单独显式选择，最多 16 KiB，并尽力脱敏。它仍可能包含游戏或模组写入的秘密，CCL 不会上传该报告。
+
+P7 仍在进行中，尚未全面验收。当前性能工作流只测 CLI 启动和一个确定性 Modrinth 夹具解析，并与同一 runner 的上次基线比较。它不代表完整安装、内存/磁盘、Minecraft 启动、发行故障注入或实机升级已覆盖。请将这些尚未覆盖项目与通过 CI 的项目分开记录。
 
 <a id="microsoft-application"></a>
 

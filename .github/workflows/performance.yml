@@ -1,0 +1,79 @@
+name: Performance Regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * *'
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build deterministic benchmark and CLI binaries
+        env:
+          CCL_BUILD_CHANNEL: ${{ github.ref_name == 'main' && 'stable' || 'dev' }}
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-core --example p7_benchmark -p ccl-cli
+      - name: Download last five successful same-branch samples
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          mkdir -p baseline
+          run_ids="$(gh run list --workflow performance.yml --branch "$GITHUB_REF_NAME" --status success --limit 5 --json databaseId --jq '.[].databaseId')"
+          while IFS= read -r run_id; do
+            [[ -n "$run_id" ]] || continue
+            mkdir -p "baseline/$run_id"
+            gh run download "$run_id" --name "perf-$TARGET" --dir "baseline/$run_id" || true
+          done <<< "$run_ids"
+      - name: Run deterministic performance regression sample
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cli_binary="target/$TARGET/release/ccl"
+          core_example="target/$TARGET/release/examples/p7_benchmark"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cli_binary="$cli_binary.exe"
+            core_example="$core_example.exe"
+          fi
+          args=(--core-example "$core_example" --cli-binary "$cli_binary" --output perf-report/report.json --repo "$GITHUB_WORKSPACE" --run-update-benchmark)
+          if compgen -G 'baseline/*/report.json' >/dev/null; then args+=(--baseline baseline); fi
+          python3 scripts/performance-regression.py "${args[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-${{ matrix.target }}
+          path: perf-report/report.json
+          if-no-files-found: warn
+          retention-days: 90

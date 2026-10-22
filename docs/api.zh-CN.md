@@ -7,6 +7,7 @@
 - [核心服务索引](#core)
 - [事件、取消与错误](#tasks)
 - [在线内容契约](#online-contract)
+- [更新、兼容性与诊断](#maintenance)
 - [退出码](#exit-codes)
 
 <a id="cli"></a>
@@ -14,14 +15,17 @@
 ## CLI 命令
 
 ```text
-ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
+ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
 ```
 
 全局选项可以放在子命令前。命令以非交互方式运行，不会等待标准输入。
 
 | 命令 | 行为 |
 | --- | --- |
-| `doctor` | 只读检查配置和游戏目录状态，不创建目录。 |
+| `doctor [--network-probe] [--write-probe]` | 只读检查配置、Java、目录访问和凭据库能力，不创建游戏目录。只有显式传入参数时才进行网络或临时写入探测。 |
+| `diagnose [--run ID] [--export PATH] [--include-log-preview]` | 分类已有运行记录，或写入本地白名单诊断报告。原始日志预览需要显式选择，并可能包含秘密。 |
+| `update check|apply [--channel stable|dev]` | 检查或暂存所选 GitHub 渠道的校验包。`apply` 启动助手，并在 CLI 退出后完成更新。 |
+| `update status|rollback|recover` | 查看更新事务、启动兼容的回退，或恢复中断的助手操作。 |
 | `init` | 按[目录优先级](user-guide.zh-CN.md#directories)选择并创建游戏目录。 |
 | `settings show\|get\|set\|reset` | 显示、读取、修改或重置持久化设置；显示时会隐藏代理凭据。 |
 | `account check-storage\|login\|list\|select\|refresh\|logout` | 检查操作系统凭据库、使用设备代码登录 Microsoft 账户、查看或选择账户、刷新凭据或删除本地凭据。登录前会先检查凭据库。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。 |
@@ -48,6 +52,10 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|init|
 `--game-dir PATH` 显式指定游戏目录，优先于默认选择。`--config PATH` 指定配置文件；省略时读取平台默认位置，文件不存在则使用默认配置。显式指定的配置文件缺失时会报文件系统错误（退出码 `4`），但 `settings set` 和 `settings reset` 可以创建该文件。
 
 `--json`、`--network-offline`、`--game-dir` 和 `--config` 都是全局选项，可以放在子命令前。`--network-offline` 会禁用 HTTP 请求并要求使用已验证的本地数据；它与 `launch --offline`（选择离线玩家身份）不同。只有保存的强 ETag 和服务器范围响应均匹配时，下载才会续传。`--json` 将命令执行结果输出为 JSON。进度输出到标准错误。clap 生成的帮助和参数解析错误仍为文本。
+
+`update --channel` 会持久化选择的渠道。稳定版跟随 `main`，使用 `v<VERSION>` 版本标签；开发版跟随 `dev`，只有三个目标平台均完成验证和打包后才发布。更新器会核对仓库、分支、commit、目标平台和数据读取范围，并在暂存前检查归档大小、SHA-256 与路径。发行包未签名：HTTPS 和哈希可以检测损坏，但不能独立验证发布者身份。`apply` 启动受限助手后退出；用 `update status` 查看结果，用 `update recover` 恢复中断事务。`update rollback` 会先检查保留的旧程序能否读取当前启动器元数据，不会恢复游戏目录。除 `status`、`rollback` 和恢复外，更新命令需要网络；`--network-offline` 会阻止更新检查和下载。
+
+`doctor` 默认不探测网络，也不写文件。`--network-probe` 检查官方版本元数据端点；`--write-probe` 会在启动器数据目录临时创建并删除空文件。`diagnose --run ID` 读取已保存的运行记录和有大小限制的日志前缀，以分类已知故障模式。`diagnose --export PATH` 创建新的本地文件，仅包含白名单结构化字段。添加 `--include-log-preview` 会附加最多 16 KiB 的原始游戏输出；分享前请检查，因为游戏或模组日志可能包含秘密。报告不会上传。
 
 <a id="output"></a>
 
@@ -86,6 +94,9 @@ cargo doc -p ccl-core --no-deps --open
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | 平台内容、依赖解析及事务 |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | 设备授权及启动身份 |
 | `accounts::AccountStore / accounts::OsSecretStore` | `list / select / credentials / remove; probe` | 账户元数据及操作系统凭据库 |
+| `compatibility::inspect_compatibility` | `inspect_compatibility(config_path, game_root)` | 只读检查配置、账户元数据、实例和收据，不访问凭据 |
+| `update::UpdateService / update::Installation` | `check / stage; status / set_channel / prepare_rollback / launch_helper` | 发行检查和程序更新事务 |
+| `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | 本地健康检查、有限日志分类和白名单导出 |
 
 <a id="tasks"></a>
 
@@ -127,6 +138,18 @@ token.cancel();
 
 `updates_for_instance` 会向对应平台检查收据中的项目。`analyze_instance` 使用收据保存的版本元数据，报告缺少的必需依赖、不兼容选择、同一项目的多个版本，以及不同内容争用同一文件名的情况。整合包版本可下载后交给现有的 Modrinth 或 CurseForge 导入转换器。
 
+<a id="maintenance"></a>
+
+## 更新、兼容性与诊断
+
+更新器只从本项目 GitHub 仓库获取发行内容。稳定版由 `main` 上的 `v<VERSION>` 标签发布；开发版由 `dev` 提交触发，Windows x64、macOS arm64 和 Linux x86_64 均通过验证后才发布，并保留最近十个开发版发行。清单声明的数据 schema 读取范围为 `1..=1`；当前读取器继续兼容无 schema 的旧配置、账户元数据和实例元数据，并接受 schema 1 收据。严格元数据中的未知字段或未来收据 schema 会阻止兼容检查和更新器回退。
+
+`compatibility::inspect_compatibility` 为只读检查。它检查指定配置、相邻账户元数据以及 CCL 管理的实例代次和收据；不会打开操作系统凭据库，也不会检查存档等普通游戏文件。目前没有数据迁移。未来引入格式迁移时，必须锁定并备份受影响的元数据、暂存后原子提交、支持中断恢复，并在保留的旧读取器无法读取新数据时拒绝二进制回退。
+
+`DiagnosticsService::doctor` 检查 Java 候选、目录访问和是否编译了凭据库适配器，但不会判断用户凭据库是否已解锁。网络和写入探测需显式启用。`diagnose_run` 检查有大小限制的游戏日志前缀，以及时间戳接近该运行记录的崩溃报告，并提供已知分类和证据；未知原因仍会保持未知。结构化导出会替换路径，并排除账户、凭据、存档和服务器列表。原始日志预览是单独的可选字段，会进行尽力脱敏但不保证全面。
+
+P7 仍在实现过程中。更新器和诊断 API 已提供；三平台程序替换/回退故障验收、实机升级证据、更广的性能基线、系统签名和发行验收尚未全部完成。当前 CCL 发行包均未签名；完整性校验不能证明发布者身份。
+
 <a id="exit-codes"></a>
 
 ## 退出码
@@ -149,6 +172,8 @@ token.cancel();
 | `14` | 本地内容或用户数据备份错误 |
 | `15` | 在线内容平台或操作错误 |
 | `16` | 归档导入格式错误 |
+| `17` | 启动器更新错误，例如网络、发行无效或恢复失败 |
+| `18` | 诊断检查、运行分类或导出错误 |
 | `130` | 操作已取消 |
 
 原版版本元数据冲突、托管实例锁冲突、Modrinth 整合包冲突（包括文件归属/更新冲突），以及因实例锁而无法执行的内容或整合包操作使用退出码 `7`。加载器错误（包括加载器配置文件冲突）及其他实例错误分别使用 `11` 和 `12`。其他 Modrinth 整合包和本地内容错误分别使用 `13` 和 `14`；在线内容错误使用 `15`，归档导入格式错误使用 `16`；操作取消时使用 `130`。
