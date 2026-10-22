@@ -291,8 +291,15 @@ impl ModpackService {
     ) -> Result<Manifest, ModpackError> {
         let guard = self.instances.acquire_launch(id)?;
         let game = guard.game_directory();
-        let receipt =
-            read_receipt(game)?.ok_or_else(|| conflict(id, "instance has no imported modpack"))?;
+        let receipt = match read_receipt(game)? {
+            Some(receipt) => receipt,
+            None => PackReceipt {
+                schema: 1,
+                manifest: manifest_for_instance(&guard.metadata)?,
+                owned_files: BTreeMap::new(),
+                include_optional: false,
+            },
+        };
         let expected_loader = loader_request(&receipt.manifest);
         if guard.metadata.minecraft != receipt.manifest.dependencies["minecraft"]
             || guard.metadata.loader != expected_loader.as_ref().map(|l| l.kind)
@@ -377,6 +384,44 @@ fn loader_request(manifest: &Manifest) -> Option<LoaderRequest> {
                 version: version.clone(),
             })
     })
+}
+
+fn manifest_for_instance(instance: &InstanceMetadata) -> Result<Manifest, ModpackError> {
+    let mut dependencies = BTreeMap::from([("minecraft".into(), instance.minecraft.clone())]);
+    if let Some(kind) = instance.loader {
+        let profile = instance
+            .loader_version
+            .as_deref()
+            .ok_or_else(|| conflict(&instance.id, "missing installed loader profile"))?;
+        let (key, version) = match kind {
+            LoaderKind::Fabric => (
+                "fabric-loader",
+                profile
+                    .strip_prefix("fabric-loader-")
+                    .and_then(|v| v.strip_suffix(&format!("-{}", instance.minecraft))),
+            ),
+            LoaderKind::Forge => (
+                "forge",
+                profile.strip_prefix(&format!("{}-forge-", instance.minecraft)),
+            ),
+            LoaderKind::NeoForge => ("neoforge", profile.strip_prefix("neoforge-")),
+        };
+        let version = version
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| conflict(profile, "cannot determine loader release for export"))?;
+        dependencies.insert(key.into(), version.into());
+    }
+    let manifest = Manifest {
+        format_version: 1,
+        game: "minecraft".into(),
+        version_id: instance.id.clone(),
+        name: instance.id.clone(),
+        summary: None,
+        files: Vec::new(),
+        dependencies,
+    };
+    manifest.validate()?;
+    Ok(manifest)
 }
 
 fn read_receipt(game: &Path) -> Result<Option<PackReceipt>, ModpackError> {

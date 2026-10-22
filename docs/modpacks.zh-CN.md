@@ -44,6 +44,8 @@ ccl pack export my-pack ./my-pack.mrpack
 
 默认导出会保留已验证的远程文件引用，并将本地配置和游戏选项作为覆盖文件加入归档；不会上传任何内容。已修改的文件无法继续用旧远程引用表示。新增或未跟踪的模组、资源包和光影包二进制文件必须明确启用 `--include-local-content` 才会导出：
 
+导出也支持通过 `instance install` 创建的普通托管实例，包括原版实例。Minecraft 与加载器依赖从已安装实例元数据中取得。没有整合包记录的实例不具备固定远程引用，因此导出其本地二进制文件同样需要明确启用许可选项。
+
 ```sh
 ccl pack export my-pack ./my-pack.mrpack --include-local-content
 ```

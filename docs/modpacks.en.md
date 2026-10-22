@@ -44,6 +44,8 @@ ccl pack export my-pack ./my-pack.mrpack
 
 By default, export keeps verified remote file references and includes local configuration and options as overrides. It does not upload anything. Files that differ from the imported pack cannot be represented by their old remote reference. New or untracked mod, resource-pack, and shader-pack binaries require the explicit `--include-local-content` option:
 
+Export also accepts ordinary managed instances created with `instance install`, including vanilla instances. It derives Minecraft and loader dependencies from the installed instance metadata. An instance without a pack record has no pinned remote references, so exporting its local binaries requires the same explicit permission option.
+
 ```sh
 ccl pack export my-pack ./my-pack.mrpack --include-local-content
 ```

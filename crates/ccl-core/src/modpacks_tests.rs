@@ -75,6 +75,55 @@ fn imports() -> ImportOptions {
 }
 
 #[tokio::test]
+async fn exports_an_ordinary_managed_instance_with_loader_dependencies() {
+    let temp = TempDir::new("ordinary-export");
+    let service = service(temp.path());
+    let archive = pack(
+        temp.path(),
+        "seed",
+        [("mods/local.jar".into(), b"local binary".to_vec())],
+    );
+    let mut metadata = service
+        .import("ordinary", &archive, &imports(), None)
+        .await
+        .unwrap();
+    fs::remove_file(metadata.game_directory.join(RECEIPT)).unwrap();
+    metadata.loader = Some(LoaderKind::Fabric);
+    metadata.loader_version = Some("fabric-loader-0.20.1-1.21.1".into());
+    fs::write(
+        instance_path(temp.path(), "ordinary").join("instance.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let output = temp.path().join("ordinary.mrpack");
+    assert!(matches!(
+        service.export("ordinary", &output, false),
+        Err(ModpackError::Conflict { .. })
+    ));
+    let manifest = service.export("ordinary", &output, true).unwrap();
+    assert_eq!(manifest.dependencies["fabric-loader"], "0.20.1");
+    let parsed = modpack_format::read_pack(&output).unwrap();
+    assert_eq!(parsed.overrides["mods/local.jar"], b"local binary");
+    assert!(parsed.manifest.files.is_empty());
+    for (kind, profile, key, release) in [
+        (LoaderKind::Forge, "1.21.1-forge-52.1.0", "forge", "52.1.0"),
+        (
+            LoaderKind::NeoForge,
+            "neoforge-21.1.234",
+            "neoforge",
+            "21.1.234",
+        ),
+    ] {
+        metadata.loader = Some(kind);
+        metadata.loader_version = Some(profile.into());
+        assert_eq!(
+            manifest_for_instance(&metadata).unwrap().dependencies[key],
+            release
+        );
+    }
+}
+
+#[tokio::test]
 async fn export_embeds_edited_configuration_and_excludes_private_remote_paths() {
     let temp = TempDir::new("export-privacy");
     let service = service(temp.path());
