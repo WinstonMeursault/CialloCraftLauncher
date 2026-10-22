@@ -125,8 +125,20 @@ async fn rollback_exchanges_whole_generation_and_preserves_user_files() {
     let instance = root.0.join(".ccl/instances/test");
     fs::create_dir_all(instance.join("game/saves/world")).unwrap();
     fs::create_dir_all(instance.join("previous/saves/world")).unwrap();
+    fs::create_dir_all(instance.join("game/.ccl/logs")).unwrap();
+    fs::create_dir_all(instance.join("previous/.ccl/logs")).unwrap();
+    fs::create_dir_all(instance.join("game/assets")).unwrap();
+    fs::create_dir_all(instance.join("previous/assets")).unwrap();
     fs::write(instance.join("game/saves/world/marker"), "new").unwrap();
     fs::write(instance.join("previous/saves/world/marker"), "old").unwrap();
+    fs::write(instance.join("game/options.txt"), "latest options").unwrap();
+    fs::write(instance.join("game/servers.dat"), "latest servers").unwrap();
+    fs::write(instance.join("game/.ccl/logs/run.log"), "latest log").unwrap();
+    fs::write(instance.join("previous/options.txt"), "old options").unwrap();
+    fs::write(instance.join("previous/servers.dat_old"), "deleted backup").unwrap();
+    fs::write(instance.join("previous/.ccl/logs/run.log"), "old log").unwrap();
+    fs::write(instance.join("game/assets/resource"), "new resource").unwrap();
+    fs::write(instance.join("previous/assets/resource"), "old resource").unwrap();
     fs::write(
         instance.join("instance.json"),
         serde_json::to_vec(&meta("test", "1.21", Some("fabric-loader-1"))).unwrap(),
@@ -147,6 +159,27 @@ async fn rollback_exchanges_whole_generation_and_preserves_user_files() {
         fs::read_to_string(instance.join("previous/saves/world/marker")).unwrap(),
         "new"
     );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/options.txt")).unwrap(),
+        "latest options"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/servers.dat")).unwrap(),
+        "latest servers"
+    );
+    assert!(!instance.join("game/servers.dat_old").exists());
+    assert_eq!(
+        fs::read_to_string(instance.join("game/.ccl/logs/run.log")).unwrap(),
+        "latest log"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/assets/resource")).unwrap(),
+        "old resource"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("previous/assets/resource")).unwrap(),
+        "new resource"
+    );
     assert_eq!(service.metadata("test").unwrap().minecraft, "1.20.6");
 }
 
@@ -160,10 +193,13 @@ async fn uninstall_loader_removes_only_loader_version_and_keeps_user_data() {
     fs::create_dir_all(instance.join("game/mods")).unwrap();
     fs::create_dir_all(instance.join("game/config")).unwrap();
     fs::create_dir_all(instance.join("game/saves/world")).unwrap();
+    fs::create_dir_all(instance.join("game/.ccl/logs")).unwrap();
     fs::write(instance.join("game/mods/user.jar"), "user").unwrap();
     fs::write(instance.join("game/config/user.cfg"), "config").unwrap();
     fs::write(instance.join("game/saves/world/level.dat"), "save").unwrap();
     fs::write(instance.join("game/options.txt"), "options").unwrap();
+    fs::write(instance.join("game/servers.dat"), "servers").unwrap();
+    fs::write(instance.join("game/.ccl/logs/run.log"), "game log").unwrap();
     fs::write(
         instance.join("instance.json"),
         serde_json::to_vec(&meta("test", "1.21", Some("fabric-loader-1"))).unwrap(),
@@ -188,6 +224,14 @@ async fn uninstall_loader_removes_only_loader_version_and_keeps_user_data() {
     assert_eq!(
         fs::read_to_string(instance.join("game/options.txt")).unwrap(),
         "options"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/servers.dat")).unwrap(),
+        "servers"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/.ccl/logs/run.log")).unwrap(),
+        "game log"
     );
     let rolled_back = service.rollback("test").await.unwrap();
     assert_eq!(
@@ -214,6 +258,14 @@ async fn uninstall_loader_removes_only_loader_version_and_keeps_user_data() {
     assert_eq!(
         fs::read_to_string(instance.join("game/options.txt")).unwrap(),
         "options"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/servers.dat")).unwrap(),
+        "servers"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/.ccl/logs/run.log")).unwrap(),
+        "game log"
     );
 }
 

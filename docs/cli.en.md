@@ -20,7 +20,7 @@ Global options can be placed before the subcommand. Commands run non-interactive
 | `loaders fabric\|forge\|neoforge MINECRAFT [--limit N]` | Lists loader releases advertised for the requested Minecraft version. |
 | `instance list\|show ID\|install ID MINECRAFT LOADER LOADER_VERSION\|update ID MINECRAFT LOADER LOADER_VERSION\|rollback ID\|uninstall-loader ID` | Manages isolated modded instances and loader revisions. See [modded instances and loaders](loaders.en.md). |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | Prepares or launches a vanilla version or an isolated instance. Uses the selected Microsoft account by default, or explicitly uses an offline profile. Java may be detected or installed from Mojang's runtime manifests. |
-| `logs [--run ID] [--lines 100]` | Prints the most recent run log, or the selected run's log, limited to the requested number of lines. |
+| `logs [--instance ID] [--run ID] [--lines 100]` | Prints the most recent run log, or the selected run's log, limited to the requested number of lines. `--instance` selects a managed instance's logs. |
 
 Launch selects Java matching the version metadata's required major version and host architecture. Offline player UUIDs use the Java offline-player name-based UUID algorithm. Before launch, the launcher verifies the client JAR, applicable library artifacts, and asset index against available size and SHA-1 metadata. It prepares the asset projection, downloads and verifies the client logging configuration when specified, and extracts platform native libraries to a temporary directory. That directory is removed after the game exits; dry-run also removes it after printing the plan.
 

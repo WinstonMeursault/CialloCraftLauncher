@@ -144,6 +144,48 @@ fn launch_requires_exactly_one_version_or_instance() {
 }
 
 #[test]
+fn instance_logs_select_the_isolated_game_directory() {
+    let root = sandbox();
+    let game = root.join("game");
+    let instance = game.join(".ccl/instances/test");
+    let isolated = instance.join("game");
+    fs::create_dir_all(isolated.join(".ccl/logs")).unwrap();
+    let isolated = fs::canonicalize(isolated).unwrap();
+    fs::write(
+        instance.join("instance.json"),
+        serde_json::json!({
+            "id":"test", "minecraft":"1.21.1", "loader":null,
+            "loader_version":null, "game_directory": isolated,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(isolated.join(".ccl/logs/run1.log"), "first\nlast\n").unwrap();
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args([
+            "logs",
+            "--instance",
+            "test",
+            "--run",
+            "run1",
+            "--lines",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(json_output(&output)["log"], "last");
+    assert_eq!(json_output(&output)["run_id"], "run1");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn invalid_configuration_has_machine_readable_error_and_exit_code() {
     let root = sandbox();
     let config = root.join("invalid.json");

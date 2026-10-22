@@ -866,26 +866,7 @@ fn clone_ccl_directory(from_game: &Path, to_game: &Path) -> InstanceResult<()> {
 }
 
 fn replace_user_data(from: &Path, to: &Path) -> InstanceResult<()> {
-    for name in [
-        "mods",
-        "config",
-        "saves",
-        "resourcepacks",
-        "shaderpacks",
-        "screenshots",
-    ] {
-        let source = from.join(name);
-        let destination = to.join(name);
-        reject_symlink(&source)?;
-        reject_symlink(&destination)?;
-        if destination.exists() {
-            fs::remove_dir_all(&destination).map_err(|e| io(&destination, e))?;
-        }
-        if source.exists() {
-            copy_tree(&source, &destination)?;
-        }
-    }
-    Ok(())
+    sync_latest_user_data(from, to)
 }
 
 fn stage_matches_request(stage: &Path, request: &LoaderRequest) -> InstanceResult<bool> {
@@ -906,52 +887,114 @@ fn stage_matches_request(stage: &Path, request: &LoaderRequest) -> InstanceResul
 }
 
 fn copy_latest_user_data(current: &Path, target: &Path) -> InstanceResult<()> {
-    for name in [
-        "mods",
-        "config",
-        "saves",
-        "resourcepacks",
-        "shaderpacks",
-        "screenshots",
-    ] {
-        let source = current.join(name);
-        let destination = target.join(name);
-        let staged = target.join(format!(".rollback-data-{name}"));
-        let backup = target.join(format!(".rollback-old-{name}"));
-        reject_symlink(&source)?;
-        reject_symlink(&destination)?;
-        reject_symlink(&staged)?;
-        reject_symlink(&backup)?;
-        if staged.exists() {
-            fs::remove_dir_all(&staged).map_err(|e| io(&staged, e))?;
+    sync_latest_user_data(current, target)
+}
+
+fn sync_latest_user_data(source: &Path, destination: &Path) -> InstanceResult<()> {
+    reject_symlink(source)?;
+    reject_symlink(destination)?;
+    fs::create_dir_all(destination).map_err(|e| io(destination, e))?;
+    let mut retained = std::collections::HashSet::new();
+    for entry in fs::read_dir(source).map_err(|e| io(source, e))? {
+        let entry = entry.map_err(|e| io(source, e))?;
+        let name = entry.file_name();
+        let src = entry.path();
+        let dst = destination.join(&name);
+        reject_symlink(&src)?;
+        reject_symlink(&dst)?;
+        if is_managed_game_entry(&name) || name == ".ccl" || name == ".ccl-instance-request.json" {
+            continue;
         }
-        if backup.exists() {
-            fs::remove_dir_all(&backup).map_err(|e| io(&backup, e))?;
+        mirror_user_entry(&src, &dst)?;
+        retained.insert(name);
+    }
+    for entry in fs::read_dir(destination).map_err(|e| io(destination, e))? {
+        let entry = entry.map_err(|e| io(destination, e))?;
+        let name = entry.file_name();
+        reject_symlink(&entry.path())?;
+        if is_managed_game_entry(&name) || name == ".ccl" || name == ".ccl-instance-request.json" {
+            continue;
         }
-        if source.is_dir() {
-            copy_tree(&source, &staged)?;
-        } else if source.exists() {
-            return Err(InstanceError::Conflict(format!(
-                "user data path is not a directory: {}",
-                source.display()
-            )));
-        }
-        if destination.exists() {
-            fs::rename(&destination, &backup).map_err(|e| io(&destination, e))?;
-        }
-        if staged.exists()
-            && let Err(error) = fs::rename(&staged, &destination)
-        {
-            if backup.exists() {
-                let _ = fs::rename(&backup, &destination);
-            }
-            return Err(io(&destination, error));
-        }
-        if backup.exists() {
-            fs::remove_dir_all(&backup).map_err(|e| io(&backup, e))?;
+        if !retained.contains(&name) {
+            let path = entry.path();
+            reject_symlink(&path)?;
+            remove_path(&path)?;
         }
     }
+
+    let source_ccl = source.join(".ccl");
+    let destination_ccl = destination.join(".ccl");
+    reject_symlink(&source_ccl)?;
+    reject_symlink(&destination_ccl)?;
+    let source_logs = source_ccl.join("logs");
+    let destination_logs = destination_ccl.join("logs");
+    reject_symlink(&source_logs)?;
+    reject_symlink(&destination_logs)?;
+    if source_logs.exists() {
+        fs::create_dir_all(&destination_ccl).map_err(|e| io(&destination_ccl, e))?;
+        mirror_user_entry(&source_logs, &destination_logs)?;
+    } else if destination_logs.exists() {
+        remove_path(&destination_logs)?;
+    }
     Ok(())
+}
+
+fn is_managed_game_entry(name: &std::ffi::OsStr) -> bool {
+    name == "assets" || name == "libraries" || name == "versions"
+}
+
+fn mirror_user_entry(source: &Path, destination: &Path) -> InstanceResult<()> {
+    reject_symlink(source)?;
+    reject_symlink(destination)?;
+    if source.is_dir() {
+        if destination.exists() && !destination.is_dir() {
+            remove_path(destination)?;
+        }
+        fs::create_dir_all(destination).map_err(|e| io(destination, e))?;
+        let mut retained = std::collections::HashSet::new();
+        for entry in fs::read_dir(source).map_err(|e| io(source, e))? {
+            let entry = entry.map_err(|e| io(source, e))?;
+            let name = entry.file_name();
+            let src = entry.path();
+            let dst = destination.join(&name);
+            mirror_user_entry(&src, &dst)?;
+            retained.insert(name);
+        }
+        for entry in fs::read_dir(destination).map_err(|e| io(destination, e))? {
+            let entry = entry.map_err(|e| io(destination, e))?;
+            if !retained.contains(&entry.file_name()) {
+                let path = entry.path();
+                reject_symlink(&path)?;
+                remove_path(&path)?;
+            }
+        }
+    } else if source.is_file() {
+        if destination.is_dir() {
+            remove_path(destination)?;
+        }
+        fs::copy(source, destination).map_err(|e| io(destination, e))?;
+    } else {
+        return Err(InstanceError::Conflict(format!(
+            "unsupported user data entry: {}",
+            source.display()
+        )));
+    }
+    Ok(())
+}
+
+fn remove_path(path: &Path) -> InstanceResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|e| io(path, e))?;
+    if metadata.file_type().is_symlink() {
+        return Err(InstanceError::Conflict(format!(
+            "symlink is not allowed in instance user data: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| io(path, e))
+    } else {
+        fs::remove_file(path).map_err(|e| io(path, e))
+    }
 }
 fn copy_tree(from: &Path, to: &Path) -> InstanceResult<()> {
     fs::create_dir_all(to).map_err(|e| io(to, e))?;
@@ -1422,6 +1465,102 @@ mod tests {
             fs::read_to_string(stage.join("downloaded-resource")).unwrap(),
             "ready"
         );
+    }
+
+    #[test]
+    fn user_data_sync_preserves_root_files_logs_and_deletions() {
+        let temp = Temp::new();
+        let current = temp.0.join("current");
+        let stage = temp.0.join("stage");
+        fs::create_dir_all(current.join(".ccl/logs")).unwrap();
+        fs::create_dir_all(stage.join(".ccl/logs")).unwrap();
+        fs::create_dir_all(current.join("assets")).unwrap();
+        fs::create_dir_all(stage.join("assets")).unwrap();
+        fs::create_dir_all(stage.join("versions")).unwrap();
+        fs::write(current.join("options.txt"), "latest options").unwrap();
+        fs::write(current.join("servers.dat"), "latest servers").unwrap();
+        fs::write(current.join(".ccl/logs/run.log"), "latest log").unwrap();
+        fs::write(stage.join("options.txt"), "stale options").unwrap();
+        fs::write(stage.join("servers.dat_old"), "deleted by user").unwrap();
+        fs::write(stage.join(".ccl/logs/run.log"), "stale log").unwrap();
+        fs::write(current.join("assets/resource"), "current resource").unwrap();
+        fs::write(stage.join("assets/resource"), "staged resource").unwrap();
+        fs::write(stage.join("versions/profile"), "staged profile").unwrap();
+
+        sync_latest_user_data(&current, &stage).unwrap();
+        assert_eq!(
+            fs::read_to_string(stage.join("options.txt")).unwrap(),
+            "latest options"
+        );
+        assert_eq!(
+            fs::read_to_string(stage.join("servers.dat")).unwrap(),
+            "latest servers"
+        );
+        assert!(!stage.join("servers.dat_old").exists());
+        assert_eq!(
+            fs::read_to_string(stage.join(".ccl/logs/run.log")).unwrap(),
+            "latest log"
+        );
+        assert_eq!(
+            fs::read_to_string(stage.join("assets/resource")).unwrap(),
+            "staged resource"
+        );
+        assert_eq!(
+            fs::read_to_string(stage.join("versions/profile")).unwrap(),
+            "staged profile"
+        );
+    }
+
+    #[test]
+    fn stage_clone_preserves_verified_installer_cache_files() {
+        let temp = Temp::new();
+        let current = temp.0.join("game");
+        let stage = temp.0.join(".stage");
+        let installers = current.join(".ccl/installers");
+        fs::create_dir_all(&installers).unwrap();
+        fs::write(
+            installers.join("forge-1.21.1-52.1.0-installer.jar"),
+            b"cached jar",
+        )
+        .unwrap();
+        fs::write(
+            installers.join("forge-1.21.1-52.1.0-installer.json"),
+            br#"{"sha1":"expected","url":"https://example.invalid/installer.jar"}"#,
+        )
+        .unwrap();
+
+        clone_game_generation(&current, &stage).unwrap();
+        let staged_installers = stage.join(".ccl/installers");
+        assert_eq!(
+            fs::read(staged_installers.join("forge-1.21.1-52.1.0-installer.jar")).unwrap(),
+            b"cached jar"
+        );
+        assert_eq!(
+            fs::read_to_string(staged_installers.join("forge-1.21.1-52.1.0-installer.json"))
+                .unwrap(),
+            r#"{"sha1":"expected","url":"https://example.invalid/installer.jar"}"#
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_clone_rejects_symlinks_in_installer_cache() {
+        use std::os::unix::fs::symlink;
+
+        let temp = Temp::new();
+        let current = temp.0.join("game");
+        let stage = temp.0.join(".stage");
+        let installers = current.join(".ccl/installers");
+        fs::create_dir_all(&installers).unwrap();
+        let external = temp.0.join("external-installer.jar");
+        fs::write(&external, "outside").unwrap();
+        symlink(&external, installers.join("forge-installer.jar")).unwrap();
+
+        assert!(matches!(
+            clone_game_generation(&current, &stage),
+            Err(InstanceError::Conflict(_))
+        ));
+        assert!(!stage.join(".ccl/installers/forge-installer.jar").exists());
     }
 
     #[cfg(unix)]

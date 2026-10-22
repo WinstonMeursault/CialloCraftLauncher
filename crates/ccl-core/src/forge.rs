@@ -2,15 +2,16 @@
 
 use crate::{
     TaskContext, TaskEvent,
-    config::DownloadConfig,
+    config::{DownloadConfig, SourceMode},
     download::{DownloadManager, DownloadRequest},
     install::{InstallOptions, InstallService},
     loaders::{LoaderError, LoaderKind, LoaderRequest, LoaderVersion},
     metadata::VersionMetadata,
     source::{self, DownloadKind},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::future::Future;
 use std::{
     collections::HashMap,
     fs,
@@ -79,11 +80,6 @@ async fn versions_with_context(
             },
             _ = wait_cancel(context) => return Err(LoaderError::Cancelled),
         };
-        let neo_prefix = if kind == LoaderKind::NeoForge {
-            format!("{}.", minecraft.strip_prefix("1.").unwrap_or(minecraft))
-        } else {
-            String::new()
-        };
         let mut values = xml
             .split("<version>")
             .skip(1)
@@ -97,7 +93,9 @@ async fn versions_with_context(
                 if safe_segment(&version).is_err() {
                     return None;
                 }
-                if !neo_prefix.is_empty() && !version.starts_with(&neo_prefix) {
+                if kind == LoaderKind::NeoForge
+                    && neoforge_minecraft_version(&version).as_deref() != Some(minecraft)
+                {
                     return None;
                 }
                 let lower = version.to_ascii_lowercase();
@@ -115,13 +113,141 @@ async fn versions_with_context(
             ));
             continue;
         }
-        values.reverse();
+        sort_releases(&mut values);
         return Ok(values);
+    }
+
+    // BMCLAPI provides a dedicated NeoForge list endpoint with an explicit
+    // `mcversion` field. Prefer it to guessing a Minecraft version from a
+    // release prefix when the Maven catalogue is unavailable or empty.
+    if kind == LoaderKind::NeoForge && config.version_list_source != SourceMode::Official {
+        match bmcl_neoforge_versions(config, minecraft, context, &http).await {
+            Ok(mut values) if !values.is_empty() => {
+                sort_releases(&mut values);
+                return Ok(values);
+            }
+            Ok(_) => errors.push(format!(
+                "BMCLAPI NeoForge list returned no releases for Minecraft {minecraft}"
+            )),
+            Err(LoaderError::Cancelled) => return Err(LoaderError::Cancelled),
+            Err(e) => errors.push(format!("BMCLAPI NeoForge list: {e}")),
+        }
     }
     Err(LoaderError::Unsupported(format!(
         "loader versions unavailable: {}",
         errors.join("; ")
     )))
+}
+
+#[derive(Deserialize)]
+struct BmclNeoForgeVersion {
+    version: String,
+    mcversion: String,
+}
+
+async fn bmcl_neoforge_versions(
+    config: &DownloadConfig,
+    minecraft: &str,
+    context: &Option<TaskContext>,
+    http: &reqwest::Client,
+) -> Result<Vec<LoaderVersion>, LoaderError> {
+    let url = format!(
+        "{}/neoforge/list/{minecraft}",
+        config.mirror_root.trim_end_matches('/')
+    );
+    let fetch = async {
+        http.get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<BmclNeoForgeVersion>>()
+            .await
+    };
+    let entries = tokio::select! {
+        result = fetch => result?,
+        _ = wait_cancel(context) => return Err(LoaderError::Cancelled),
+    };
+    Ok(map_bmcl_neoforge_versions(entries, minecraft))
+}
+
+fn map_bmcl_neoforge_versions(
+    entries: Vec<BmclNeoForgeVersion>,
+    minecraft: &str,
+) -> Vec<LoaderVersion> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.mcversion == minecraft)
+        .filter_map(|entry| {
+            safe_segment(&entry.version).ok()?;
+            let lower = entry.version.to_ascii_lowercase();
+            Some(LoaderVersion {
+                stable: !["beta", "alpha", "rc", "pre", "snapshot"]
+                    .iter()
+                    .any(|marker| lower.contains(marker)),
+                version: entry.version,
+            })
+        })
+        .collect()
+}
+
+/// Convert a NeoForge release coordinate into the exact Minecraft release
+/// described by NeoForge's published versioning scheme.
+fn neoforge_minecraft_version(version: &str) -> Option<String> {
+    let (release, mc_suffix) = version
+        .split_once('+')
+        .map_or((version, None), |(release, suffix)| (release, Some(suffix)));
+    let segments: Vec<_> = release.split('.').collect();
+    let parse_segment = |segment: &str| -> Option<u64> {
+        let digits: String = segment.chars().take_while(char::is_ascii_digit).collect();
+        (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+    };
+    let result = match segments.as_slice() {
+        // Snapshot coordinates encode the MC snapshot as the second segment.
+        ["0", snapshot, ..] if !snapshot.is_empty() => (*snapshot).to_owned(),
+        [major, minor, patch, ..] => {
+            let major = parse_segment(major)?;
+            let minor = parse_segment(minor)?;
+            let patch = parse_segment(patch)?;
+            if major >= 26 {
+                if segments.len() < 4 {
+                    return None;
+                }
+                if patch == 0 {
+                    format!("{major}.{minor}")
+                } else {
+                    format!("{major}.{minor}.{patch}")
+                }
+            } else if minor == 0 {
+                format!("1.{major}")
+            } else {
+                format!("1.{major}.{minor}")
+            }
+        }
+        _ => return None,
+    };
+    let result = match mc_suffix {
+        Some(suffix) if !suffix.is_empty() => format!("{result}-{suffix}"),
+        Some(_) => return None,
+        None => result,
+    };
+    Some(result)
+}
+
+fn sort_releases(values: &mut Vec<LoaderVersion>) {
+    fn parts(version: &str) -> Vec<u64> {
+        version
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    }
+    values.sort_by(|a, b| {
+        parts(&b.version)
+            .cmp(&parts(&a.version))
+            .then_with(|| b.stable.cmp(&a.stable))
+            .then_with(|| b.version.cmp(&a.version))
+    });
+    values.dedup_by(|a, b| a.version == b.version);
 }
 
 /// Install a supported modern Forge/NeoForge profile and return its version id.
@@ -177,16 +303,31 @@ pub async fn install(
         .join("installers")
         .join(format!("{}-{coordinate}-installer.jar", artifact));
     let downloader = DownloadManager::new(config)?;
-    let expected_sha1 = fetch_sha1(config, &format!("{installer_url}.sha1"), &context).await?;
+    let checksum_url = format!("{installer_url}.sha1");
+    let integrity_record = installer_integrity_record_path(&installer);
+    let expected_sha1 = expected_installer_sha1(
+        &installer,
+        &integrity_record,
+        &installer_url,
+        &context,
+        || fetch_sha1(config, &checksum_url, &context),
+    )
+    .await?;
     let mut download = DownloadRequest::new(
         maven_candidates(&installer_url, DownloadKind::File, config),
         &installer,
     )
-    .with_sha1(expected_sha1);
+    .with_sha1(expected_sha1.clone());
     if let Some(ctx) = context.clone() {
         download = download.with_task_context(ctx);
     }
     downloader.download(download).await?;
+    write_installer_integrity_record(
+        &installer,
+        &integrity_record,
+        &installer_url,
+        &expected_sha1,
+    )?;
     let archive = zip::ZipArchive::new(fs::File::open(&installer).map_err(|e| io(&installer, e))?)
         .map_err(|e| LoaderError::Unsupported(format!("invalid installer archive: {e}")))?;
     let mut archive = archive;
@@ -293,6 +434,35 @@ pub async fn install(
             .is_none_or(|s| s.iter().any(|x| x == "client"))
     }) {
         check(&context)?;
+        let processor_args = processor
+            .args
+            .iter()
+            .map(|arg| resolve_literal(arg, &vars, &lib_root))
+            .collect::<Result<Vec<_>, _>>()?;
+        let output_hashes = resolve_outputs(
+            &processor.outputs,
+            &vars,
+            &lib_root,
+            &options.game_directory,
+        )?;
+        if is_client_mojmaps_task(
+            processor.jar.as_deref(),
+            &processor_args,
+            &request.minecraft,
+        ) {
+            download_client_mappings(MojmapsDownload {
+                config,
+                downloader: &downloader,
+                vanilla: &vanilla_meta,
+                vars: &vars,
+                args: &processor_args,
+                output_hashes: &output_hashes,
+                game_directory: &options.game_directory,
+                context: &context,
+            })
+            .await?;
+            continue;
+        }
         let jar = artifact_path(
             &lib_root,
             processor.jar.as_deref().ok_or_else(|| {
@@ -324,16 +494,8 @@ pub async fn install(
                 .into_owned(),
             main_class,
         ];
-        for arg in &processor.args {
-            args.push(resolve_literal(arg, &vars, &lib_root)?);
-        }
+        args.extend(processor_args);
         constrain_processor_outputs(&mut args, &options.game_directory)?;
-        let output_hashes = resolve_outputs(
-            &processor.outputs,
-            &vars,
-            &lib_root,
-            &options.game_directory,
-        )?;
         if !output_hashes.is_empty()
             && output_hashes
                 .iter()
@@ -403,6 +565,129 @@ pub async fn install(
         serde_json::to_vec_pretty(&version).map_err(|e| LoaderError::Unsupported(e.to_string()))?;
     atomic_write(&json_path, &encoded)?;
     Ok(version_id)
+}
+
+fn is_client_mojmaps_task(jar: Option<&str>, args: &[String], minecraft: &str) -> bool {
+    let Some(coordinate) = jar else {
+        return false;
+    };
+    let parts: Vec<_> = coordinate.split(':').collect();
+    if parts.len() < 3
+        || parts.len() > 4
+        || parts[0] != "net.neoforged.installertools"
+        || parts[1] != "installertools"
+        || parts[2].is_empty()
+        || artifact_path(Path::new("ccl-libraries"), coordinate).is_err()
+        || args.len() != 8
+        || !args
+            .iter()
+            .step_by(2)
+            .all(|flag| ["--task", "--version", "--side", "--output"].contains(&flag.as_str()))
+    {
+        return false;
+    }
+    unique_flag_value(args, "--task") == Some("DOWNLOAD_MOJMAPS")
+        && unique_flag_value(args, "--version") == Some(minecraft)
+        && unique_flag_value(args, "--side") == Some("client")
+        && unique_flag_value(args, "--output").is_some_and(|output| !output.is_empty())
+}
+
+fn unique_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let mut values = args
+        .windows(2)
+        .filter(|pair| pair[0] == flag)
+        .map(|pair| pair[1].as_str());
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
+}
+
+struct MojmapsDownload<'a> {
+    config: &'a DownloadConfig,
+    downloader: &'a DownloadManager,
+    vanilla: &'a VersionMetadata,
+    vars: &'a HashMap<String, String>,
+    args: &'a [String],
+    output_hashes: &'a [(PathBuf, String)],
+    game_directory: &'a Path,
+    context: &'a Option<TaskContext>,
+}
+
+async fn download_client_mappings(input: MojmapsDownload<'_>) -> Result<(), LoaderError> {
+    let output = unique_flag_value(input.args, "--output").ok_or_else(|| {
+        LoaderError::Unsupported("DOWNLOAD_MOJMAPS processor has no unique output path".into())
+    })?;
+    let output = PathBuf::from(output);
+    let expected_path = input.vars.get("MOJMAPS").ok_or_else(|| {
+        LoaderError::Unsupported("DOWNLOAD_MOJMAPS processor has no MOJMAPS data mapping".into())
+    })?;
+    let mapping = input
+        .vanilla
+        .downloads
+        .get("client_mappings")
+        .ok_or_else(|| {
+            LoaderError::Unsupported("vanilla metadata has no client_mappings download".into())
+        })?;
+    let url = mapping
+        .url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| LoaderError::Unsupported("vanilla client_mappings has no URL".into()))?;
+    let sha1 = mapping
+        .sha1
+        .as_deref()
+        .ok_or_else(|| LoaderError::Unsupported("vanilla client_mappings has no SHA-1".into()))?;
+    if sha1.len() != 40 || !sha1.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(LoaderError::Unsupported(
+            "vanilla client_mappings has an invalid SHA-1".into(),
+        ));
+    }
+    validate_mojmaps_target(
+        &output,
+        expected_path,
+        input.game_directory,
+        input.output_hashes,
+        sha1,
+    )?;
+    let mut download = DownloadRequest::new(
+        source::url_candidates(url, DownloadKind::File, input.config),
+        &output,
+    )
+    .with_sha1(sha1);
+    if let Some(size) = mapping.size {
+        download = download.with_size(size);
+    }
+    if let Some(context) = input.context {
+        download = download.with_task_context(context.clone());
+    }
+    input.downloader.download(download).await?;
+    Ok(())
+}
+
+fn validate_mojmaps_target(
+    output: &Path,
+    expected_path: &str,
+    game_directory: &Path,
+    output_hashes: &[(PathBuf, String)],
+    metadata_sha1: &str,
+) -> Result<(), LoaderError> {
+    if output != Path::new(expected_path)
+        || !output.is_absolute()
+        || !output.starts_with(game_directory)
+    {
+        return Err(LoaderError::Unsupported(format!(
+            "DOWNLOAD_MOJMAPS output is not the staged MOJMAPS artifact: {}",
+            output.display()
+        )));
+    }
+    if output_hashes
+        .iter()
+        .any(|(path, expected)| path == output && !expected.eq_ignore_ascii_case(metadata_sha1))
+    {
+        return Err(LoaderError::Unsupported(
+            "installer MOJMAPS output hash disagrees with vanilla metadata".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -821,6 +1106,134 @@ fn artifact_relative(coord: &str) -> Result<String, LoaderError> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .map_err(|_| LoaderError::Unsupported("invalid artifact path".into()))
 }
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstallerIntegrityRecord {
+    schema: u32,
+    url: String,
+    sha1: String,
+    size: u64,
+}
+
+fn installer_integrity_record_path(installer: &Path) -> PathBuf {
+    let name = installer.file_name().unwrap_or_default().to_string_lossy();
+    installer.with_file_name(format!("{name}.sha1.json"))
+}
+
+async fn expected_installer_sha1<F, Fut>(
+    installer: &Path,
+    record_path: &Path,
+    url: &str,
+    context: &Option<TaskContext>,
+    fetch: F,
+) -> Result<String, LoaderError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<String, LoaderError>>,
+{
+    match fetch().await {
+        Ok(hash) => validate_sha1(&hash),
+        Err(error @ LoaderError::Cancelled) => Err(error),
+        Err(fetch_error) => match read_installer_integrity_record(installer, record_path, url) {
+            Ok(Some(record)) => {
+                check(context)?;
+                Ok(record)
+            }
+            Ok(None) => Err(fetch_error),
+            Err(cache_error) => Err(LoaderError::Unsupported(format!(
+                "{fetch_error}; cached installer integrity record was rejected: {cache_error}"
+            ))),
+        },
+    }
+}
+
+fn validate_sha1(value: &str) -> Result<String, LoaderError> {
+    if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(value.to_ascii_lowercase())
+    } else {
+        Err(LoaderError::Unsupported(
+            "installer checksum is not a valid SHA-1".into(),
+        ))
+    }
+}
+
+fn read_installer_integrity_record(
+    installer: &Path,
+    record_path: &Path,
+    url: &str,
+) -> Result<Option<String>, LoaderError> {
+    let metadata = match fs::symlink_metadata(record_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io(record_path, error)),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(LoaderError::Unsupported(format!(
+            "cached installer integrity record is not a regular file: {}",
+            record_path.display()
+        )));
+    }
+    let bytes = fs::read(record_path).map_err(|error| io(record_path, error))?;
+    let record: InstallerIntegrityRecord = serde_json::from_slice(&bytes).map_err(|error| {
+        LoaderError::Unsupported(format!(
+            "invalid cached installer integrity record {}: {error}",
+            record_path.display()
+        ))
+    })?;
+    let expected = validate_sha1(&record.sha1)?;
+    if record.schema != 1 || record.url != url {
+        return Err(LoaderError::Unsupported(
+            "cached installer integrity record does not match this installer URL or schema".into(),
+        ));
+    }
+    let installer_metadata =
+        fs::symlink_metadata(installer).map_err(|error| io(installer, error))?;
+    if !installer_metadata.is_file() || installer_metadata.file_type().is_symlink() {
+        return Err(LoaderError::Unsupported(format!(
+            "cached installer is not a regular file: {}",
+            installer.display()
+        )));
+    }
+    if installer_metadata.len() != record.size
+        || file_hash(installer).as_deref() != Some(expected.as_str())
+    {
+        return Err(LoaderError::Unsupported(format!(
+            "cached installer does not match its recorded size and SHA-1: {}",
+            installer.display()
+        )));
+    }
+    Ok(Some(expected))
+}
+
+fn write_installer_integrity_record(
+    installer: &Path,
+    record_path: &Path,
+    url: &str,
+    sha1: &str,
+) -> Result<(), LoaderError> {
+    let sha1 = validate_sha1(sha1)?;
+    let metadata = fs::symlink_metadata(installer).map_err(|error| io(installer, error))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || file_hash(installer).as_deref() != Some(sha1.as_str())
+    {
+        return Err(LoaderError::Unsupported(format!(
+            "installer failed integrity verification before recording its checksum: {}",
+            installer.display()
+        )));
+    }
+    let record = InstallerIntegrityRecord {
+        schema: 1,
+        url: url.to_owned(),
+        sha1,
+        size: metadata.len(),
+    };
+    let bytes =
+        serde_json::to_vec(&record).map_err(|error| LoaderError::Unsupported(error.to_string()))?;
+    atomic_write(record_path, &bytes)
+}
+
 async fn fetch_sha1(
     c: &DownloadConfig,
     url: &str,
@@ -919,6 +1332,221 @@ async fn wait_cancel(ctx: &Option<TaskContext>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn integrity_fixture(name: &str) -> (PathBuf, PathBuf, PathBuf, String) {
+        let root = std::env::temp_dir().join(format!(
+            "ccl-installer-integrity-{name}-{}",
+            std::process::id()
+        ));
+        let installer = root.join("neoforge-installer.jar");
+        let record = installer_integrity_record_path(&installer);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&installer, b"verified installer fixture").unwrap();
+        let hash = file_hash(&installer).unwrap();
+        (root, installer, record, hash)
+    }
+
+    #[tokio::test]
+    async fn verified_installer_record_reuses_cache_when_checksum_metadata_is_unavailable() {
+        let (root, installer, record, hash) = integrity_fixture("reuse");
+        let url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.234/neoforge-21.1.234-installer.jar";
+        write_installer_integrity_record(&installer, &record, url, &hash).unwrap();
+        let actual = expected_installer_sha1(&installer, &record, url, &None, || async {
+            Err(LoaderError::Unsupported(
+                "checksum endpoint unavailable".into(),
+            ))
+        })
+        .await
+        .unwrap();
+        assert_eq!(actual, hash);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn installer_cache_rejects_changed_bytes_and_wrong_artifact_url() {
+        let (root, installer, record, hash) = integrity_fixture("reject");
+        let url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.234/neoforge-21.1.234-installer.jar";
+        write_installer_integrity_record(&installer, &record, url, &hash).unwrap();
+        fs::write(&installer, b"changed installer").unwrap();
+        let changed = expected_installer_sha1(&installer, &record, url, &None, || async {
+            Err(LoaderError::Unsupported(
+                "checksum endpoint unavailable".into(),
+            ))
+        })
+        .await;
+        assert!(changed.is_err());
+
+        fs::write(&installer, b"verified installer fixture").unwrap();
+        let wrong_url = expected_installer_sha1(
+            &installer,
+            &record,
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.233/neoforge-21.1.233-installer.jar",
+            &None,
+            || async { Err(LoaderError::Unsupported("checksum endpoint unavailable".into())) },
+        )
+        .await;
+        assert!(wrong_url.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn installer_cache_miss_does_not_accept_unverified_bytes() {
+        let (root, installer, record, _) = integrity_fixture("miss");
+        let result = expected_installer_sha1(
+            &installer,
+            &record,
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.234/neoforge-21.1.234-installer.jar",
+            &None,
+            || async { Err(LoaderError::Unsupported("checksum endpoint unavailable".into())) },
+        )
+        .await;
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn neoforge_release_coordinates_map_to_exact_minecraft_versions() {
+        for (version, minecraft) in [
+            ("21.0.143", "1.21"),
+            ("21.1.234", "1.21.1"),
+            ("20.0.27", "1.20"),
+            ("26.1.0.0-beta", "26.1"),
+            ("26.1.1.0", "26.1.1"),
+            ("26.1.1.0+1.21.1", "26.1.1-1.21.1"),
+            ("0.24w33a.3", "24w33a"),
+        ] {
+            assert_eq!(
+                neoforge_minecraft_version(version).as_deref(),
+                Some(minecraft)
+            );
+        }
+        assert_eq!(neoforge_minecraft_version("21.1"), None);
+        assert_eq!(neoforge_minecraft_version("26.1.0"), None);
+    }
+
+    #[test]
+    fn bmcl_neoforge_list_uses_explicit_exact_minecraft_field() {
+        let entries = vec![
+            BmclNeoForgeVersion {
+                version: "21.0.143".into(),
+                mcversion: "1.21".into(),
+            },
+            BmclNeoForgeVersion {
+                version: "21.1.234".into(),
+                mcversion: "1.21.1".into(),
+            },
+            BmclNeoForgeVersion {
+                version: "21.1.235-beta".into(),
+                mcversion: "1.21.1".into(),
+            },
+            BmclNeoForgeVersion {
+                version: "../unsafe".into(),
+                mcversion: "1.21.1".into(),
+            },
+        ];
+        let values = map_bmcl_neoforge_versions(entries, "1.21.1");
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].version, "21.1.234");
+        assert!(values[0].stable);
+        assert!(!values[1].stable);
+    }
+
+    #[test]
+    fn neo_mojmaps_download_recognition_is_narrow_and_never_handles_sanitize() {
+        let jar = "net.neoforged.installertools:installertools:2.1.2";
+        let valid = vec![
+            "--task".into(),
+            "DOWNLOAD_MOJMAPS".into(),
+            "--version".into(),
+            "1.21.1".into(),
+            "--side".into(),
+            "client".into(),
+            "--output".into(),
+            "/game/libraries/mojmap.txt".into(),
+        ];
+        assert!(is_client_mojmaps_task(Some(jar), &valid, "1.21.1"));
+
+        let mut sanitize = valid.clone();
+        sanitize.push("--sanitize".into());
+        assert!(!is_client_mojmaps_task(Some(jar), &sanitize, "1.21.1"));
+        let mut unknown = valid.clone();
+        unknown.extend(["--format".into(), "TSRG".into()]);
+        assert!(!is_client_mojmaps_task(Some(jar), &unknown, "1.21.1"));
+        let mut sanitize_equals = valid.clone();
+        sanitize_equals.extend(["--sanitize=true".into(), "".into()]);
+        assert!(!is_client_mojmaps_task(
+            Some(jar),
+            &sanitize_equals,
+            "1.21.1"
+        ));
+        assert!(!is_client_mojmaps_task(
+            Some("net.neoforged.installertools:jarsplitter:2.1.2"),
+            &valid,
+            "1.21.1"
+        ));
+        assert!(!is_client_mojmaps_task(Some(jar), &valid, "1.21"));
+        let mut duplicate_task = valid.clone();
+        duplicate_task.extend(["--task".into(), "DOWNLOAD_MOJMAPS".into()]);
+        assert!(!is_client_mojmaps_task(
+            Some(jar),
+            &duplicate_task,
+            "1.21.1"
+        ));
+    }
+
+    #[test]
+    fn neo_mojmaps_output_requires_staging_target_and_matching_declared_hash() {
+        let root = std::env::temp_dir().join("ccl-mojmaps-staging");
+        let output = root.join("libraries/mojmap.txt");
+        let expected = "0123456789012345678901234567890123456789";
+        validate_mojmaps_target(
+            &output,
+            output.to_str().unwrap(),
+            &root,
+            &[(output.clone(), expected.into())],
+            expected,
+        )
+        .unwrap();
+        assert!(
+            validate_mojmaps_target(
+                &output,
+                output.to_str().unwrap(),
+                &root,
+                &[(output.clone(), "f".repeat(40))],
+                expected,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_mojmaps_target(
+                &root.join("../outside.txt"),
+                output.to_str().unwrap(),
+                &root,
+                &[],
+                expected,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn release_catalogue_sorts_numeric_versions_without_relying_on_xml_order() {
+        let mut values: Vec<_> = ["52.0.9", "52.1.0", "52.0.48", "52.1.0"]
+            .into_iter()
+            .map(|version| LoaderVersion {
+                version: version.into(),
+                stable: true,
+            })
+            .collect();
+        sort_releases(&mut values);
+        assert_eq!(
+            values
+                .iter()
+                .map(|v| v.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["52.1.0", "52.0.48", "52.0.9"]
+        );
+    }
     use std::{io::Write, sync::Arc};
 
     #[test]

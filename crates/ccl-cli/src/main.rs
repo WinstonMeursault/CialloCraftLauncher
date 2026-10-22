@@ -116,6 +116,9 @@ enum Command {
     },
     /// Read the latest launch log, or select a run ID.
     Logs {
+        /// Read logs from an isolated managed instance.
+        #[arg(long)]
+        instance: Option<String>,
         #[arg(long)]
         run: Option<String>,
         #[arg(long, default_value_t = 100)]
@@ -484,8 +487,17 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }
             }
         }
-        Command::Logs { run, lines } => {
-            let (run_id, text) = launch::read_logs(&resolution.path, run.as_deref(), *lines)?;
+        Command::Logs {
+            instance,
+            run,
+            lines,
+        } => {
+            let root = match instance {
+                Some(id) => InstanceService::new(resolution.path, config.downloads.clone())?
+                    .game_directory(id)?,
+                None => resolution.path,
+            };
+            let (run_id, text) = launch::read_logs(&root, run.as_deref(), *lines)?;
             Ok(json!({ "ok": true, "run_id": run_id, "log": text }))
         }
         Command::Launch {

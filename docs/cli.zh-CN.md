@@ -20,7 +20,7 @@ ccl [--json] [--game-dir PATH] [--config PATH] <doctor|init|settings|account|ver
 | `loaders fabric\|forge\|neoforge MINECRAFT [--limit N]` | 列出上游元数据中适用于指定 Minecraft 版本的加载器版本。 |
 | `instance list\|show ID\|install ID MINECRAFT LOADER LOADER_VERSION\|update ID MINECRAFT LOADER LOADER_VERSION\|rollback ID\|uninstall-loader ID` | 管理隔离的模组实例和加载器版本。参阅[模组实例与加载器](loaders.zh-CN.md)。 |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | 启动原版版本或隔离实例。默认使用所选 Microsoft 账户，也可显式使用离线账户。Java 可自动探测或按需从 Mojang 运行时清单安装。 |
-| `logs [--run ID] [--lines 100]` | 输出最近一次运行日志，或指定运行记录的日志，并限制输出行数。 |
+| `logs [--instance ID] [--run ID] [--lines 100]` | 输出最近一次运行日志，或指定运行记录的日志，并限制输出行数。`--instance` 选择独立实例的日志。 |
 
 启动时会选择与版本元数据所需主版本号及主机架构匹配的 Java。离线玩家 UUID 使用 Java 离线玩家的名称派生 UUID 算法。启动前，启动器会根据可用的大小和 SHA-1 元数据校验客户端 JAR、适用的库文件和资源索引，准备资源文件映射；若版本指定了客户端日志配置，还会下载并校验该配置。平台原生库会解压到临时目录，游戏退出后删除；`--dry-run` 输出计划后也会删除该目录。
 

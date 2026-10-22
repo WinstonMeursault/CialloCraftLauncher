@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-项目处于早期开发阶段。`ccl` 命令行提供设置和账户管理、版本列表、校验原版安装、Java 运行时探测与安装、隔离的 Fabric/Forge/NeoForge 实例管理以及游戏启动。Linux 上一次 Minecraft 1.21.1 / Fabric 0.20.1 安装成功进入游戏菜单；这一个组合不能代表广泛兼容。安装前会根据上游元数据检查加载器兼容关系，但这不能保证所有模组组合可用，也不代表其他加载器或平台已验证。CCL 不会捆绑 Fabric API 或模组。Microsoft 账户登录已经实现，但尚未使用本项目注册的应用及真实账户验证；启用账户的预览包尚未满足公开预览验收要求。参阅 [Microsoft 账户设置指南](docs/accounts.zh-CN.md)和[加载器指南](docs/loaders.zh-CN.md)。
+项目处于早期开发阶段。`ccl` 命令行提供设置和账户管理、版本列表、校验原版安装、Java 运行时探测与安装、隔离的 Fabric/Forge/NeoForge 实例管理以及游戏启动。Minecraft 1.21.1 已在 Linux 上搭配 Fabric 0.20.1 和 Forge 52.1.0 进入游戏菜单，也在 macOS 上搭配 NeoForge 21.1.234 进入菜单。Linux 上 NeoForge 安装尚未验证，因为上游校验和端点不可用且镜像缺少校验文件。这些结果不代表广泛兼容；加载器元数据检查也不能保证所有模组或加载器/平台组合可用。CCL 不会捆绑 Fabric API 或模组。Microsoft 账户登录已经实现，但尚未使用本项目注册的应用及真实账户验证；启用账户的预览包尚未满足公开预览验收要求。参阅 [Microsoft 账户设置指南](docs/accounts.zh-CN.md)和[加载器指南](docs/loaders.zh-CN.md)。
 
 ## 文档
 
