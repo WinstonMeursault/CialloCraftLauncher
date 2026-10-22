@@ -533,8 +533,8 @@ impl DownloadManager {
             }
         }
         ensure_partial_identity(&file, &partial)?;
-        fs::rename(&partial.path, &request.destination)
-            .map_err(|e| io_error(&request.destination, e))?;
+        drop(file);
+        publish_partial(&partial, request, resumable).await?;
         let _ = fs::remove_file(&partial.etag_path);
         if let Some(context) = &request.task_context {
             context
@@ -581,6 +581,56 @@ fn check_cancelled_partial(
     } else {
         Ok(())
     }
+}
+
+async fn publish_partial(
+    partial: &PartialFile,
+    request: &DownloadRequest,
+    resumable: bool,
+) -> Result<(), DownloadError> {
+    // Windows antivirus/indexing services can briefly deny rename while they inspect a newly
+    // completed artifact. Keep retries short and bounded, and never remove the old destination.
+    #[cfg(windows)]
+    const RETRY_DELAYS: [Duration; 6] = [
+        Duration::from_millis(20),
+        Duration::from_millis(40),
+        Duration::from_millis(80),
+        Duration::from_millis(160),
+        Duration::from_millis(320),
+        Duration::from_millis(640),
+    ];
+    #[cfg(not(windows))]
+    const RETRY_DELAYS: [Duration; 0] = [];
+
+    let mut attempt = 0usize;
+    loop {
+        check_cancelled_partial(request, partial, resumable)?;
+        match fs::rename(&partial.path, &request.destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if retryable_publish_error(&error) && attempt < RETRY_DELAYS.len() => {
+                let mut remaining = RETRY_DELAYS[attempt];
+                attempt += 1;
+                while !remaining.is_zero() {
+                    check_cancelled_partial(request, partial, resumable)?;
+                    let interval = remaining.min(Duration::from_millis(50));
+                    tokio::time::sleep(interval).await;
+                    remaining = remaining.saturating_sub(interval);
+                }
+            }
+            Err(error) => return Err(io_error(&request.destination, error)),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn retryable_publish_error(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+        || matches!(error.raw_os_error(), Some(5 | 32 | 33))
+}
+
+#[cfg(not(windows))]
+fn retryable_publish_error(_error: &std::io::Error) -> bool {
+    false
 }
 
 fn verify_bytes(request: &DownloadRequest, bytes: &[u8]) -> Result<(), DownloadError> {
@@ -900,13 +950,15 @@ mod tests {
     };
 
     fn test_path() -> PathBuf {
+        static NEXT_PATH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         std::env::temp_dir().join(format!(
-            "ccl-download-{}-{}",
+            "ccl-download-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_PATH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ))
     }
 
@@ -1035,7 +1087,10 @@ mod tests {
                 &path,
             ))
             .await;
-        assert!(matches!(result, Err(DownloadError::OfflineCacheMiss(p)) if p == path));
+        assert!(
+            matches!(&result, Err(DownloadError::OfflineCacheMiss(p)) if p == &path),
+            "{result:?}"
+        );
         assert!(!path.exists());
     }
 
@@ -1159,6 +1214,59 @@ mod tests {
         worker.join().unwrap();
         assert_eq!(fs::read(&path).unwrap(), body);
         fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn publish_retries_windows_sharing_error_after_destination_handle_closes() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let destination = test_path();
+        let partial = PartialFile::for_destination(&destination);
+        fs::write(&destination, b"old verified destination").unwrap();
+        fs::write(&partial.path, b"new verified artifact").unwrap();
+        // Permit reads and writes but deny delete/rename while this handle is open.
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0x1 | 0x2)
+            .open(&destination)
+            .unwrap();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            drop(held);
+        });
+        let request = DownloadRequest::new(Vec::<String>::new(), &destination);
+        publish_partial(&partial, &request, true).await.unwrap();
+        release.join().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new verified artifact");
+        assert!(!partial.path.exists());
+        fs::remove_file(destination).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn exhausted_publish_retries_preserve_old_destination_and_valid_partial() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let destination = test_path();
+        let partial = PartialFile::for_destination(&destination);
+        fs::write(&destination, b"old verified destination").unwrap();
+        fs::write(&partial.path, b"new verified artifact").unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0x1 | 0x2)
+            .open(&destination)
+            .unwrap();
+        let request = DownloadRequest::new(Vec::<String>::new(), &destination);
+        let result = publish_partial(&partial, &request, true).await;
+        assert!(matches!(result, Err(DownloadError::Io { .. })));
+        assert_eq!(fs::read(&destination).unwrap(), b"old verified destination");
+        assert_eq!(fs::read(&partial.path).unwrap(), b"new verified artifact");
+        drop(held);
+        fs::remove_file(destination).unwrap();
+        fs::remove_file(partial.path).unwrap();
     }
 
     #[tokio::test]
