@@ -13,7 +13,7 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-The CLI provides `doctor`, `init`, `versions`, `install`, `instances`, `launch`, and `logs`. Run `cargo run -p ccl-cli -- --help` for the current arguments. Launch supports offline identity, compatible Java runtime discovery, dry-run planning, process log capture, and cancellation.
+The CLI provides `doctor`, `init`, `settings`, `account`, `versions`, `install`, `instances`, `launch`, and `logs`. Run `cargo run -p ccl-cli -- --help` for the current arguments. Launch supports Microsoft or offline identity, compatible Java runtime discovery and managed installation, dry-run planning, process log capture, and cancellation. The Microsoft application is not yet verified or approved for public distribution; see the [account registration guide](accounts.en.md).
 
 ## Code boundaries
 
@@ -21,11 +21,11 @@ The CLI provides `doctor`, `init`, `versions`, `install`, `instances`, `launch`,
 - `crates/ccl-core` must not depend on terminal or graphical-interface libraries.
 - The CLI parses arguments, formats output, and maps exit codes; it does not duplicate core business rules.
 - Tasks report progress through core events and respond to cancellation through the cancellation handle.
-- Configuration errors should include understandable context; secrets must not be written to logs or output.
+- Configuration errors should include understandable context; secrets must not be written to logs or output. Settings changes go through the core's lock-serialized `ConfigStore::update` transaction and validated atomic save. Keep OS credential storage mandatory for account tokens; Linux requires an available persistent Secret Service/D-Bus session, with no plaintext fallback.
 
 ## Configuration and data directories
 
-See the [architecture guide](architecture.en.md#download-sources) for default configuration paths. Configuration JSON fields are `downloads.version_list_source`, `downloads.file_source`, `downloads.mirror_root`, `downloads.http_proxy`, and `downloads.max_parallel`. Missing fields use defaults; an explicitly selected but missing configuration file is an error.
+See the [architecture guide](architecture.en.md#download-sources) for default configuration paths. Configuration JSON fields cover `downloads.*`, `auth.microsoft_client_id`, and `launch.java`, `launch.max_memory_mb`, and `launch.auto_install_java`. Missing fields use defaults so older files remain readable; an explicitly selected but missing configuration file is an error. The client ID is public configuration. Proxy credentials are retained for network use but redacted in settings output.
 
 Default game directory priority is: explicit `--game-dir`, an existing `.minecraft` in the current working directory, the platform-conventional directory, `.minecraft` in the home directory, and finally a new `.minecraft` in the current working directory. An existing conventional macOS directory can be reused. `doctor` is read-only; `init` creates the selected directory.
 
@@ -33,4 +33,4 @@ The version-list and file-source preferences are independent and accept `auto`, 
 
 ## Current feature scope
 
-The core provides configuration, directory selection, HTTP downloads, version lookup and installation, Java runtime discovery, launch planning, native extraction, and child-process output capture. Launch currently uses an offline account and does not provide account authentication. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.
+The core provides configuration, directory selection, HTTP downloads, version lookup and installation, managed Java runtime installation under `.ccl/runtimes`, Microsoft account authentication, launch planning, native extraction, and child-process output capture. Account approval and live end-to-end validation remain outstanding; don't describe account login as ready for public use until those gates are complete. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.

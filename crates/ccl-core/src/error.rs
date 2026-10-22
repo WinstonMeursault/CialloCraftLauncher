@@ -21,6 +21,10 @@ pub enum Error {
     NotDirectory(PathBuf),
     #[error("network request failed: {0}")]
     Network(#[from] reqwest::Error),
+    #[error(transparent)]
+    Auth(#[from] crate::auth::AuthError),
+    #[error(transparent)]
+    Account(#[from] crate::accounts::AccountError),
     #[error("task cancelled")]
     Cancelled,
     #[error(transparent)]

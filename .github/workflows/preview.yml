@@ -1,0 +1,59 @@
+name: CLI Preview Packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/feature-p3-cli-accounts
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            ext: zip
+          - label: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            ext: tar.gz
+          - label: Linux x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            ext: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli
+      - name: Assemble archive and checksum
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: ${{ matrix.ext }}
+        run: bash scripts/package-preview.sh
+      - name: Assemble archive and checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: ./scripts/package-preview.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccl-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -8,6 +8,8 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/WinstonMeursault/CialloCraftLauncher"
 
 [workspace.dependencies]
+fs2 = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 clap = { version = "4.6", features = ["derive"] }
 md5 = { package = "md-5", version = "0.10" }
 regex = "1.13"

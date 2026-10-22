@@ -5,7 +5,7 @@ use crate::{
     config::DownloadConfig,
     download::{DownloadManager, DownloadRequest},
     java::{self, JavaRuntime},
-    launch_plan::{self, LaunchPlatform, OfflineAccount, PlanOptions},
+    launch_plan::{self, LaunchPlatform, MicrosoftIdentity, OfflineAccount, PlanOptions},
     metadata::{self, VersionMetadata},
     natives,
     source::{DownloadKind, url_candidates},
@@ -48,6 +48,8 @@ pub enum LaunchError {
     Native(#[from] natives::NativeError),
     #[error(transparent)]
     Download(#[from] crate::download::DownloadError),
+    #[error(transparent)]
+    Runtime(#[from] crate::runtime::RuntimeError),
     #[error("launch cancelled")]
     Cancelled,
     #[error("process worker failed: {0}")]
@@ -68,6 +70,8 @@ pub struct LaunchRequest {
     pub username: String,
     pub java: Option<PathBuf>,
     pub max_memory_mb: u32,
+    pub identity: Option<MicrosoftIdentity>,
+    pub auto_install_java: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,11 +184,44 @@ impl LaunchService {
                 "memory must be in 256..=65536 MiB".into(),
             ));
         }
-        let account = OfflineAccount::new(&request.username)?;
+        let account = OfflineAccount::new(
+            request
+                .identity
+                .as_ref()
+                .map_or(request.username.as_str(), |i| &i.username),
+        )?;
         let root = fs::canonicalize(&request.game_directory)
             .map_err(|source| io(&request.game_directory, source))?;
         let metadata = load_installed_metadata(&root, &request.version)?;
-        let runtime = java::detect_java(request.java.as_deref(), required_java(&metadata))?;
+        let runtime = match java::detect_java(request.java.as_deref(), required_java(&metadata)) {
+            Ok(runtime) => runtime,
+            Err(error @ java::JavaError::NoCompatibleRuntime(_)) => {
+                let component = metadata
+                    .java_version
+                    .as_ref()
+                    .and_then(|v| v.component.as_deref())
+                    .unwrap_or("jre-legacy");
+                if let Some(runtime) = crate::runtime::find_installed_runtime(
+                    &root,
+                    component,
+                    required_java(&metadata),
+                )? {
+                    runtime
+                } else if request.auto_install_java {
+                    crate::runtime::ensure_runtime(
+                        &root,
+                        component,
+                        required_java(&metadata),
+                        &self.config,
+                        context.clone(),
+                    )
+                    .await?
+                } else {
+                    return Err(error.into());
+                }
+            }
+            Err(error) => return Err(error.into()),
+        };
         let platform = LaunchPlatform::current();
         if !same_architecture(&runtime.architecture, &platform.arch) {
             return Err(LaunchError::Invalid(format!(
@@ -204,19 +241,22 @@ impl LaunchService {
             let _ = fs::remove_dir_all(&natives_directory);
             return Err(error);
         }
-        let plan_result = launch_plan::build_launch_plan(
-            &metadata,
-            &PlanOptions {
-                game_directory: root,
-                version: request.version.clone(),
-                natives_directory: natives_directory.clone(),
-                java_executable: runtime.executable.clone(),
-                max_memory_mb: request.max_memory_mb,
-                account,
-                platform,
-                logging_argument,
-            },
-        );
+        let options = PlanOptions {
+            game_directory: root,
+            version: request.version.clone(),
+            natives_directory: natives_directory.clone(),
+            java_executable: runtime.executable.clone(),
+            max_memory_mb: request.max_memory_mb,
+            account,
+            platform,
+            logging_argument,
+        };
+        let plan_result = match &request.identity {
+            Some(identity) => {
+                launch_plan::build_authenticated_launch_plan(&metadata, &options, identity)
+            }
+            None => launch_plan::build_launch_plan(&metadata, &options),
+        };
         match plan_result {
             Ok(plan) => Ok(PreparedLaunch {
                 plan,
@@ -452,6 +492,13 @@ pub async fn run_process(
     let log = Arc::new(Mutex::new(log));
     let started_at_ms = now_ms();
     let mut command = tokio::process::Command::new(&plan.executable);
+    // Let the launcher handle terminal interruption and record cancellation before
+    // stopping the game; sharing a process group lets Java exit first and races the record.
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(windows)]
+    command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+
     command
         .args(&plan.arguments)
         .current_dir(&plan.working_directory)
@@ -467,8 +514,20 @@ pub async fn run_process(
     emit(&context, TaskEvent::ProcessStarted { pid });
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let out_worker = tokio::spawn(capture(stdout, "stdout", log.clone(), context.clone()));
-    let err_worker = tokio::spawn(capture(stderr, "stderr", log.clone(), context.clone()));
+    let out_worker = tokio::spawn(capture(
+        stdout,
+        "stdout",
+        log.clone(),
+        context.clone(),
+        plan.sensitive_values(),
+    ));
+    let err_worker = tokio::spawn(capture(
+        stderr,
+        "stderr",
+        log.clone(),
+        context.clone(),
+        plan.sensitive_values(),
+    ));
     let mut cancelled = false;
     let status = loop {
         tokio::select! {
@@ -519,6 +578,7 @@ async fn capture<R: tokio::io::AsyncRead + Unpin>(
     stream: &'static str,
     log: Arc<Mutex<File>>,
     context: Option<TaskContext>,
+    secrets: Vec<String>,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(reader);
     let mut line = Vec::new();
@@ -528,7 +588,10 @@ async fn capture<R: tokio::io::AsyncRead + Unpin>(
         if read == 0 {
             break;
         }
-        let text = String::from_utf8_lossy(&line);
+        let text = secrets.iter().fold(
+            String::from_utf8_lossy(&line).into_owned(),
+            |text, secret| text.replace(secret, "<redacted>"),
+        );
         {
             let mut file = log
                 .lock()

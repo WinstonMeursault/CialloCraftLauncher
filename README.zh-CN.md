@@ -4,13 +4,14 @@
 
 ## 项目状态
 
-项目处于早期开发阶段。当前 `ccl` 命令行提供只读环境检查 `doctor`，以及创建游戏目录的 `init`。安装、下载和身份验证功能尚未实现。
+项目处于早期开发阶段。`ccl` 命令行提供设置和账户管理、版本列表、校验安装、Java 运行时探测与安装以及游戏启动。Microsoft 账户登录已经实现，但尚未使用本项目注册的应用及真实账户验证；启用账户的预览包尚未满足公开预览验收要求。参阅 [Microsoft 账户设置指南](docs/accounts.zh-CN.md)。
 
 ## 文档
 
 - [架构与设计边界（简体中文）](docs/architecture.zh-CN.md) · [English](docs/architecture.en.md)
 - [命令行与输出（简体中文）](docs/cli.zh-CN.md) · [English](docs/cli.en.md)
 - [开发指南（简体中文）](docs/development.zh-CN.md) · [English](docs/development.en.md)
+- [Microsoft 账户设置（简体中文）](docs/accounts.zh-CN.md) · [English](docs/accounts.en.md)
 - [English project overview](README.md)
 
 ## 致谢
