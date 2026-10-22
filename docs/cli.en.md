@@ -68,7 +68,7 @@ ccl instance rollback my-world
 | `4` | Filesystem error |
 | `5` | Network or installation download error |
 | `6` | Invalid or unknown version |
-| `7` | Installation conflict, including conflicting version metadata or a managed-instance conflict |
+| `7` | Conflict with existing vanilla version metadata or a managed-instance operation |
 | `8` | Launch preparation or game failure, including a nonzero game exit |
 | `9` | Java runtime discovery or validation error |
 | `10` | Account or authentication error |
@@ -76,6 +76,6 @@ ccl instance rollback my-world
 | `12` | Managed instance error |
 | `130` | Operation cancelled |
 
-Instance conflicts use exit code `7`; loader and instance failures use `11` and `12`. Cancellation from loader or instance work uses `130`.
+Existing vanilla version metadata conflicts and managed-instance conflicts use exit code `7`. Loader failures, including loader-profile conflicts, and other instance failures use `11` and `12`. Cancellation from loader or instance work uses `130`.
 
 For a game failure, the JSON result record preserves the game's actual `exit_code`; CLI code `8` reports that the launch did not succeed. With `--json`, command execution results are JSON; clap help and argument parsing errors are text and use the argument-error exit code.

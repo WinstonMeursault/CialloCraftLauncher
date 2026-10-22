@@ -158,9 +158,12 @@ async fn uninstall_loader_removes_only_loader_version_and_keeps_user_data() {
     fs::create_dir_all(instance.join("game/versions/fabric-loader-1")).unwrap();
     fs::create_dir_all(instance.join("game/versions/1.21")).unwrap();
     fs::create_dir_all(instance.join("game/mods")).unwrap();
+    fs::create_dir_all(instance.join("game/config")).unwrap();
     fs::create_dir_all(instance.join("game/saves/world")).unwrap();
     fs::write(instance.join("game/mods/user.jar"), "user").unwrap();
+    fs::write(instance.join("game/config/user.cfg"), "config").unwrap();
     fs::write(instance.join("game/saves/world/level.dat"), "save").unwrap();
+    fs::write(instance.join("game/options.txt"), "options").unwrap();
     fs::write(
         instance.join("instance.json"),
         serde_json::to_vec(&meta("test", "1.21", Some("fabric-loader-1"))).unwrap(),
@@ -177,6 +180,40 @@ async fn uninstall_loader_removes_only_loader_version_and_keeps_user_data() {
     assert_eq!(
         fs::read_to_string(instance.join("game/saves/world/level.dat")).unwrap(),
         "save"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/config/user.cfg")).unwrap(),
+        "config"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/options.txt")).unwrap(),
+        "options"
+    );
+    let rolled_back = service.rollback("test").await.unwrap();
+    assert_eq!(
+        rolled_back.loader,
+        Some(ccl_core::loaders::LoaderKind::Fabric)
+    );
+    assert_eq!(
+        rolled_back.loader_version.as_deref(),
+        Some("fabric-loader-1")
+    );
+    assert!(instance.join("game/versions/fabric-loader-1").exists());
+    assert_eq!(
+        fs::read_to_string(instance.join("game/mods/user.jar")).unwrap(),
+        "user"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/config/user.cfg")).unwrap(),
+        "config"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/saves/world/level.dat")).unwrap(),
+        "save"
+    );
+    assert_eq!(
+        fs::read_to_string(instance.join("game/options.txt")).unwrap(),
+        "options"
     );
 }
 

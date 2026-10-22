@@ -109,11 +109,36 @@ impl InstallService {
     }
 
     pub async fn list_versions(&self) -> Result<VersionManifest, InstallError> {
+        self.list_versions_from(&url_candidates(
+            &self.manifest_url,
+            DownloadKind::VersionList,
+            &self.config,
+        ))
+        .await
+    }
+
+    async fn list_versions_from(
+        &self,
+        candidates: &[String],
+    ) -> Result<VersionManifest, InstallError> {
         let mut failures = Vec::new();
-        for url in url_candidates(&self.manifest_url, DownloadKind::VersionList, &self.config) {
-            match self.http.get_json::<serde_json::Value>(&url).await {
+        for url in candidates {
+            match self.http.get_json::<serde_json::Value>(url).await {
                 Ok(value) => match VersionManifest::parse(&value.to_string()) {
-                    Ok(manifest) => return Ok(manifest),
+                    Ok(manifest) => {
+                        // Some mirrors serve the older manifest without metadata hashes.
+                        // It cannot satisfy verified installation; try the next source.
+                        if manifest.versions.iter().all(|entry| {
+                            entry.sha1.as_deref().is_some_and(|hash| {
+                                hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                            })
+                        }) {
+                            return Ok(manifest);
+                        }
+                        failures.push(format!(
+                            "{url}: version manifest lacks valid metadata SHA-1 values"
+                        ));
+                    }
                     Err(error) => failures.push(format!("{url}: {error}")),
                 },
                 Err(e) => failures.push(format!("{url}: {e}")),
@@ -501,6 +526,40 @@ struct AssetObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_mirror_manifest_without_hashes_falls_back_to_verified_manifest() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for hash in [None, Some("0123456789012345678901234567890123456789")] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                let mut entry =
+                    serde_json::json!({"id":"fixture", "url":"https://example.com/version.json"});
+                if let Some(hash) = hash {
+                    entry["sha1"] = serde_json::json!(hash);
+                }
+                let body = serde_json::json!({"versions":[entry]}).to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let service = InstallService::new(DownloadConfig::default()).unwrap();
+        let result = service
+            .list_versions_from(&[format!("{base}/legacy"), format!("{base}/verified")])
+            .await
+            .unwrap();
+        assert_eq!(
+            result.versions[0].sha1.as_deref(),
+            Some("0123456789012345678901234567890123456789")
+        );
+        worker.join().unwrap();
+    }
 
     #[test]
     fn rejects_path_traversal_and_bad_hashes() {

@@ -30,6 +30,15 @@ pub async fn versions(
     kind: LoaderKind,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LoaderError> {
+    versions_with_context(config, kind, minecraft, &None).await
+}
+
+async fn versions_with_context(
+    config: &DownloadConfig,
+    kind: LoaderKind,
+    minecraft: &str,
+    context: &Option<TaskContext>,
+) -> Result<Vec<LoaderVersion>, LoaderError> {
     safe_segment(minecraft)?;
     let root = maven_root(kind)?;
     let (path, prefix) = match kind {
@@ -55,62 +64,59 @@ pub async fn versions(
     let url = format!("{root}/{path}");
     let mut errors = Vec::new();
     for candidate in maven_candidates(&url, DownloadKind::VersionList, config) {
-        match http.get(&candidate).send().await {
-            Ok(xml) => {
-                let xml = match xml.error_for_status() {
-                    Ok(response) => match response.text().await {
-                        Ok(text) => text,
-                        Err(e) => {
-                            errors.push(format!("{candidate}: {e}"));
-                            continue;
-                        }
-                    },
-                    Err(e) => {
-                        errors.push(format!("{candidate}: {e}"));
-                        continue;
-                    }
-                };
-                let neo_prefix = if kind == LoaderKind::NeoForge {
-                    format!("{}.", minecraft.strip_prefix("1.").unwrap_or(minecraft))
+        let result = async {
+            http.get(&candidate)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await
+        };
+        let xml = tokio::select! {
+            result = result => match result {
+                Ok(text) => text,
+                Err(e) => { errors.push(format!("{candidate}: {e}")); continue; }
+            },
+            _ = wait_cancel(context) => return Err(LoaderError::Cancelled),
+        };
+        let neo_prefix = if kind == LoaderKind::NeoForge {
+            format!("{}.", minecraft.strip_prefix("1.").unwrap_or(minecraft))
+        } else {
+            String::new()
+        };
+        let mut values = xml
+            .split("<version>")
+            .skip(1)
+            .filter_map(|s| s.split_once("</version>").map(|(v, _)| v.trim().to_owned()))
+            .filter_map(|v| {
+                let version = if prefix.is_empty() {
+                    v
                 } else {
-                    String::new()
+                    v.strip_prefix(&prefix)?.to_owned()
                 };
-                let mut values = xml
-                    .split("<version>")
-                    .skip(1)
-                    .filter_map(|s| s.split_once("</version>").map(|(v, _)| v.trim().to_owned()))
-                    .filter_map(|v| {
-                        let version = if prefix.is_empty() {
-                            v
-                        } else {
-                            v.strip_prefix(&prefix)?.to_owned()
-                        };
-                        if safe_segment(&version).is_err() {
-                            return None;
-                        }
-                        if !neo_prefix.is_empty() && !version.starts_with(&neo_prefix) {
-                            return None;
-                        }
-                        let lower = version.to_ascii_lowercase();
-                        (!version.is_empty()).then_some(LoaderVersion {
-                            stable: !["beta", "alpha", "rc", "pre", "snapshot"]
-                                .iter()
-                                .any(|marker| lower.contains(marker)),
-                            version,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                if values.is_empty() {
-                    errors.push(format!(
-                        "{candidate}: no versions found for Minecraft {minecraft}"
-                    ));
-                    continue;
+                if safe_segment(&version).is_err() {
+                    return None;
                 }
-                values.reverse();
-                return Ok(values);
-            }
-            Err(e) => errors.push(format!("{candidate}: {e}")),
+                if !neo_prefix.is_empty() && !version.starts_with(&neo_prefix) {
+                    return None;
+                }
+                let lower = version.to_ascii_lowercase();
+                (!version.is_empty()).then_some(LoaderVersion {
+                    stable: !["beta", "alpha", "rc", "pre", "snapshot"]
+                        .iter()
+                        .any(|marker| lower.contains(marker)),
+                    version,
+                })
+            })
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            errors.push(format!(
+                "{candidate}: no versions found for Minecraft {minecraft}"
+            ));
+            continue;
         }
+        values.reverse();
+        return Ok(values);
     }
     Err(LoaderError::Unsupported(format!(
         "loader versions unavailable: {}",
@@ -133,7 +139,7 @@ pub async fn install(
             "Forge installer cannot install Fabric".into(),
         ));
     }
-    let choices = versions(config, request.kind, &request.minecraft).await?;
+    let choices = versions_with_context(config, request.kind, &request.minecraft, &context).await?;
     if !choices.iter().any(|v| v.version == request.version) {
         return Err(LoaderError::Unsupported(format!(
             "{} {} is not published for Minecraft {}",
@@ -171,7 +177,7 @@ pub async fn install(
         .join("installers")
         .join(format!("{}-{coordinate}-installer.jar", artifact));
     let downloader = DownloadManager::new(config)?;
-    let expected_sha1 = fetch_sha1(config, &format!("{installer_url}.sha1")).await?;
+    let expected_sha1 = fetch_sha1(config, &format!("{installer_url}.sha1"), &context).await?;
     let mut download = DownloadRequest::new(
         maven_candidates(&installer_url, DownloadKind::File, config),
         &installer,
@@ -335,52 +341,6 @@ pub async fn install(
         {
             continue;
         }
-        let processor_args = &args[3..];
-        if option_value(processor_args, "--task").as_deref() == Some("DOWNLOAD_MOJMAPS") {
-            let output = option_value(processor_args, "--output").ok_or_else(|| {
-                LoaderError::Unsupported("DOWNLOAD_MOJMAPS processor has no --output".into())
-            })?;
-            let output_path = PathBuf::from(output);
-            if !output_path.is_absolute() || !output_path.starts_with(&options.game_directory) {
-                return Err(LoaderError::Unsupported(
-                    "mapping output escapes staging directory".into(),
-                ));
-            }
-            let mappings = vanilla_meta
-                .downloads
-                .get("client_mappings")
-                .ok_or_else(|| {
-                    LoaderError::Unsupported(
-                        "vanilla version metadata has no client mappings download".into(),
-                    )
-                })?;
-            let url = mappings.url.as_deref().ok_or_else(|| {
-                LoaderError::Unsupported("client mappings download has no URL".into())
-            })?;
-            let mut request = DownloadRequest::new(
-                source::url_candidates(url, DownloadKind::File, config),
-                output_path,
-            );
-            if let Some(hash) = mappings.sha1.as_deref() {
-                request = request.with_sha1(hash);
-            }
-            if let Some(size) = mappings.size {
-                request = request.with_size(size);
-            }
-            if let Some(ctx) = context.clone() {
-                request = request.with_task_context(ctx);
-            }
-            downloader.download(request).await?;
-            for (path, expected) in output_hashes {
-                if file_hash(&path).as_deref() != Some(expected.as_str()) {
-                    return Err(LoaderError::Unsupported(format!(
-                        "mapping processor output hash mismatch at {}",
-                        path.display()
-                    )));
-                }
-            }
-            continue;
-        }
         if let Some(c) = &context {
             c.emit(TaskEvent::Log {
                 stream: "installer".into(),
@@ -443,12 +403,6 @@ pub async fn install(
         serde_json::to_vec_pretty(&version).map_err(|e| LoaderError::Unsupported(e.to_string()))?;
     atomic_write(&json_path, &encoded)?;
     Ok(version_id)
-}
-
-fn option_value(args: &[String], option: &str) -> Option<String> {
-    args.windows(2)
-        .find(|pair| pair[0] == option)
-        .map(|pair| pair[1].clone())
 }
 
 #[derive(Deserialize)]
@@ -788,7 +742,7 @@ async fn ensure_artifact(
         FORGE_MAVEN
     };
     let url = format!("{root}/{rel}");
-    let expected = fetch_sha1(c, &format!("{url}.sha1")).await?;
+    let expected = fetch_sha1(c, &format!("{url}.sha1"), ctx).await?;
     if file_hash(path).as_deref() == Some(expected.as_str()) {
         return Ok(());
     }
@@ -844,7 +798,7 @@ async fn download_profile_libraries(
                     library.name
                 )));
             }
-            None => fetch_sha1(config, &format!("{url}.sha1")).await?,
+            None => fetch_sha1(config, &format!("{url}.sha1"), context).await?,
         };
         if file_hash(&destination).as_deref() == Some(expected.as_str()) {
             continue;
@@ -867,7 +821,11 @@ fn artifact_relative(coord: &str) -> Result<String, LoaderError> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .map_err(|_| LoaderError::Unsupported("invalid artifact path".into()))
 }
-async fn fetch_sha1(c: &DownloadConfig, url: &str) -> Result<String, LoaderError> {
+async fn fetch_sha1(
+    c: &DownloadConfig,
+    url: &str,
+    context: &Option<TaskContext>,
+) -> Result<String, LoaderError> {
     let mut client = reqwest::Client::builder()
         .user_agent(concat!("CialloCraftLauncher/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(20))
@@ -878,20 +836,27 @@ async fn fetch_sha1(c: &DownloadConfig, url: &str) -> Result<String, LoaderError
     let client = client.build()?;
     let mut errors = Vec::new();
     for candidate in maven_candidates(url, DownloadKind::File, c) {
-        match client.get(&candidate).send().await {
-            Ok(r) => match r.error_for_status() {
-                Ok(r) => match r.text().await {
-                    Ok(s) => {
-                        let hash = s.split_whitespace().next().unwrap_or("").trim();
-                        if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-                            return Ok(hash.to_ascii_lowercase());
-                        }
-                        errors.push(format!("{candidate}: malformed SHA-1"));
-                    }
-                    Err(e) => errors.push(format!("{candidate}: {e}")),
-                },
-                Err(e) => errors.push(format!("{candidate}: {e}")),
-            },
+        let fetch = async {
+            client
+                .get(&candidate)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await
+        };
+        let response = tokio::select! {
+            response = fetch => response,
+            _ = wait_cancel(context) => return Err(LoaderError::Cancelled),
+        };
+        match response {
+            Ok(s) => {
+                let hash = s.split_whitespace().next().unwrap_or("").trim();
+                if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Ok(hash.to_ascii_lowercase());
+                }
+                errors.push(format!("{candidate}: malformed SHA-1"));
+            }
             Err(e) => errors.push(format!("{candidate}: {e}")),
         }
     }
@@ -1006,12 +971,12 @@ mod tests {
 
     #[test]
     fn processor_output_paths_cannot_escape_staging_root() {
-        let root = Path::new("/tmp/ccl-staging");
+        let root = std::env::temp_dir().join("ccl-staging");
         let mut args = vec!["--output".into(), "../outside.jar".into()];
-        assert!(constrain_processor_outputs(&mut args, root).is_err());
+        assert!(constrain_processor_outputs(&mut args, &root).is_err());
         let mut safe = vec!["--to".into(), "result.jar".into()];
-        constrain_processor_outputs(&mut safe, root).unwrap();
-        assert_eq!(safe[1], "/tmp/ccl-staging/result.jar");
+        constrain_processor_outputs(&mut safe, &root).unwrap();
+        assert_eq!(PathBuf::from(&safe[1]), root.join("result.jar"));
     }
 
     #[tokio::test]

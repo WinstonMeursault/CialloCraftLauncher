@@ -199,9 +199,7 @@ impl InstanceService {
         if !resume {
             fs::create_dir_all(&stage).map_err(|e| io(&stage, e))?;
             if game.exists() {
-                copy_user_data(&game, &stage)?;
-                reuse_runtime_files(&game, &stage)?;
-                reuse_runtimes(&game, &stage)?;
+                clone_game_generation(&game, &stage)?;
             }
             atomic_write(
                 &request_marker,
@@ -316,7 +314,7 @@ impl InstanceService {
         Ok(next_meta)
     }
 
-    /// Remove loader metadata and loader-created version entries while retaining the game directory and user data.
+    /// Return to vanilla in a new generation while preserving the loader generation for rollback.
     pub async fn uninstall_loader(
         &self,
         id: &str,
@@ -330,39 +328,42 @@ impl InstanceService {
         let _lock = InstanceLock::acquire(&path.join(".operation.lock"), id)?;
         recover_instance(&path)?;
         let meta_path = path.join("instance.json");
-        let mut meta = read_metadata(&meta_path)?;
-        let Some(loader_version) = meta.loader_version.take() else {
-            return Ok(meta);
-        };
-        check_cancelled(&context)?;
-        let game = path.join("game");
-        // The loader's generated version directory is uniquely named; never touch the base MC version or shared root.
-        let version = game.join("versions").join(&loader_version);
-        let removed_version = game
-            .join("versions")
-            .join(format!(".ccl-uninstall-{}", std::process::id()));
-        reject_symlink(&version)?;
-        reject_symlink(&removed_version)?;
-        if version.exists() {
-            fs::rename(&version, &removed_version).map_err(|e| io(&version, e))?;
-        }
-        meta.loader = None;
-        meta.game_directory = game;
-        if let Err(error) = atomic_write(
-            &meta_path,
-            &serde_json::to_vec_pretty(&meta).map_err(|source| InstanceError::Metadata {
-                path: meta_path.clone(),
-                source,
-            })?,
-        ) {
-            if removed_version.exists() {
-                let _ = fs::rename(&removed_version, &version);
+        let current = read_metadata(&meta_path)?;
+        let Some(loader_version) = current.loader_version.as_deref() else {
+            // A failed install may have left a resumable stage; vanilla uninstall discards it.
+            let stage = path.join(".stage");
+            reject_symlink(&stage)?;
+            if stage.exists() {
+                fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
             }
-            return Err(error);
+            return Ok(current);
+        };
+        validate_segment(loader_version)?;
+        let game = path.join("game");
+        let stage = path.join(".stage");
+        let previous = path.join("previous");
+        reject_symlink(&game)?;
+        reject_symlink(&stage)?;
+        reject_symlink(&previous)?;
+        if stage.exists() {
+            fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
         }
-        if removed_version.exists() {
-            fs::remove_dir_all(&removed_version).map_err(|e| io(&removed_version, e))?;
+        fs::create_dir_all(&stage).map_err(|e| io(&stage, e))?;
+        clone_game_generation(&game, &stage)?;
+        let loader_profile = stage.join("versions").join(loader_version);
+        reject_symlink(&loader_profile)?;
+        if loader_profile.exists() {
+            fs::remove_dir_all(&loader_profile).map_err(|e| io(&loader_profile, e))?;
         }
+        check_cancelled(&context)?;
+        let meta = InstanceMetadata {
+            id: current.id,
+            minecraft: current.minecraft,
+            loader: None,
+            loader_version: None,
+            game_directory: game.clone(),
+        };
+        commit_generation(&path, &stage, &game, &previous, &meta)?;
         Ok(meta)
     }
 
@@ -501,6 +502,11 @@ fn read_metadata(path: &Path) -> InstanceResult<InstanceMetadata> {
     if meta.loader.is_some() != meta.loader_version.is_some() {
         return Err(InstanceError::InvalidId(
             "loader kind and loader version must both be present or absent".into(),
+        ));
+    }
+    if meta.loader.is_some() && meta.loader_version.as_deref() == Some(meta.minecraft.as_str()) {
+        return Err(InstanceError::InvalidId(
+            "loader profile cannot use the vanilla Minecraft version ID".into(),
         ));
     }
     let expected_game = path.parent().unwrap().join("game");
@@ -797,22 +803,66 @@ fn recover_rollback_user_data(target: &Path) -> InstanceResult<()> {
     Ok(())
 }
 
-fn copy_user_data(from: &Path, to: &Path) -> InstanceResult<()> {
-    for name in [
-        "mods",
-        "config",
-        "saves",
-        "resourcepacks",
-        "shaderpacks",
-        "screenshots",
-    ] {
-        let src = from.join(name);
-        reject_symlink(&src)?;
-        if src.exists() {
-            copy_tree(&src, &to.join(name))?;
+fn clone_game_generation(from: &Path, to: &Path) -> InstanceResult<()> {
+    reject_symlink(from)?;
+    fs::create_dir_all(to).map_err(|e| io(to, e))?;
+    for entry in fs::read_dir(from).map_err(|e| io(from, e))? {
+        let entry = entry.map_err(|e| io(from, e))?;
+        let source = entry.path();
+        let destination = to.join(entry.file_name());
+        if entry.file_name() == ".ccl-instance-request.json" {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|e| io(&source, e))?;
+        if kind.is_symlink() {
+            return Err(InstanceError::Conflict(format!(
+                "symlink is not allowed in instance game data: {}",
+                source.display()
+            )));
+        } else if kind.is_dir() && entry.file_name() == ".ccl" {
+            clone_ccl_directory(from, to)?;
+        } else if kind.is_dir() && entry.file_name() == "assets" {
+            link_tree(&source, &destination)?;
+        } else if kind.is_dir() {
+            copy_tree(&source, &destination)?;
+        } else if kind.is_file() {
+            fs::copy(&source, &destination).map_err(|e| io(&destination, e))?;
         }
     }
     Ok(())
+}
+
+fn clone_ccl_directory(from_game: &Path, to_game: &Path) -> InstanceResult<()> {
+    let source_root = from_game.join(".ccl");
+    let destination_root = to_game.join(".ccl");
+    reject_symlink(&source_root)?;
+    fs::create_dir_all(&destination_root).map_err(|e| io(&destination_root, e))?;
+    for entry in fs::read_dir(&source_root).map_err(|e| io(&source_root, e))? {
+        let entry = entry.map_err(|e| io(&source_root, e))?;
+        if entry.file_name() == "runtimes" {
+            if !entry.file_type().map_err(|e| io(entry.path(), e))?.is_dir() {
+                return Err(InstanceError::Conflict(format!(
+                    "runtime storage is not a directory: {}",
+                    entry.path().display()
+                )));
+            }
+            continue;
+        }
+        let source = entry.path();
+        let destination = destination_root.join(entry.file_name());
+        let kind = entry.file_type().map_err(|e| io(&source, e))?;
+        if kind.is_symlink() {
+            return Err(InstanceError::Conflict(format!(
+                "symlink is not allowed in instance .ccl data: {}",
+                source.display()
+            )));
+        } else if kind.is_dir() {
+            copy_tree(&source, &destination)?;
+        } else if kind.is_file() {
+            fs::copy(&source, &destination).map_err(|e| io(&destination, e))?;
+        }
+    }
+    reuse_runtimes(from_game, to_game)
 }
 
 fn replace_user_data(from: &Path, to: &Path) -> InstanceResult<()> {
@@ -924,51 +974,6 @@ fn copy_tree(from: &Path, to: &Path) -> InstanceResult<()> {
     Ok(())
 }
 
-fn reuse_runtime_files(from: &Path, to: &Path) -> InstanceResult<()> {
-    let assets = from.join("assets");
-    reject_symlink(&assets)?;
-    if assets.is_dir() {
-        link_tree(&assets, &to.join("assets"))?;
-    }
-    for name in ["libraries", "versions"] {
-        let source = from.join(name);
-        let destination = to.join(name);
-        reject_symlink(&source)?;
-        if source.is_dir() {
-            copy_reusable_tree(&source, &destination, name == "versions")?;
-        }
-    }
-    Ok(())
-}
-
-fn copy_reusable_tree(from: &Path, to: &Path, skip_version_metadata: bool) -> InstanceResult<()> {
-    fs::create_dir_all(to).map_err(|e| io(to, e))?;
-    for entry in fs::read_dir(from).map_err(|e| io(from, e))? {
-        let entry = entry.map_err(|e| io(from, e))?;
-        let source = entry.path();
-        let destination = to.join(entry.file_name());
-        let kind = entry.file_type().map_err(|e| io(&source, e))?;
-        if kind.is_symlink() {
-            return Err(InstanceError::Conflict(format!(
-                "symlink is not allowed in reusable game files: {}",
-                source.display()
-            )));
-        } else if kind.is_dir() {
-            copy_reusable_tree(&source, &destination, skip_version_metadata)?;
-        } else if kind.is_file() {
-            if source
-                .file_name()
-                .is_some_and(|name| name == ".ccl-install.lock")
-                || (skip_version_metadata && source.extension().is_some_and(|ext| ext == "json"))
-            {
-                continue;
-            }
-            fs::copy(&source, &destination).map_err(|e| io(&destination, e))?;
-        }
-    }
-    Ok(())
-}
-
 fn reuse_runtimes(from: &Path, to: &Path) -> InstanceResult<()> {
     let source_root = from.join(".ccl/runtimes");
     let destination_root = to.join(".ccl/runtimes");
@@ -1014,7 +1019,15 @@ fn link_runtime_tree(
             })?;
             let mapped_absolute = destination_root.join(relative);
             let mapped = if target.is_absolute() {
-                mapped_absolute
+                relative_link_target(
+                    destination.parent().ok_or_else(|| {
+                        InstanceError::Conflict(format!(
+                            "runtime symlink has no parent: {}",
+                            destination.display()
+                        ))
+                    })?,
+                    &mapped_absolute,
+                )?
             } else {
                 target
             };
@@ -1023,6 +1036,31 @@ fn link_runtime_tree(
         }
     }
     Ok(())
+}
+
+fn relative_link_target(from: &Path, target: &Path) -> InstanceResult<PathBuf> {
+    let from_components: Vec<_> = from.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+    let common = from_components
+        .iter()
+        .zip(&target_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common == 0 {
+        return Err(InstanceError::Conflict(format!(
+            "runtime symlink cannot be relocated from {} to {}",
+            from.display(),
+            target.display()
+        )));
+    }
+    let mut relative = PathBuf::new();
+    for _ in common..from_components.len() {
+        relative.push("..");
+    }
+    for component in &target_components[common..] {
+        relative.push(component.as_os_str());
+    }
+    Ok(relative)
 }
 
 #[cfg(unix)]
@@ -1061,19 +1099,8 @@ fn link_tree(from: &Path, to: &Path) -> InstanceResult<()> {
             )));
         } else if file_type.is_dir() {
             link_tree(&source, &destination)?;
-        } else if file_type.is_file() {
-            // Version JSON is checked against the manifest by InstallService. Not linking it
-            // also lets the loader installer refresh generated profiles without a stale conflict.
-            if source.extension().is_some_and(|ext| ext == "json")
-                || source
-                    .file_name()
-                    .is_some_and(|name| name == ".ccl-install.lock")
-            {
-                continue;
-            }
-            if fs::hard_link(&source, &destination).is_err() {
-                fs::copy(&source, &destination).map_err(|e| io(&destination, e))?;
-            }
+        } else if file_type.is_file() && fs::hard_link(&source, &destination).is_err() {
+            fs::copy(&source, &destination).map_err(|e| io(&destination, e))?;
         }
     }
     Ok(())
@@ -1306,6 +1333,70 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_uninstall_commit_keeps_loader_generation_for_rollback() {
+        let temp = Temp::new();
+        let instance = temp.0.join("test");
+        fs::create_dir_all(&instance).unwrap();
+        let game = instance.join("game");
+        let previous = instance.join("previous");
+        let loader_id = "1.21.1-forge-52.1.0";
+        fs::create_dir_all(game.join("versions/1.21.1")).unwrap();
+        fs::create_dir_all(previous.join("versions").join(loader_id)).unwrap();
+        fs::write(
+            previous
+                .join("versions")
+                .join(loader_id)
+                .join(format!("{loader_id}.json")),
+            "profile",
+        )
+        .unwrap();
+        let old = InstanceMetadata {
+            id: "test".into(),
+            minecraft: "1.21.1".into(),
+            loader: Some(LoaderKind::Forge),
+            loader_version: Some(loader_id.into()),
+            game_directory: game.clone(),
+        };
+        let next = InstanceMetadata {
+            loader: None,
+            loader_version: None,
+            ..old.clone()
+        };
+        fs::write(
+            instance.join("instance.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            instance.join(".commit.json"),
+            serde_json::to_vec(&CommitJournal {
+                old: Some(old),
+                next,
+                had_previous: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        recover_instance(&instance).unwrap();
+        assert!(
+            read_metadata(&instance.join("instance.json"))
+                .unwrap()
+                .loader
+                .is_none()
+        );
+        let previous_meta = read_metadata(&instance.join("previous.json")).unwrap();
+        assert_eq!(previous_meta.loader, Some(LoaderKind::Forge));
+        assert!(
+            previous
+                .join("versions")
+                .join(loader_id)
+                .join(format!("{loader_id}.json"))
+                .is_file()
+        );
+    }
+
+    #[test]
     fn failed_stage_can_resume_only_for_the_same_request() {
         let temp = Temp::new();
         let stage = temp.0.join(".stage");
@@ -1330,6 +1421,32 @@ mod tests {
         assert_eq!(
             fs::read_to_string(stage.join("downloaded-resource")).unwrap(),
             "ready"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_runtime_symlinks_remain_inside_the_moved_generation() {
+        use std::os::unix::fs::symlink;
+
+        let temp = Temp::new();
+        let current = temp.0.join("game");
+        let stage = temp.0.join(".stage");
+        let runtime = current.join(".ccl/runtimes/jre/bin");
+        fs::create_dir_all(&runtime).unwrap();
+        let java = runtime.join("java");
+        fs::write(&java, "runtime").unwrap();
+        let alias = runtime.join("current-java");
+        symlink(&java, &alias).unwrap();
+
+        clone_game_generation(&current, &stage).unwrap();
+        let staged_alias = stage.join(".ccl/runtimes/jre/bin/current-java");
+        assert!(!fs::read_link(&staged_alias).unwrap().is_absolute());
+        fs::rename(&stage, current.with_file_name("active")).unwrap();
+        let active = current.with_file_name("active");
+        assert_eq!(
+            fs::canonicalize(active.join(".ccl/runtimes/jre/bin/current-java")).unwrap(),
+            fs::canonicalize(active.join(".ccl/runtimes/jre/bin/java")).unwrap()
         );
     }
 }

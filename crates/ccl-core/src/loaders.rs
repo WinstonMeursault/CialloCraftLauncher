@@ -141,7 +141,10 @@ impl LoaderError {
     pub fn is_cancelled(&self) -> bool {
         matches!(
             self,
-            Self::Cancelled | Self::Install(InstallError::Cancelled)
+            Self::Cancelled
+                | Self::Download(DownloadError::Cancelled)
+                | Self::Install(InstallError::Cancelled)
+                | Self::Install(InstallError::Download(DownloadError::Cancelled))
         )
     }
 }
@@ -668,5 +671,9 @@ mod tests {
             check_cancelled(&Some(context)),
             Err(LoaderError::Cancelled)
         ));
+        assert!(LoaderError::Download(DownloadError::Cancelled).is_cancelled());
+        assert!(
+            LoaderError::Install(InstallError::Download(DownloadError::Cancelled)).is_cancelled()
+        );
     }
 }

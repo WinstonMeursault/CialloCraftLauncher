@@ -4,6 +4,8 @@ CCL can query upstream loader metadata and install Fabric, Forge, and NeoForge i
 
 Fabric profiles come from Fabric Meta. Forge and NeoForge use their supported modern installer formats. Legacy installer formats that the current installer path cannot process return an unsupported-format error.
 
+The Linux validation run installed Minecraft `1.21.1` with Fabric `0.20.1`, reached the Minecraft main menu, and exited with code `0`. This confirms that one real Fabric combination launches; it does not certify other versions, platforms, Forge/NeoForge, or third-party mods.
+
 ## Query loader releases
 
 ```sh

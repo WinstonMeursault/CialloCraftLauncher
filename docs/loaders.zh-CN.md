@@ -4,6 +4,8 @@ CCL 可以查询上游加载器元数据，并将 Fabric、Forge 和 NeoForge �
 
 Fabric 配置文件来自 Fabric Meta。Forge 和 NeoForge 使用当前支持的现代安装器格式。当前安装流程无法处理的旧版安装器格式会返回不支持格式的错误。
 
+Linux 验证运行成功安装了 Minecraft `1.21.1` 和 Fabric `0.20.1`，进入 Minecraft 主菜单，并以退出码 `0` 正常结束。这只确认了一个真实 Fabric 组合可以启动，不代表其他版本、平台、Forge/NeoForge 或第三方模组也已验证。
+
 ## 查询加载器版本
 
 ```sh
