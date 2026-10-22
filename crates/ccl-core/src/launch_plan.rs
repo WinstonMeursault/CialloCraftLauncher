@@ -310,10 +310,23 @@ fn build_plan(
     metadata
         .client()
         .ok_or(PlanError::Missing("downloads.client"))?;
+    let client_version = metadata
+        .extra
+        .get("jar")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&options.version);
+    if client_version.is_empty()
+        || client_version == "."
+        || client_version == ".."
+        || client_version.contains(['/', '\\', ':'])
+        || client_version.chars().any(char::is_control)
+    {
+        return Err(PlanError::InvalidVersion);
+    }
     let client_path = game
         .join("versions")
-        .join(&options.version)
-        .join(format!("{}.jar", options.version));
+        .join(client_version)
+        .join(format!("{client_version}.jar"));
     let client_path = client_path
         .canonicalize()
         .map_err(|e| PlanError::Path(client_path.display().to_string(), e))?;

@@ -15,7 +15,9 @@ use ccl_core::{
     config::{ConfigStore, LauncherConfig, default_config_path},
     directory::DirectoryInputs,
     install::{InstallError, InstallOptions, InstallService},
+    instances::InstanceService,
     launch::{self, LaunchError, LaunchRequest, LaunchService},
+    loaders::{LoaderKind, LoaderRequest, LoaderService},
     network::HttpClient,
 };
 use clap::{Parser, Subcommand};
@@ -70,9 +72,26 @@ enum Command {
     },
     /// List versions already installed in the selected game directory.
     Instances,
+    /// List compatible mod loader releases.
+    Loaders {
+        #[arg(value_parser = parse_loader)]
+        loader: LoaderKind,
+        minecraft: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Manage isolated modded instances and loader revisions.
+    Instance {
+        #[command(subcommand)]
+        command: InstanceCommand,
+    },
     /// Launch an installed version with the selected Microsoft account or offline identity.
     Launch {
-        version: String,
+        #[arg(required_unless_present = "instance", conflicts_with = "instance")]
+        version: Option<String>,
+        /// Launch an isolated instance using its selected loader revision.
+        #[arg(long)]
+        instance: Option<String>,
         /// Use an offline profile with this name.
         #[arg(long, conflicts_with = "account")]
         username: Option<String>,
@@ -119,6 +138,47 @@ enum SettingsCommand {
         #[arg(long)]
         all: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum InstanceCommand {
+    List,
+    Show {
+        id: String,
+    },
+    /// Create an isolated instance with a pinned loader release.
+    Install {
+        id: String,
+        minecraft: String,
+        #[arg(value_parser = parse_loader)]
+        loader: LoaderKind,
+        loader_version: String,
+    },
+    /// Replace an instance loader; retain game data and a rollback revision.
+    Update {
+        id: String,
+        minecraft: String,
+        #[arg(value_parser = parse_loader)]
+        loader: LoaderKind,
+        loader_version: String,
+    },
+    /// Switch to the previous successful loader revision.
+    Rollback {
+        id: String,
+    },
+    /// Return to vanilla while preserving mods, configuration and saves.
+    UninstallLoader {
+        id: String,
+    },
+}
+
+fn parse_loader(value: &str) -> std::result::Result<LoaderKind, String> {
+    match value {
+        "fabric" => Ok(LoaderKind::Fabric),
+        "forge" => Ok(LoaderKind::Forge),
+        "neoforge" => Ok(LoaderKind::NeoForge),
+        _ => Err("expected fabric, forge or neoforge".into()),
+    }
 }
 
 #[derive(Subcommand)]
@@ -367,12 +427,70 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Instances => Ok(
             json!({ "ok": true, "game_directory": resolution, "instances": launch::list_installed_versions(&resolution.path)? }),
         ),
+        Command::Loaders {
+            loader,
+            minecraft,
+            limit,
+        } => {
+            let versions = LoaderService::new(config.downloads.clone())?
+                .versions(*loader, minecraft)
+                .await?;
+            let versions: Vec<_> = versions
+                .into_iter()
+                .take(if *limit == 0 { usize::MAX } else { *limit })
+                .collect();
+            Ok(
+                json!({ "ok": true, "loader": loader, "minecraft": minecraft, "loader_versions": versions }),
+            )
+        }
+        Command::Instance { command } => {
+            let service = InstanceService::new(resolution.path, config.downloads.clone())?;
+            match command {
+                InstanceCommand::List => {
+                    Ok(json!({ "ok": true, "managed_instances": service.list()? }))
+                }
+                InstanceCommand::Show { id } => {
+                    Ok(json!({ "ok": true, "instance": service.metadata(id)? }))
+                }
+                InstanceCommand::Install {
+                    id,
+                    minecraft,
+                    loader,
+                    loader_version,
+                }
+                | InstanceCommand::Update {
+                    id,
+                    minecraft,
+                    loader,
+                    loader_version,
+                } => {
+                    let request = LoaderRequest {
+                        kind: *loader,
+                        minecraft: minecraft.clone(),
+                        version: loader_version.clone(),
+                    };
+                    let context = operation_context();
+                    let instance = service.install(id, &request, Some(context)).await?;
+                    Ok(json!({ "ok": true, "instance": instance }))
+                }
+                InstanceCommand::Rollback { id } => {
+                    Ok(json!({ "ok": true, "instance": service.rollback(id).await? }))
+                }
+                InstanceCommand::UninstallLoader { id } => {
+                    let instance = service
+                        .uninstall_loader(id, Some(operation_context()))
+                        .await?;
+                    Ok(json!({ "ok": true, "instance": instance }))
+                }
+            }
+        }
         Command::Logs { run, lines } => {
             let (run_id, text) = launch::read_logs(&resolution.path, run.as_deref(), *lines)?;
             Ok(json!({ "ok": true, "run_id": run_id, "log": text }))
         }
         Command::Launch {
             version,
+            instance,
             username,
             offline,
             account,
@@ -381,6 +499,28 @@ async fn run(cli: &Cli) -> Result<Value> {
             memory,
             dry_run,
         } => {
+            let instance_service = if instance.is_some() {
+                Some(InstanceService::new(
+                    resolution.path.clone(),
+                    config.downloads.clone(),
+                )?)
+            } else {
+                None
+            };
+            let instance_guard = match (&instance_service, instance) {
+                (Some(service), Some(id)) => Some(service.acquire_launch(id)?),
+                _ => None,
+            };
+            let (game_directory, version) = match &instance_guard {
+                Some(guard) => (
+                    guard.game_directory().to_path_buf(),
+                    guard.version().to_owned(),
+                ),
+                None => (
+                    resolution.path.clone(),
+                    version.clone().expect("clap requires version or instance"),
+                ),
+            };
             let service = LaunchService::new(config.downloads.clone());
             let token = signal_token();
             let store = account_store(&config_path)?;
@@ -410,8 +550,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                 None
             };
             let request = LaunchRequest {
-                game_directory: resolution.path,
-                version: version.clone(),
+                game_directory,
+                version,
                 username: username.clone().unwrap_or_else(|| "CCLPlayer".into()),
                 java: java.clone().or(config.launch.java.clone()),
                 max_memory_mb: memory.unwrap_or(config.launch.max_memory_mb),
@@ -473,7 +613,25 @@ fn signal_token() -> CancellationToken {
     token
 }
 
+fn operation_context() -> TaskContext {
+    TaskContext::new(
+        signal_token(),
+        Arc::new(|event| match event {
+            TaskEvent::Started { task } if !task.starts_with("download ") => eprintln!("{task}..."),
+            TaskEvent::Log { line, .. } => eprintln!("{line}"),
+            _ => {}
+        }),
+    )
+}
+
 fn print_human(value: &Value) {
+    if value.get("managed_instances").is_some()
+        || value.get("instance").is_some()
+        || value.get("loader_versions").is_some()
+    {
+        println!("{}", serde_json::to_string_pretty(value).unwrap());
+        return;
+    }
     if value.get("settings").is_some()
         || value.get("key").is_some()
         || value.get("accounts").is_some()
@@ -553,6 +711,11 @@ fn print_human(value: &Value) {
 
 fn error_code(error: &Error) -> &'static str {
     match error {
+        Error::Loader(error) if error.is_cancelled() => "cancelled",
+        Error::Instance(error) if error.is_cancelled() => "cancelled",
+        Error::Loader(_) => "loader_error",
+        Error::Instance(ccl_core::instances::InstanceError::Conflict(_)) => "instance_conflict",
+        Error::Instance(_) => "instance_error",
         Error::InvalidConfig(_) | Error::ConfigJson { .. } => "configuration_error",
         Error::Io { .. } | Error::NotDirectory(_) => "filesystem_error",
         Error::Network(_) => "network_error",
@@ -589,6 +752,11 @@ fn error_code(error: &Error) -> &'static str {
 
 fn exit_code(error: &Error) -> u8 {
     match error {
+        Error::Loader(error) if error.is_cancelled() => 130,
+        Error::Instance(error) if error.is_cancelled() => 130,
+        Error::Loader(_) => 11,
+        Error::Instance(ccl_core::instances::InstanceError::Conflict(_)) => 7,
+        Error::Instance(_) => 12,
         Error::InvalidConfig(_) | Error::ConfigJson { .. } => 3,
         Error::Io { .. } | Error::NotDirectory(_) => 4,
         Error::Network(_) => 5,

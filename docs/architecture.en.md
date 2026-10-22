@@ -46,6 +46,12 @@ The user configuration is JSON and defaults to:
 
 Configuration fields include download preferences, optional `auth.microsoft_client_id` (a public client ID), and `launch.java`, `launch.max_memory_mb` (default 2048), and `launch.auto_install_java` (default true). Missing fields use defaults for backward compatibility. The mirror root must be an HTTPS URL without credentials, and unknown fields are rejected. Proxy credentials are redacted in displayed settings. On Unix, config files written by the CLI are owner-only. If the default configuration file is missing, defaults are used; a missing file explicitly supplied with `--config` is an error.
 
+## Isolated modded instances
+
+The `loaders` service discovers compatible Fabric, Forge and NeoForge releases and installs their profiles. The `forge` engine interprets modern installer client processors, reports output through task events, and checks declared output hashes. Inherited profiles retain the vanilla client archive's owning directory; child library versions override matching parent artifacts while keeping distinct native classifiers.
+
+The `instances` service owns `<game root>/.ccl/instances/<id>/game`. Installation and update build a separate staging revision and commit only after success. A journal supports recovery from an interrupted revision switch; the previous successful revision remains available for rollback. User data is retained across changes. Instance launches hold the same cross-process lock as mutations. See [loaders and instances](loaders.en.md) for commands and support boundaries.
+
 ## CLI and GUI consistency
 
 The CLI and GUI share core operations, configuration, and error definitions. The CLI must not implement separate download or installation rules, and the GUI must not require the core to start a terminal or read standard input. `--json` formats command execution results as JSON. clap help and argument parsing errors remain text. CLI commands run without interactive input.

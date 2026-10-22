@@ -347,11 +347,17 @@ fn verify_installation(
     let client = metadata
         .client()
         .ok_or_else(|| LaunchError::Invalid("version has no client".into()))?;
+    let client_version = metadata
+        .extra
+        .get("jar")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(version);
+    safe_segment(client_version)?;
     verify_file(
         &root
             .join("versions")
-            .join(version)
-            .join(format!("{version}.jar")),
+            .join(client_version)
+            .join(format!("{client_version}.jar")),
         client.sha1.as_deref(),
         client.size,
     )?;
@@ -791,6 +797,41 @@ mod tests {
         ));
         fs::write(&source, b"bad").unwrap();
         assert!(verify_file(&source, Some(&hash), Some(5)).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verifies_normalized_fabric_maven_libraries_and_detects_corruption() {
+        let root = root();
+        let client = b"client";
+        let library = b"fabric-library";
+        let client_hash = format!("{:x}", Sha1::digest(client));
+        let library_hash = format!("{:x}", Sha1::digest(library));
+        let client_path = root.join("versions/1.21.1/1.21.1.jar");
+        let library_path =
+            root.join("libraries/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1.jar");
+        fs::create_dir_all(client_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(library_path.parent().unwrap()).unwrap();
+        fs::write(&client_path, client).unwrap();
+        fs::write(&library_path, library).unwrap();
+        let metadata = VersionMetadata::parse(&serde_json::to_string(&json!({
+            "id":"fabric-loader-0.20.1-1.21.1",
+            "jar":"1.21.1",
+            "mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient",
+            "downloads":{"client":{"sha1":client_hash,"size":client.len()}},
+            "libraries":[{"name":"net.fabricmc:intermediary:1.21.1","downloads":{"artifact":{
+                "path":"net/fabricmc/intermediary/1.21.1/intermediary-1.21.1.jar",
+                "url":"https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1.jar",
+                "sha1":library_hash,"size":library.len()
+            }}}]
+        })).unwrap()).unwrap();
+        let platform = LaunchPlatform::current();
+        verify_installation(&root, "fabric-loader-0.20.1-1.21.1", &metadata, &platform).unwrap();
+        fs::write(&library_path, b"corrupt").unwrap();
+        assert!(matches!(
+            verify_installation(&root, "fabric-loader-0.20.1-1.21.1", &metadata, &platform),
+            Err(LaunchError::Invalid(message)) if message.contains("damaged file")
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 }

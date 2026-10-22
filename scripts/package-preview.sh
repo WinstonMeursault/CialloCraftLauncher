@@ -8,9 +8,9 @@ stage="dist/${name}"
 mkdir -p "$stage/docs"
 install -m 755 "target/${target}/release/ccl" "$stage/ccl"
 cp LICENSE README.md README.zh-CN.md "$stage/"
-cp docs/cli.en.md docs/cli.zh-CN.md docs/architecture.en.md docs/architecture.zh-CN.md docs/development.en.md docs/development.zh-CN.md docs/accounts.en.md docs/accounts.zh-CN.md "$stage/docs/"
+cp docs/cli.en.md docs/cli.zh-CN.md docs/architecture.en.md docs/architecture.zh-CN.md docs/development.en.md docs/development.zh-CN.md docs/accounts.en.md docs/accounts.zh-CN.md docs/loaders.en.md docs/loaders.zh-CN.md "$stage/docs/"
 "$stage/ccl" --help >/dev/null
-test -s "$stage/LICENSE" && test -s "$stage/README.md" && test -s "$stage/docs/cli.en.md" && test -s "$stage/docs/cli.zh-CN.md" && test -s "$stage/docs/development.en.md" && test -s "$stage/docs/development.zh-CN.md" && test -s "$stage/docs/accounts.en.md" && test -s "$stage/docs/accounts.zh-CN.md"
+test -s "$stage/LICENSE" && test -s "$stage/README.md" && test -s "$stage/docs/cli.en.md" && test -s "$stage/docs/cli.zh-CN.md" && test -s "$stage/docs/development.en.md" && test -s "$stage/docs/development.zh-CN.md" && test -s "$stage/docs/accounts.en.md" && test -s "$stage/docs/accounts.zh-CN.md" && test -s "$stage/docs/loaders.en.md" && test -s "$stage/docs/loaders.zh-CN.md"
 archive="dist/${name}.${extension}"
 if [[ "$extension" == zip ]]; then
   (cd dist && zip -qr "${name}.zip" "$name")
@@ -22,7 +22,7 @@ if [[ "$extension" == zip ]]; then
 else
   entries="$(tar -tzf "$archive")"
 fi
-for item in ccl LICENSE README.md README.zh-CN.md docs/cli.en.md docs/cli.zh-CN.md docs/architecture.en.md docs/architecture.zh-CN.md docs/development.en.md docs/development.zh-CN.md docs/accounts.en.md docs/accounts.zh-CN.md; do
+for item in ccl LICENSE README.md README.zh-CN.md docs/cli.en.md docs/cli.zh-CN.md docs/architecture.en.md docs/architecture.zh-CN.md docs/development.en.md docs/development.zh-CN.md docs/accounts.en.md docs/accounts.zh-CN.md docs/loaders.en.md docs/loaders.zh-CN.md; do
   grep -Fx "${name}/${item}" <<<"$entries" >/dev/null
 done
 if command -v sha256sum >/dev/null 2>&1; then

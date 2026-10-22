@@ -17,6 +17,8 @@ The CLI provides `doctor`, `init`, `settings`, `account`, `versions`, `install`,
 
 ## Code boundaries
 
+For loader discovery and isolated instance workflows, see [modded instances and loaders](loaders.en.md). `loaders`, `instance`, and `launch --instance` reuse the same core services as a future GUI. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout.
+
 - Put reusable domain logic in `crates/ccl-core`.
 - `crates/ccl-core` must not depend on terminal or graphical-interface libraries.
 - The CLI parses arguments, formats output, and maps exit codes; it does not duplicate core business rules.

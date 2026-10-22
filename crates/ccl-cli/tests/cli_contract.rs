@@ -94,6 +94,56 @@ fn doctor_is_read_only_and_init_creates_selected_directory() {
 }
 
 #[test]
+fn isolated_instance_list_is_read_only_and_rejects_unsafe_ids() {
+    let root = sandbox();
+    let game = root.join("missing game");
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        json_output(&output)["managed_instances"],
+        serde_json::json!([])
+    );
+    assert!(!game.exists());
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "show", "../outside"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(12));
+    assert_eq!(json_output(&output)["error"]["code"], "instance_error");
+    assert!(!game.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn launch_requires_exactly_one_version_or_instance() {
+    let root = sandbox();
+    for args in [
+        vec!["launch", "--offline"],
+        vec!["launch", "1.21.1", "--instance", "test"],
+    ] {
+        let output = command(&root).args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+    }
+    let output = command(&root)
+        .args(["loaders", "unknown", "1.21.1"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn invalid_configuration_has_machine_readable_error_and_exit_code() {
     let root = sandbox();
     let config = root.join("invalid.json");

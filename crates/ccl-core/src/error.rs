@@ -25,6 +25,10 @@ pub enum Error {
     Auth(#[from] crate::auth::AuthError),
     #[error(transparent)]
     Account(#[from] crate::accounts::AccountError),
+    #[error(transparent)]
+    Loader(#[from] crate::loaders::LoaderError),
+    #[error(transparent)]
+    Instance(#[from] crate::instances::InstanceError),
     #[error("task cancelled")]
     Cancelled,
     #[error(transparent)]
