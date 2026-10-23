@@ -1,3 +1,5 @@
+mod browser;
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -442,6 +444,9 @@ enum AccountCommand {
     Login {
         #[arg(long)]
         client_id: Option<String>,
+        /// Print the verification URL without opening the default browser.
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Check that the system credential vault can persist credentials.
     CheckStorage,
@@ -592,7 +597,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                     store.remove_cancellable(&id, &signal_token())?;
                     Ok(json!({ "ok": true, "removed": id }))
                 }
-                AccountCommand::Login { client_id } => {
+                AccountCommand::Login {
+                    client_id,
+                    no_browser,
+                } => {
                     if config.downloads.offline {
                         return Err(Error::InvalidConfig("Microsoft login requires network access; disable --network-offline / downloads.offline".into()));
                     }
@@ -614,6 +622,19 @@ async fn run(cli: &Cli) -> Result<Value> {
                             device.user_code,
                             device.expires_in.as_secs()
                         );
+                    }
+                    if !no_browser
+                        && let Err(message) =
+                            browser::open_verification_page(&device.verification_uri).await
+                    {
+                        if cli.json {
+                            eprintln!(
+                                "{}",
+                                json!({"kind":"browser_open","opened":false,"message":message})
+                            );
+                        } else {
+                            eprintln!("{message}; open the verification URL above manually");
+                        }
                     }
                     let authenticated = auth.complete_device_login(device, &token).await?;
                     let metadata = authenticated.metadata.clone();
