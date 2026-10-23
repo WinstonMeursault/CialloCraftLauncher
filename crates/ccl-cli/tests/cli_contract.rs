@@ -176,6 +176,28 @@ fn launch_requires_exactly_one_version_or_instance() {
 }
 
 #[test]
+fn online_search_accepts_only_modrinth_before_loading_a_game_directory() {
+    let root = sandbox();
+    let game = root.join("missing game");
+    let output = command(&root)
+        .args(["--game-dir"])
+        .arg(&game)
+        .args(["online", "search", "curseforge", "sodium"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("modrinth"));
+    assert!(!game.exists());
+
+    let output = command(&root)
+        .args(["online", "search", "modrinth", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn instance_logs_select_the_isolated_game_directory() {
     let root = sandbox();
     let game = root.join("game");

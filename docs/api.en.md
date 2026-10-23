@@ -37,7 +37,7 @@ Global options can be placed before the subcommand. Commands run non-interactive
 | `instance rename ID DESTINATION\|copy ID DESTINATION\|delete ID --yes\|history ID\|restore ID REVISION\|disk-usage ID\|clean ID [--keep N] [--include-previous] [--apply]` | Renames, copies, deletes, inspects, restores, and cleans retained instance revisions. Cleanup is preview-only unless `--apply` is given; see [instance lifecycle](user-guide.en.md#instances). |
 | `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | Inspects and imports Modrinth, CurseForge, and MultiMC/Prism exports; exports Modrinth `.mrpack` packs. See the [import guide](user-guide.en.md#imports) and [Modrinth and instance content guide](user-guide.en.md#packs). |
 | `content list ID KIND\|add ID KIND SOURCE [--name NAME]\|remove ID KIND NAME\|enable ID NAME\|disable ID NAME\|backup ID OUTPUT\|restore ID ARCHIVE` | Manages local mods, resource packs, shader packs, saves, and portable userdata backups. `KIND` is `mods`, `resourcepacks`, `shaderpacks`, or `saves`. |
-| `online search\|versions\|resolve\|install\|updates\|analyze\|pack-install` | Searches Modrinth or CurseForge, resolves dependencies, installs or updates content, and analyzes recorded online content. See [online content](user-guide.en.md#online). |
+| `online search\|versions\|resolve\|install\|updates\|analyze\|pack-install` | Searches Modrinth only, resolves dependencies on applicable providers, installs or updates content, and analyzes recorded online content. See [online content](user-guide.en.md#online). |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | Prepares or launches a vanilla version or an isolated instance. Uses the selected Microsoft account by default, or explicitly uses an offline profile. Java may be detected or installed from Mojang's runtime manifests. |
 | `logs [--instance ID] [--run ID] [--lines 100]` | Prints the most recent run log, or the selected run's log, limited to the requested number of lines. `--instance` selects a managed instance's logs. |
 
@@ -130,7 +130,7 @@ token.cancel();
 - Modrinth uses its public API for projects, versions, and required dependency resolution. Exact pinned dependency versions are retained and checked against the selected Minecraft version and loader. Optional dependencies are listed but not installed automatically; incompatible dependencies are reported during analysis.
 - CurseForge uses its REST API. The caller must provide its own API key through `OnlineConfig`; the launcher does not include or persist the key. Download requests attach the key only to the exact HTTPS CurseForge CDN hosts allowed by the download request. If the API omits a file's download URL, that file is left unavailable; the launcher does not guess a website URL.
 
-Search results can be filtered by project type, Minecraft version, and loader. Both providers expose version files with available hashes and sizes. CurseForge's numeric project IDs are retained as strings in the provider-neutral API.
+Modrinth search can be filtered by project type, Minecraft version, and loader; the core `search` service queries only Modrinth. Both providers expose version files with available hashes and sizes. CurseForge's numeric project IDs are retained as strings in the provider-neutral API.
 
 ### Instance operations
 

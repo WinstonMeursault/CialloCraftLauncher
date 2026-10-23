@@ -90,7 +90,7 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 归档导入可识别 Modrinth、CurseForge 和 MultiMC/Prism 导出包。CurseForge 远程文件解析使用官方 API，并要求用户自行提供 API 密钥；请求范围的测试夹具不代表已获得真实 API 授权。MultiMC/Prism 导入支持受支持的原版/加载器组件和本地游戏内容，并会拒绝不支持的自定义补丁。这些转换不会执行归档钩子，也不会导入账户数据库。参阅[归档导入](user-guide.zh-CN.md#imports)。
 
-在线内容服务支持 Modrinth 和 CurseForge 的搜索、版本查询、依赖解析、更新检查、冲突分析及事务化安装/更新。CurseForge 密钥可用或请求头范围测试均不代表真实密钥已获得生产授权。参阅[在线内容](user-guide.zh-CN.md#online)。
+在线内容服务仅支持 Modrinth 搜索；Modrinth 和 CurseForge 的版本查询、依赖解析、更新检查、冲突分析及事务化安装/更新继续受支持。CurseForge 密钥可用或请求头范围测试均不代表真实密钥已获得生产授权。参阅[在线内容](user-guide.zh-CN.md#online)。
 
 `modpack_format` 模块读取和写入 Modrinth 格式版本 1 归档，校验清单和目标路径，限制 ZIP 解压规模，并按顺序应用 `overrides/` 与客户端覆盖。`modpacks` 会事务性导入所选文件和覆盖内容，并在收据中记录整合包拥有路径的哈希。更新会把当前文件与归属哈希比较；整合包拥有的文件被修改或删除，或新路径与未托管本地内容冲突时，会停止更新，除非调用者明确授权替换。整合包或内容变更后，`instance rollback` 会恢复上一份完整实例快照，包括用户数据和存档；如果要保留较新的存档，应先备份。`content` 管理本地内容和可移植用户数据备份。备份包含用户数据与存档，但不包含游戏/加载器文件、Java 运行时或账户凭据。Modrinth 导出与备份用途不同：导出不包含存档和私有服务器列表，本地二进制文件需要明确授权重新分发。命令和安全说明见[Modrinth 整合包与实例内容](user-guide.zh-CN.md#packs)。命令及支持边界另见[加载器与实例](user-guide.zh-CN.md#loaders)。
 
@@ -158,7 +158,7 @@ cargo build --workspace --release --locked
 
 CI 覆盖 Windows x64、macOS arm64、Linux x86_64。Windows 另执行需主动运行的操作系统凭据库探测。真实平台及账户验证与服务夹具应分别记录。预览脚本打包程序、许可证、README 和全部双语公开指南；整理文档时同步更新链接、CLI 诊断路径及两份打包脚本。
 
-单元测试夹具覆盖平台搜索与版本响应解析、依赖类型和固定版本、CurseForge 文件元数据及依赖关系、密钥脱敏与请求头限定、更新版本选择、事务式所有权、回滚和冲突。回环 HTTP 夹具会执行 Modrinth 搜索、版本列表和固定依赖递归解析。另有一个可选测试直接查询公开 Modrinth API。
+单元测试夹具覆盖 Modrinth 搜索与双平台版本响应解析、依赖类型和固定版本、CurseForge 文件元数据及依赖关系、密钥脱敏与请求头限定、更新版本选择、事务式所有权、回滚和冲突。回环 HTTP 夹具会执行 Modrinth 搜索、版本列表和固定依赖递归解析。另有一个可选测试直接查询公开 Modrinth API。
 
 <a id="scope"></a>
 
