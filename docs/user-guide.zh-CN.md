@@ -3,6 +3,7 @@
 [API 文档](api.zh-CN.md) · [开发指南](development.zh-CN.md) · [English](user-guide.en.md)
 
 - [快速开始](#quickstart)
+- [安装与前置条件](#installation)
 - [游戏目录](#directories)
 - [设置与配置](#configuration)
 - [加载器与安装](#loaders)
@@ -13,6 +14,7 @@
 - [网络与离线模式](#networking)
 - [启动器更新与诊断](#maintenance)
 - [Microsoft 账户](#accounts)
+- [故障排查](#troubleshooting)
 
 <a id="quickstart"></a>
 
@@ -32,6 +34,49 @@ ccl logs --lines 100
 ```
 
 程序自动探测或安装匹配游戏版本及主机架构的 Java。`--java PATH` 可显式指定运行时，`--no-java-download` 禁用运行时安装。`--json` 提供结构化输出，参阅[命令及输出参考](api.zh-CN.md#cli)。
+
+`versions`、`loaders` 和 `online search` 默认最多返回 20 项。`versions` 和 `loaders` 使用 `--limit 0` 可返回全部结果；在线搜索数量受平台上限限制。`logs` 默认显示最新 100 行。
+
+<a id="installation"></a>
+
+## 安装与前置条件
+
+从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的归档。稳定版和开发版归档使用以下名称：
+
+| 系统 | 归档文件 |
+| --- | --- |
+| Windows x86_64 | `ccl-x86_64-pc-windows-msvc.zip` |
+| macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
+| Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
+
+同时下载旁边的 `.sha256` 校验文件，并在解压前校验归档。Windows PowerShell 中，请在下载目录运行：
+
+```powershell
+$archive = "ccl-x86_64-pc-windows-msvc.zip"
+$expected = (Get-Content "$archive.sha256").Split()[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch" }
+```
+
+Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
+
+解压整个归档文件夹，并将可执行文件、README 文件、`docs/` 目录、`LICENSE`、`THIRD-PARTY.en.md`、`THIRD-PARTY.zh-CN.md` 和 `licenses/` 一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CCL 是命令行程序，不包含图形启动器或安装向导。发行归档未签名；完整性验证的限制见[启动器更新](#maintenance)。
+
+安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
+
+上述目标表示构建和打包覆盖范围。Minecraft 主菜单验证范围更窄，见各功能章节；当前证据不包含 Windows 物理机游戏启动验证。Linux 启动游戏需要可用的显示服务和图形驱动；CI 成功本身不能验证用户机器的图形环境。
+
+### 首次运行
+
+运行 `ccl doctor` 检查配置、目录访问、Java 候选项和凭据库适配器状态。然后运行 `ccl init` 创建所选游戏目录，`ccl versions` 检查版本发现，再用 `ccl install VERSION` 安装版本。除非显式请求探测，`doctor` 不会写入文件。`init` 只创建游戏目录，不安装 Minecraft。使用离线玩家身份运行 `ccl launch VERSION --offline --dry-run` 可预览启动，然后移除 `--dry-run` 实际启动。首次启动可能需要下载 Java 和剩余游戏文件。
+
+```sh
+ccl doctor
+ccl init
+ccl versions --limit 10
+ccl install 1.21.1
+ccl launch 1.21.1 --offline --dry-run
+```
 
 <a id="directories"></a>
 
@@ -57,11 +102,51 @@ ccl logs --lines 100
 - macOS：`~/Library/Application Support/CialloCraftLauncher/config.json`
 - Linux：`$XDG_CONFIG_HOME/ciallocraftlauncher/config.json`；未设置该变量时为 `~/.config/ciallocraftlauncher/config.json`
 
-镜像根地址必须是无凭据的 HTTPS URL，未知字段会被拒绝。显示设置时会隐藏代理凭据。CLI 在 Unix 上写入的配置文件仅允许所有者访问。默认配置文件缺失时使用默认值；通过 `--config` 显式指定的文件缺失时则报错。
+镜像根地址必须是无凭据的 HTTPS URL，未知字段会被拒绝。显示设置时会隐藏代理凭据。CLI 在 Unix 上写入的配置文件仅允许所有者访问。默认配置文件缺失时使用默认值。读取配置的命令要求显式指定的 `--config PATH` 文件已存在，包括 `settings show` 和 `settings get`。`update status`、`update rollback` 和 `update recover` 不会读取该文件。`settings set` 和 `settings reset` 会从默认值初始化缺失文件；`settings reset --all` 也可用默认配置替换格式错误的文件。
 
-JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel` 和 `downloads.offline`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+配置字段和默认值如下：
 
-请求 CurseForge 在线 API 需要用户自己的密钥；CCL 不内置密钥。[CurseForge API 文档](https://docs.curseforge.com/rest-api/)提供面向第三方模组服务的密钥申请入口，不保证个人用户能获批。获得密钥后运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 仅显示是否保存；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
+| 设置 | 默认值 | 有效值 |
+| --- | --- | --- |
+| `downloads.offline` | `false` | `true` 或 `false` |
+| `downloads.version_list_source` | `auto` | `auto`、`official` 或 `mirror` |
+| `downloads.file_source` | `auto` | `auto`、`official` 或 `mirror` |
+| `downloads.mirror_root` | `https://bmclapi2.bangbang93.com` | 不含凭据的 HTTPS URL |
+| `downloads.http_proxy` | `null` | 代理 URL 或 `null` |
+| `downloads.max_parallel` | `8` | 1 到 64 的整数 |
+| `auth.microsoft_client_id` | `null` | 公开 OAuth 客户端 ID 或 `null` |
+| `launch.java` | `null` | Java 可执行文件路径、Java 主目录或 `null` |
+| `launch.max_memory_mb` | `2048` | 256 到 131072 MiB 的整数 |
+| `launch.auto_install_java` | `true` | `true` 或 `false` |
+
+以下完整配置使用所有默认值：
+
+```json
+{
+  "downloads": {
+    "offline": false,
+    "version_list_source": "auto",
+    "file_source": "auto",
+    "mirror_root": "https://bmclapi2.bangbang93.com",
+    "http_proxy": null,
+    "max_parallel": 8
+  },
+  "auth": {
+    "microsoft_client_id": null
+  },
+  "launch": {
+    "java": null,
+    "max_memory_mb": 2048,
+    "auto_install_java": true
+  }
+}
+```
+
+对于支持映射的 Minecraft 地址，`auto` 先尝试官方地址再尝试配置的镜像；`official` 仅使用官方地址；`mirror` 先尝试镜像再尝试官方地址。未知主机保留原始地址。OptiFine 使用配置的镜像端点。这些设置不会重定向 Modrinth、CurseForge 或 GitHub 请求。
+
+配置中可省略字段，省略时使用默认值。`--memory` 可在单次启动中覆盖 `launch.max_memory_mb`，接受 256–131072 MiB。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+
+CurseForge API 请求需要用户提供对相应 API 和文件下载有权限的密钥。[CurseForge API 文档](https://docs.curseforge.com/rest-api/)介绍密钥流程；实际访问取决于服务方授权。获得密钥后运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 会显示是否已保存密钥及是否启用环境变量覆盖；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
 
 启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。
 
@@ -265,7 +350,7 @@ CCL 从 `manifest.json` 读取 Minecraft 和加载器版本，通过官方 API �
 
 远程文件解析需要用 `ccl credentials curseforge set` 保存自己的 API key，或临时设置 `CCL_CURSEFORGE_API_KEY`。不要把密钥放入命令参数或提交到仓库。不含选定远程文件的纯覆盖归档可在没有 key 时转换。若受限文件没有提供者授权的下载 URL，会明确报错；CCL 不猜测下载 URL，也不绕过作者的分发选择。API 和 CDN 要求见 [CurseForge 文档](https://docs.curseforge.com/rest-api/)及其 [CDN 身份验证公告](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)。
 
-本项目目前没有所有者提供的 CurseForge API key 用于真实验收。提供者行为通过服务/格式夹具检查，这不代表已取得生产 API 授权。
+提供者行为已通过服务和格式测试夹具检查，但这不能证明生产密钥已获得在线授权或文件下载权限。不同提供者错误信息有所不同；请依据命令返回的消息及服务方访问要求排查。
 
 ### MultiMC 和 Prism
 
@@ -340,7 +425,7 @@ ccl update recover
 ccl update recover --installation /path/to/ccl
 ```
 
-使用 `--channel` 选择渠道会保存该设置。`check` 报告是否有兼容的已发布程序包。`apply` 下载并校验当前目标平台的归档，然后启动助手；助手会等待当前 CLI 退出后替换程序。命令返回后可用 `update status` 查看状态。助手或替换过程被中断时用 `recover` 恢复；若常规程序无法运行，可通过保留的助手执行恢复，并用 `--installation` 指定原程序路径。`rollback` 只有在当前配置、账户元数据、实例和收据可由保留的旧程序读取时才会使用旧程序。二进制回退不会恢复游戏目录、存档或内容。启动器更新包未签名：HTTPS、大小和 SHA-256 校验可发现传输或文件损坏，但不能独立验证发行者身份。`--network-offline` 会阻止更新检查和下载。通过包管理器安装或只读目录中的程序应通过原有安装方式更新。
+使用 `--channel` 选择渠道会保存该设置。`check` 报告是否有兼容的已发布程序包。`apply` 下载并校验当前目标平台的归档，然后启动助手异步替换程序；在 Windows 遇到临时程序共享占用时最多重试 30 秒。命令返回后可用 `update status` 查看状态；若助手仍持有更新锁，请稍后重试，忙响应不等于事务失败。助手或替换过程被中断时用 `recover` 恢复；若常规程序无法运行，可通过保留的助手执行恢复，并用 `--installation` 指定原程序路径。`rollback` 只有在当前配置、账户元数据、实例和收据可由保留的旧程序读取时才会使用旧程序。二进制回退不会恢复游戏目录、存档或内容。启动器更新包未签名：HTTPS、大小和 SHA-256 校验可发现传输或文件损坏，但不能独立验证发行者身份。`--network-offline` 会阻止更新检查和下载。通过包管理器安装或只读目录中的程序应通过原有安装方式更新。
 
 `doctor` 检查 Java 候选、启动器/游戏目录访问情况以及是否编译了系统凭据库适配器。它不会登录，也不验证凭据库是否解锁。添加 `--network-probe` 可访问 Mojang 版本元数据端点；添加 `--write-probe` 会在 CCL 数据目录创建并删除临时空文件。这两种探测都需显式启用。
 
@@ -356,13 +441,13 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 运行诊断根据保存的运行记录、有大小限制的游戏日志前缀以及时间戳与该运行接近的崩溃报告，识别少数常见故障模式，并提供证据与建议；未知故障不会被强行归类。结构化诊断导出只含白名单字段，并替换本地路径；不会包含账户库、凭据库、存档或服务器列表。可选原始日志预览最多包含 16 KiB 游戏输出，并进行尽力脱敏，但仍可能包含账户名、令牌或游戏/模组写入的其他内容。分享前请检查文件。CCL 不会上传诊断报告。
 
-这些 P7 功能已经实现，但尚未完成全部发行验收矩阵。当前数据兼容范围见 [API 文档](api.zh-CN.md#maintenance)，发行和验证细节见[开发指南](development.zh-CN.md#maintenance)。
+约定的 P7 维护范围已通过验收，包括三平台 CI 与打包，以及 macOS 和 Linux 上的真实 GitHub 更新/回退检查。Windows CI 和打包验证不代表 Windows 物理机游戏启动行为。发行包未签名，兼容性检查覆盖定义过的历史样本，不涵盖所有旧版本程序生成的数据。数据兼容范围见 [API 文档](api.zh-CN.md#maintenance)，验证详情见[开发指南](development.zh-CN.md#maintenance)。
 
 <a id="accounts"></a>
 
 ## Microsoft 账户
 
-> **预览状态：** Microsoft 登录已经实现，所有者已完成 CCL OAuth 应用注册。真实 Xbox/Minecraft 服务访问与正版账户验收尚未完成。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
+> **实验性在线集成：** 已实现 Microsoft 设备登录、Xbox Live/XSTS 交换和 Minecraft 服务集成。首版暂缓真实正版账户完整验收，继续支持离线身份启动。自动化覆盖及 OAuth 设备流程检查不能证明每个账户都能启动游戏：服务访问、用户档案和 Minecraft 权益会分别验证。登录或启动失败时，请检查报告的认证阶段和机器错误码。
 
 应用所有者请参阅[注册及验收要求](development.zh-CN.md#microsoft-application)。
 
@@ -392,12 +477,28 @@ ccl account select ACCOUNT-ID
 ccl launch VERSION
 ```
 
-选定账户后，`launch` 默认使用该账户，并在需要时刷新凭据。离线启动可传入 `--offline` 或 `--username NAME`。`--account ACCOUNT-ID` 可为单次启动指定已保存的账户。`account logout [ACCOUNT-ID]` 会删除本地凭据和账户元数据，但不会撤销 Microsoft 授权。
+选定账户后，`launch` 默认使用该账户，并在需要时刷新凭据。传入 `--offline` 可选择离线身份，也可与 `--username NAME` 组合来指定离线身份名称。这两个选项分别都与 `--account ACCOUNT-ID` 冲突；后者可为单次启动指定已保存账户。`account logout [ACCOUNT-ID]` 会删除本地凭据和账户元数据，但不会撤销 Microsoft 授权。
 
 认证失败会标明服务阶段和 HTTP 状态，并在可用时显示白名单机器错误码；不会打印原始服务错误文本、令牌或账户标识。服务拒绝与已确认的 Java 版无权益是不同结果，不能仅凭通用 401/403 确定原因。
+
+一次记录在案的真实重试完成了 Microsoft OAuth、Xbox Live 和 XSTS，随后 Minecraft 登录返回 HTTP 403，且未返回用户档案或权益数据。该状态本身不能确定服务端原因，也不能证明账户是否拥有游戏。排查时应提供认证阶段和错误码。
 
 ### 凭据存储
 
 访问令牌和刷新令牌仅通过操作系统凭据库保存。账户名称和 ID 分开存储在 `accounts.json` 中，该元数据文件不包含令牌。macOS 和 Windows 使用系统凭据库。Linux 必须安装并解锁可通过当前 D-Bus 会话访问的 Secret Service。没有持久 Secret Service 的无头系统不能使用 Microsoft 登录；程序不会将凭据退回保存为明文。只要为会话提供并解锁持久的 Secret Service，无需图形桌面。
 
 如果安全存储不可用，登录或刷新会报错。请启动带有已解锁密钥环的桌面会话；在安全存储可用前，可使用离线启动。不要通过把令牌复制到文件或 shell 命令中来绕过限制。
+
+<a id="troubleshooting"></a>
+
+## 故障排查
+
+- **版本发现或下载失败：** 检查网络和代理设置，可运行 `ccl settings show` 查看。`--network-offline` 和 `downloads.offline` 会禁用 HTTP 请求；获取缺失文件前请关闭离线模式。`ccl doctor --network-probe` 会测试访问 Mojang 版本元数据端点。
+- **游戏找不到 Java：** 运行 `ccl doctor`，允许安装托管运行时，或用 `--java PATH` 指定兼容的 Java 可执行文件/主目录。若没有合适的已安装运行时，`--no-java-download` 会禁止下载并导致启动失败。
+- **游戏立即退出：** 查看 `ccl logs --lines 200`，或用 `ccl logs --run RUN-ID` 选择一次运行；托管实例需添加 `--instance ID`。运行 `ccl diagnose --run RUN-ID` 检查记录结果及附近的崩溃报告。运行记录保存游戏的实际退出码；游戏异常退出时 CLI 返回 `8`。
+- **配置无效：** 检查 JSON 文件和设置名称。`ccl settings reset --all` 会以默认值替换无效配置；使用 `--config PATH` 指定非默认文件。
+- **Microsoft 登录或启动失败：** 查看认证阶段和白名单机器错误码。确认公开客户端 ID 及凭据库可用，再区分 Microsoft 授权、Xbox/XSTS 访问、Minecraft 用户档案访问和账户权益错误。仅凭通用 HTTP 401/403 不能证明账户没有游戏权益。
+- **CurseForge 请求被拒：** 确认已保存密钥或 `CCL_CURSEFORGE_API_KEY` 正在生效，并且该密钥获准访问 API 和指定文件。允许搜索的密钥不一定能下载受限文件；请遵守服务方授权及作者分发规则。
+- **加载器或整合包安装报告格式不支持/文件冲突：** 检查 Minecraft/加载器版本，用 `ccl pack inspect` 检查整合包元数据，并在使用 `--replace-modified` 前检查本地已修改的托管文件。
+
+分享日志或诊断导出前请先检查内容。原始游戏日志及可选诊断日志预览可能包含账户名、令牌或模组写入的内容。

@@ -9,15 +9,23 @@
 - [Configuration and data directories](#data)
 - [Instances and transactions](#transactions)
 - [Updates, compatibility and diagnostics](#maintenance)
-- [Microsoft application registration and acceptance](#microsoft-application)
+- [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
+- [Release checklist and commands](#release)
+- [First stable release notes draft](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
 
 ## Environment
 
-Install the stable Rust toolchain and Cargo. The workspace uses Rust 2024 edition. Target platforms are Windows x86_64, macOS arm64, and Linux x86_64.
+Install the stable Rust toolchain and Cargo; the workspace uses Rust 2024 edition. The release workflows currently use Rust 1.99.0, while ordinary CI follows the Rust stable channel. Install the target's native linker and SDK as well:
+
+- Windows x86_64: MSVC C++ Build Tools and the Windows SDK (`x86_64-pc-windows-msvc`).
+- macOS arm64: an arm64 Mac with Xcode Command Line Tools (`aarch64-apple-darwin`).
+- Linux x86_64: a C compiler, linker, `make`, `pkg-config`, and glibc development headers (for example, `build-essential` on Ubuntu; target `x86_64-unknown-linux-gnu`).
+
+The release workflow builds each package on its matching GitHub-hosted runner. Cross-compiling locally also requires a working linker and SDK for the selected target. Python 3 is required to assemble packages and generate dependency notices. The Unix ZIP packaging path needs `zip`, `unzip`, and `sha256sum` or `shasum`; the tar.gz path needs `tar` and a SHA-256 utility. Linux account and provider credentials additionally need a persistent, unlocked Secret Service over D-Bus at runtime; no plaintext fallback is provided.
 
 <a id="build"></a>
 
@@ -29,6 +37,8 @@ Run from the repository root:
 cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
+
+`Cargo.lock` pins workspace dependencies. Use `--locked` for release checks and builds so Cargo fails if manifests and the committed lockfile disagree. HTTP uses Rustls; the selected `keyring` backends include native credential-store dependencies and may compile vendored native sources, so install the platform build tools listed above.
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
@@ -72,6 +82,10 @@ The core reports progress through task contexts and provides a cooperative cance
 
 Configuration keys and default paths are maintained in the [user guide](user-guide.en.md#configuration).
 
+`auth.microsoft_client_id` is a public application ID, not a secret. Account metadata (such as account ID, name, profile IDs and selected account) is stored separately from OAuth/Minecraft tokens, which must stay in the OS credential vault scoped to the account-index path. The CurseForge API key is held in a separate OS-vault entry scoped to the configuration path; the optional `CCL_CURSEFORGE_API_KEY` environment override takes precedence. Neither credential type belongs in JSON configuration, logs, source control, or command arguments.
+
+`auth.microsoft_client_id` is a public application ID, not a secret. Account metadata (such as account ID, name, profile IDs and selected account) is stored separately from OAuth/Minecraft tokens, which must stay in the OS credential vault scoped to the account-index path. The CurseForge API key is held in a separate OS-vault entry scoped to the configuration path; the optional `CCL_CURSEFORGE_API_KEY` environment override takes precedence. Neither credential type belongs in JSON configuration, logs, source control, or command arguments.
+
 Default game directory priority is: explicit `--game-dir`, an existing `.minecraft` in the current working directory, the platform-conventional directory, `.minecraft` in the home directory, and finally a new `.minecraft` in the current working directory. An existing conventional macOS directory can be reused. `doctor` is read-only; `init` creates the selected directory.
 
 The version-list and file-source preferences are independent and accept `auto`, `official`, or `mirror`. The mirror root is configurable and must be HTTPS without URL credentials. The global `--network-offline` option disables HTTP and uses only verified local metadata and artifacts; it is separate from offline player identity. Interrupted transfers resume only when the saved strong ETag and server range response validate the partial file. Version listing, installation, launch preparation, and process capture are implemented in the shared core; keep CLI-specific formatting and exit-code mapping in the CLI.
@@ -92,6 +106,8 @@ Archive import recognizes Modrinth, CurseForge and MultiMC/Prism exports. CurseF
 
 The online content service supports Modrinth and CurseForge search, version lookup, dependency resolution, update checks, conflict analysis, and transactional install/update operations. CurseForge key availability or header-scoping fixtures are not evidence that a real key has production authorization. See [online content](user-guide.en.md#online).
 
+The CLI accepts a CurseForge key through `ccl credentials curseforge set`, which reads from a hidden terminal prompt and stores it in the OS credential vault scoped to the selected config path. `CCL_CURSEFORGE_API_KEY` is an environment override. CCL does not write the key to JSON settings or account metadata, and sends it only to the approved CurseForge API/CDN hosts. Vault availability and a successful local save do not establish that CurseForge has authorized a real key for production access; confirm that with the key owner/provider before release. See [credential handling](user-guide.en.md#configuration) and [API behavior](api.en.md).
+
 The `modpack_format` module reads and writes Modrinth format version 1 archives, validates manifest fields and destination paths, limits ZIP expansion, and applies `overrides/` with client overrides layered on top. `modpacks` imports selected files and overrides transactionally and stores a receipt with hashes of pack-owned paths. Updates compare current files with those ownership hashes and stop on modified/deleted owned files or collisions with unowned local data unless the caller explicitly authorizes replacement. After a pack or content change, `instance rollback` restores the prior full instance snapshot, including userdata and saves; users should back up first when they need to retain newer saves. `content` manages local content and portable userdata backups. Backups include user data and saves but exclude game/loader files, Java runtimes, and account credentials. Modrinth exports are separate: they exclude saves and private server lists, and local binary files require explicit redistribution authorization. See [Modrinth packs and instance content](user-guide.en.md#packs) for the commands and safety details.
 
 <a id="maintenance"></a>
@@ -100,7 +116,7 @@ The `modpack_format` module reads and writes Modrinth format version 1 archives,
 
 `update::UpdateService` checks only `WinstonMeursault/CialloCraftLauncher`. Stable packages use a `v<VERSION>` tag on `main`. Every `dev` push starts validation and packaging on Windows x64, macOS arm64 and Linux x86_64; the matching commit is published as immutable `dev-<full-SHA>` only after all jobs pass. The release workflow keeps the ten newest developer releases. Stable tags must match the CLI crate version and point to a commit on `main`. Manifests bind repository, channel, branch, full commit, target, executable digest and data reader range (`1..=1`).
 
-`UpdateService::check` distinguishes an available package from a branch head whose build is not published yet. `stage` downloads and validates the bounded ZIP, its paths and hashes, then stages the candidate. `Installation` owns channel preference and the persistent transaction journal; `launch_helper` starts the restricted old-image helper, and `execute_helper` completes replacement, health check or rollback after the parent exits. `prepare_rollback` checks current data compatibility before changing transaction state. The binary updater does not restore game data. There is no data migration in the current format; readers preserve schema-less config/account/instance metadata and accept receipt schema 1. Unknown future config or instance fields and receipt schemas above 1 are refused. The initial regression uses config and account metadata generated by a git archive of baseline `2edbf0e`; those fixtures are sanitized, and the fixture account secrets were never persisted.
+`UpdateService::check` distinguishes an available package from a branch head whose build is not published yet. `stage` downloads and validates the bounded ZIP, its paths and hashes, then stages the candidate. `Installation` owns channel preference and the persistent transaction journal; `launch_helper` starts the restricted old-image helper, and `execute_helper` completes replacement, health check or rollback asynchronously. `prepare_rollback` checks current data compatibility before changing transaction state. The binary updater does not restore game data. There is no data migration in the current format; readers preserve schema-less config/account/instance metadata and accept receipt schema 1. Unknown future config or instance fields and receipt schemas above 1 are refused. The initial regression uses config and account metadata generated by a git archive of baseline `2edbf0e`; those fixtures are sanitized, and the fixture account secrets were never persisted.
 
 Release archives are unsigned. HTTPS, size and SHA-256 checks detect corruption but do not authenticate the publisher. Do not describe these checks as signatures or verified publisher identity. OS signing/notarization is not implemented. Update `status`, `rollback` and `recover` do not need network access; update check/apply do, and `--network-offline` blocks them.
 
@@ -108,13 +124,17 @@ Release archives are unsigned. HTTPS, size and SHA-256 checks detect corruption 
 
 `DiagnosticsService::doctor` reports Java candidates, directory access and whether a credential adapter is compiled in; vault unlock state is not probed. Network and write probes are explicit. `diagnose_run` checks a bounded run log plus timestamp-correlated crash reports and classifies only supported patterns. Export serializes an allowlist and substitutes paths; raw output preview requires a separate opt-in, is limited to 16 KiB and applies best-effort redaction. It can still contain secrets written by the game or mods and is never uploaded by CCL.
 
-P7 provides three-platform release validation and transactional updater tests, including Windows executable sharing locks, failed health checks and recovery of a missing entrypoint. The first P7 installation is manual because earlier binaries have no updater protocol. Current data formats require no migration; old-writer compatibility samples do not constitute every historical receipt generation. The performance workflow uses the real installation service and fixed local HTTP samples for cold/warm installation, verification/cache reuse, CLI startup/ZIP parsing, and real helper replacement/rollback. It records requests/transferred bytes, logical disk use and available platform peak memory. Regression gates require at least three prior observations matching platform, toolchain and fixtures, retaining five rolling observations. Reports are written before failure to preserve evidence. Public-network throughput, Minecraft main-menu readiness and allocated disk blocks are not measured. Weekly or manual upstream metadata regression covers vanilla release/snapshot catalogs and loader catalogs for validated Minecraft samples.
+P7 provides three-platform release validation and transactional updater tests, including Windows executable sharing locks, failed health checks and recovery of a missing entrypoint. The first P7 installation is manual because earlier binaries have no updater protocol. Current data formats require no migration; old-writer compatibility samples do not constitute every historical receipt generation. The regular performance workflow measures fixed local HTTP install fixtures, cache reuse, CLI startup and ZIP parsing, and real updater commit/rollback on all three platforms. It records requests and transferred bytes, logical disk use, and platform-available peak memory. Its historical regression gate starts after three compatible prior observations and compares up to five rolling samples; reports are uploaded even when a gate fails. Public-network throughput, Minecraft main-menu readiness and allocated disk blocks are not measured.
+
+For direct investigation, manually dispatch `.github/workflows/performance.yml` with `compare_ref` set to a baseline branch, tag, or full 40-character commit SHA. The paired comparison runs both revisions on the same Ubuntu 24.04 runner with Rust 1.99.0 and the same Linux target. It copies the candidate `p7_benchmark.rs` and `update_process.rs` into the baseline checkout so both revisions use the same measurement harness, records both commits, runner identity and harness hashes, and builds each revision's CLI, benchmark example, and updater test. The harness runs five alternating baseline/candidate pairs. Each pair records three cold/warm installation and updater measurements per build (15 each in total), plus seven CLI/parser measurements (35 in total). It compares paired medians for cold and warm installation, metadata parsing, updater commit, and health-failure rollback; a median slowdown above 25% fails the gate. The report is retained for 90 days. This comparison is Linux-only and complements the scheduled/push history workflow.
+
+Weekly or manual upstream metadata regression covers vanilla release/snapshot catalogs and loader catalogs for validated Minecraft samples.
 
 <a id="microsoft-application"></a>
 
-## Microsoft application registration and acceptance
+## Microsoft application setup and optional online sign-in validation
 
-> **Preview status:** Microsoft sign-in is implemented and the owner has registered the CCL OAuth application. Real Xbox/Minecraft service access and entitled-account acceptance remain incomplete. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
+> **Owner decision (2026-10-23):** Offline identity and username launch remain supported for the first stable release. Microsoft device sign-in is implemented as an experimental online integration; the owner has deferred genuine-account validation and acceptance, so it is not a first-release gate. The latest recorded live retry passed Microsoft OAuth, Xbox Live, and XSTS, then received HTTP 403 at Minecraft login before profile/entitlement data. The cause was not established. Describe online sign-in as experimental until future authenticated-account acceptance is completed.
 
 ### Register a public desktop application
 
@@ -128,20 +148,20 @@ The launcher uses Microsoft's device authorization flow. It is a public desktop 
 6. Do not create a client secret, and do not put access or refresh tokens in launcher settings.
 7. Confirm the current Xbox and Minecraft service access requirements for your application. Registration alone does not prove that the complete sign-in flow will work. If a service rejects the application, resolve access using the returned error and that service’s official support process.
 
-Microsoft's [app registration quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app) describes supported account types. The desktop guide explains when a desktop client is a public client and how to enable public-client flows. This project has not yet validated whether its application registration and API access are approved for public users.
+Microsoft's [app registration quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app) describes supported account types. The desktop guide explains when a desktop client is a public client and how to enable public-client flows. Registration and successful earlier exchange stages do not establish public-user API approval.
 
-### Validation checklist for the application owner
+### Optional checklist for future authenticated-login acceptance
 
-Before calling account sign-in ready for a public preview, record evidence that:
+If the owner later seeks to mark Microsoft online sign-in as accepted for authenticated accounts, record evidence that:
 
 - the registered public client ID is the one shipped/configured for the launcher and has completed required Microsoft review;
 - device-code login works for a Minecraft Java account with an entitlement;
 - denial, expiry, cancellation, refresh, sign-out, and unavailable credential-vault paths behave correctly;
 - no tokens appear in CLI output, logs, error text, ordinary configuration, or account metadata;
 - the Linux build works with a real persistent Secret Service/D-Bus session;
-- the service/API permissions and distribution comply with current Microsoft, Xbox, and Minecraft requirements.
+- current Microsoft, Xbox, and Minecraft service/API requirements for authenticated sign-in and distribution have been checked.
 
-Until those checks are complete, the authentication feature and preview package must be described as **unverified and not ready for public distribution**.
+The latest recorded validation had no Minecraft Java entitled account available. Keep that limitation attached to claims about online authenticated sign-in. The owner chose to preserve the offline identity flow while deferring this optional acceptance work.
 
 <a id="validation"></a>
 
@@ -158,10 +178,116 @@ cargo build --workspace --release --locked
 
 CI covers Windows x64, macOS arm64 and Linux x86_64. Windows also runs the opt-in OS credential-vault probe. Live provider and real-account checks must be reported separately from service fixtures. Preview scripts package the binary, license, READMEs and all paired public guides; when reorganizing docs, update links, CLI diagnostic paths and both scripts together.
 
+The CI matrix runs formatting, Clippy with warnings denied, all workspace tests, and optimized release builds on all three targets. Windows additionally runs ignored credential-vault round-trip probes for account credentials and provider keys. The weekly/manual upstream metadata workflow is a separate read-only check (Linux by default; optionally all three platforms). The performance workflow is also separate and records benchmark reports; it is not a substitute for release validation. The standalone preview workflow builds and packages artifacts but does not publish a release.
+
 Unit fixtures cover provider search and version payload mapping, dependency types and pins, CurseForge file metadata and relationships, key redaction and header scoping, update selection, transactional ownership, rollback, and conflicts. A loopback HTTP fixture exercises Modrinth search, version listing, and recursive pinned dependency resolution. A separate opt-in test queries the public Modrinth API.
+
+<a id="release"></a>
+
+## Release checklist and commands
+
+### Before a stable release
+
+1. Describe authentication and provider scope accurately. Offline identity remains supported; the owner deferred genuine-account Microsoft online acceptance on 2026-10-23, so it is not a first-stable-release gate. Describe the Microsoft online integration as experimental, and don't infer live CurseForge authorization from fixtures or a local key save. Inspect current all-platform performance artifacts; use the paired Linux comparison against a selected baseline when investigating a suspected regression.
+2. Start from a clean working tree, fetch the remote refs, and integrate the accepted `dev` commit into `main`. Preserve any independent local-main changes and resolve/review merge conflicts; do not reset or force-push the branch. Once the release source is on `main`, set the `version` fields in both `crates/ccl-core/Cargo.toml` and `crates/ccl-cli/Cargo.toml` to the release's three-part version. Refresh and commit `Cargo.lock`, then confirm the versions agree:
+
+   ```sh
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git merge --no-ff dev
+   # Resolve/review any conflicts, then edit both package versions if needed.
+   cargo check --workspace
+   python3 scripts/check-package-versions.py --expected X.Y.Z
+   ```
+
+Review `git diff -- Cargo.lock` after the check and keep only lockfile changes required by the workspace version change. Do not refresh unrelated dependency versions as part of release preparation.
+
+3. Run the local validation suite and check the diff. These are the release workflow's source checks for the host target; the hosted workflow repeats them on every release target.
+
+   ```sh
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo test --workspace --all-targets --locked
+   cargo build --workspace --release --locked
+   git diff --check
+   ```
+
+4. Commit and push the version change and release-ready source to `main`. If the selected version is already correct and the merge contains no additional version changes, skip the version-only add/commit commands below. Stage only reviewed paths, including the package version manifests and lockfile. Confirm the intended commit is reachable from `origin/main`. Then create and push the exact matching tag:
+
+   ```sh
+   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml
+   git commit -m "chore: prepare vX.Y.Z"
+   git push origin main
+   git fetch origin main
+   git merge-base --is-ancestor HEAD origin/main
+   # Wait for the main-branch CI to pass before creating the version tag.
+   git tag -a vX.Y.Z -m "CCL vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+The tag starts `.github/workflows/release-stable.yml`. It checks the tag is on `main`, verifies both crate versions match, runs formatting, Clippy, tests and the Windows vault probes, then builds and smoke-checks Windows x64, macOS arm64 and Linux x86_64 ZIPs. The publish job refuses an existing GitHub release with that tag, creates a draft release, generates three updater manifests, downloads the assets again, checks archive checksums and manifest-bound executable hashes/identities, and only then publishes it as the latest stable release. Stable version tags must be unique and must never be moved to a different commit.
+
+Before tagging, package one host build locally with the corresponding script if useful. The updater package is a ZIP on all three platforms:
+
+```sh
+# Linux native host; use aarch64-apple-darwin on an Apple-silicon Mac.
+TARGET=x86_64-unknown-linux-gnu
+cargo build --release --locked --target "$TARGET" -p ccl-cli
+TARGET="$TARGET" ARCHIVE_EXT=zip bash scripts/package-preview.sh
+```
+
+```powershell
+$target = 'x86_64-pc-windows-msvc'
+cargo build --release --locked --target $target -p ccl-cli
+$env:TARGET = $target
+./scripts/package-preview.ps1
+```
+
+An ordinary local build has an unpublished commit identity unless the release build environment is supplied; use it for local checks, not as a substitute for the workflow-produced update package. The package scripts require the appropriate `target/<triple>/release/ccl` executable (`ccl.exe` on Windows). They include the project license, both READMEs, each paired English/Simplified Chinese guide, and generated `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` inventories. `scripts/third-party-notices.py` walks the target-specific normal and build dependency graph of `ccl-cli` and copies available license/notice texts into `licenses/<crate-version-hash>/`; the packaging scripts verify those files are present in the archive. They then smoke-check the archive and write a SHA-256 file. A checksum detects accidental corruption but the archive and executable are unsigned, so it does not authenticate the publisher.
+
+### Developer builds
+
+Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
+
+```sh
+git switch dev
+git pull --ff-only origin dev
+# make and commit the intended changes
+git push origin dev
+```
+
+The workflow requires the tested commit to remain the current `dev` tip while all three platform jobs validate and package. On success it creates immutable tag `dev-<full commit SHA>`, verifies the three ZIPs, checksums and manifests, publishes a prerelease, and retains the newest ten matching developer releases. Do not create or push that tag manually. If another commit reaches `dev` during validation, no release for the stale tip should be published; validate the new tip instead.
+
+### Troubleshooting release gates
+
+- **Stable tag rejected:** confirm the tag commit is an ancestor of `origin/main`, both package versions equal the tag without the `v`, and `Cargo.lock` is committed. The checker is `python3 scripts/check-package-versions.py --expected X.Y.Z`.
+- **`--locked` reports a lockfile change:** update the two package versions, run `cargo check --workspace`, inspect and commit only required `Cargo.lock` changes, then repeat locked checks.
+- **Native link/build failure:** install the target-specific compiler/linker and SDK listed under [Environment](#environment). A host build does not prove another target can link.
+- **Credential vault probe fails:** unlock the OS credential service. On Linux, ensure a persistent Secret Service/D-Bus session is available; CCL deliberately returns an error instead of saving credentials in plaintext.
+- **Developer release is absent:** inspect all three validation jobs and check whether `dev` moved past the tested commit. A failed or stale-tip job does not produce an immutable package.
+- **Hash check passes:** this confirms byte integrity against the manifest/checksum. It does not prove that the package was signed or published by a verified identity.
+
+<a id="release-notes"></a>
+
+## First stable release notes draft
+
+<!-- release-notes:start -->
+# CialloCraftLauncher 0.1.0
+
+This release provides a Rust CLI and shared core for installing and launching Minecraft, managing isolated instances, installing supported loaders, importing supported Modrinth/CurseForge/MultiMC/Prism packs, and managing local content and backups. The launcher can stage, health-check, and roll back its own executable update; it does not migrate game data.
+
+**Authentication and provider status:** Offline identity launch is supported. Microsoft online sign-in is experimental; the owner deferred genuine Java account validation and acceptance on 2026-10-23. CurseForge keys are supplied by users and stored in the OS credential vault; production API access depends on provider authorization.
+
+**Compatibility and security:** Packages are unsigned. SHA-256 checks detect changed package bytes but do not authenticate the publisher. Back up important worlds before pack operations that replace content.
+
+Packages are provided for Windows x86_64, macOS arm64, and Linux x86_64. Review the included guides for setup, supported formats, and current platform requirements.
+<!-- release-notes:end -->
+
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. Review current all-platform performance artifacts before publication; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical P7 checks do not establish performance for the release commit.
 
 <a id="scope"></a>
 
 ## Current feature scope
 
-The core provides configuration, directory selection, HTTP downloads, version lookup and installation, managed Java runtime installation under `.ccl/runtimes`, Microsoft account authentication, launch planning, native extraction, child-process output capture, Modrinth pack handling, CurseForge and MultiMC/Prism archive conversion, Modrinth/CurseForge online content operations, isolated instance lifecycle and retained revision cleanup, Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine loaders, local content management, and userdata backups. Pack receipts record hashes for pack-owned paths; updates use those hashes to detect local edits, deletions, and collisions before replacing data. Disk-usage reporting counts logical bytes and does not promise physical space reclaimed when hard links exist. Userdata backups are separate from Modrinth exports, which omit saves and private server lists and require explicit redistribution consent for local binaries. CurseForge API key support does not imply that a real key has production authorization. Microsoft account approval and live end-to-end validation remain outstanding; don't describe account login as ready for public use until those gates are complete. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.
+The core provides configuration, directory selection, HTTP downloads, version lookup and installation, managed Java runtime installation under `.ccl/runtimes`, Microsoft account authentication, offline identity launch, launch planning, native extraction, child-process output capture, Modrinth pack handling, CurseForge and MultiMC/Prism archive conversion, Modrinth/CurseForge online content operations, isolated instance lifecycle and retained revision cleanup, Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine loaders, local content management, and userdata backups. Pack receipts record hashes for pack-owned paths; updates use those hashes to detect local edits, deletions, and collisions before replacing data. Disk-usage reporting counts logical bytes and does not promise physical space reclaimed when hard links exist. Userdata backups are separate from Modrinth exports, which omit saves and private server lists and require explicit redistribution consent for local binaries. CurseForge API key support does not imply that a real key has production authorization. Microsoft online sign-in is experimental; the owner deferred genuine-account acceptance on 2026-10-23, while offline identity remains supported. Keep the core independent from interfaces and update the English and Chinese user documentation together when changing public behavior.

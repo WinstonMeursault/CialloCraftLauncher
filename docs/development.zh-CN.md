@@ -9,15 +9,23 @@
 - [配置与数据目录](#data)
 - [实例与事务](#transactions)
 - [更新、兼容性与诊断](#maintenance)
-- [Microsoft 应用注册与验收](#microsoft-application)
+- [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
+- [发行清单与命令](#release)
+- [首个稳定版发行说明草稿](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
 
 ## 环境
 
-安装 Rust 稳定版工具链及 Cargo。工作区使用 Rust 2024 edition。目标平台为 Windows x86_64、macOS arm64 和 Linux x86_64。
+安装 Rust 稳定版工具链及 Cargo；工作区使用 Rust 2024 edition。发行工作流当前使用 Rust 1.99.0，常规 CI 使用 Rust stable 通道。还需要安装目标平台的本地链接器和 SDK：
+
+- Windows x86_64：MSVC C++ Build Tools 和 Windows SDK（`x86_64-pc-windows-msvc`）。
+- macOS arm64：arm64 Mac 和 Xcode Command Line Tools（`aarch64-apple-darwin`）。
+- Linux x86_64：C 编译器、链接器、`make`、`pkg-config` 和 glibc 开发头文件（例如 Ubuntu 的 `build-essential`；目标为 `x86_64-unknown-linux-gnu`）。
+
+发行工作流在对应的 GitHub 托管运行器上构建每个平台的程序包。本地交叉编译也需要所选目标对应的可用链接器和 SDK。组装程序包及生成依赖声明需要 Python 3。Unix ZIP 打包需要 `zip`、`unzip` 和 `sha256sum` 或 `shasum`；tar.gz 打包需要 `tar` 和 SHA-256 工具。Linux 运行账户和服务商凭据功能还需要持久且已解锁的 Secret Service/D-Bus 会话；不会回退到明文保存。
 
 <a id="build"></a>
 
@@ -29,6 +37,8 @@
 cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
+
+`Cargo.lock` 固定工作区依赖版本。发行检查和构建应使用 `--locked`，让 Cargo 在清单与已提交锁文件不一致时直接失败。`keyring` 使用系统原生凭据库后端；HTTP 使用 Rustls，因此构建启动器不需要 OpenSSL。
 
 用户流程见[使用指南](user-guide.zh-CN.md)，命令、输出及核心服务见 [API 文档](api.zh-CN.md)。
 
@@ -72,6 +82,8 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 配置字段及默认路径统一维护于[使用指南](user-guide.zh-CN.md#configuration)。
 
+`auth.microsoft_client_id` 是公开应用 ID，不是秘密。账户元数据（如账户 ID、名称、档案 ID 和当前选中账户）与 OAuth/Minecraft 令牌分开保存；令牌必须留在按账户索引文件路径隔离的操作系统凭据库中。CurseForge API 密钥保存在另一个按配置文件路径隔离的系统凭据项中；可选的 `CCL_CURSEFORGE_API_KEY` 环境变量会覆盖已保存密钥。两类凭据都不能放入 JSON 配置、日志、版本控制或命令行参数。
+
 默认游戏目录优先级为：显式 `--game-dir`、当前工作目录中已存在的 `.minecraft`、平台惯用目录、用户主目录中的 `.minecraft`，最后在当前工作目录创建新的 `.minecraft`。macOS 已存在的惯用目录可以复用。`doctor` 只读；`init` 会创建所选目录。
 
 版本列表和文件来源偏好相互独立，接受 `auto`、`official` 或 `mirror`。镜像根地址可配置，且必须为不含 URL 凭据的 HTTPS 地址。全局选项 `--network-offline` 禁用 HTTP，并且只使用已验证的本地元数据和文件；它与离线玩家身份不同。只有保存的强 ETag 和服务器范围响应验证未完成文件后才会续传。版本列表、安装、启动准备和进程输出捕获在共享核心中实现；CLI 只负责界面格式和退出码映射。
@@ -92,6 +104,8 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 在线内容服务支持 Modrinth 和 CurseForge 的搜索、版本查询、依赖解析、更新检查、冲突分析及事务化安装/更新。CurseForge 密钥可用或请求头范围测试均不代表真实密钥已获得生产授权。参阅[在线内容](user-guide.zh-CN.md#online)。
 
+CLI 通过 `ccl credentials curseforge set` 接收 CurseForge 密钥：程序会在隐藏输入的终端提示中读取密钥，并将其保存在与所选配置路径关联的操作系统凭据库中。`CCL_CURSEFORGE_API_KEY` 是环境变量覆盖项。CCL 不会把密钥写入 JSON 设置或账户元数据，且只向获准的 CurseForge API/CDN 主机发送密钥。凭据库可用或本地保存成功都不能证明 CurseForge 已授权真实密钥用于生产访问；发行前应由密钥持有人或服务商确认。参阅[凭据处理](user-guide.zh-CN.md#configuration)和 [API 行为](api.zh-CN.md)。
+
 `modpack_format` 模块读取和写入 Modrinth 格式版本 1 归档，校验清单和目标路径，限制 ZIP 解压规模，并按顺序应用 `overrides/` 与客户端覆盖。`modpacks` 会事务性导入所选文件和覆盖内容，并在收据中记录整合包拥有路径的哈希。更新会把当前文件与归属哈希比较；整合包拥有的文件被修改或删除，或新路径与未托管本地内容冲突时，会停止更新，除非调用者明确授权替换。整合包或内容变更后，`instance rollback` 会恢复上一份完整实例快照，包括用户数据和存档；如果要保留较新的存档，应先备份。`content` 管理本地内容和可移植用户数据备份。备份包含用户数据与存档，但不包含游戏/加载器文件、Java 运行时或账户凭据。Modrinth 导出与备份用途不同：导出不包含存档和私有服务器列表，本地二进制文件需要明确授权重新分发。命令和安全说明见[Modrinth 整合包与实例内容](user-guide.zh-CN.md#packs)。命令及支持边界另见[加载器与实例](user-guide.zh-CN.md#loaders)。
 
 <a id="maintenance"></a>
@@ -100,7 +114,7 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 `update::UpdateService` 只查询 `WinstonMeursault/CialloCraftLauncher`。稳定版使用 `main` 上的 `v<VERSION>` 标签。每次向 `dev` 推送都会启动 Windows x64、macOS arm64 和 Linux x86_64 的验证与打包；所有任务通过后，才会将对应提交发布为不可变的 `dev-<完整 SHA>`。工作流保留最近十个开发版发行。稳定标签必须匹配 CLI crate 版本，且其提交位于 `main`。清单绑定仓库、渠道、分支、完整 commit、目标平台、程序哈希和数据读取范围（`1..=1`）。
 
-`UpdateService::check` 会区分可用程序包与尚未完成发行的分支提交。`stage` 下载并校验有大小限制的 ZIP、归档路径及哈希，然后暂存候选程序。`Installation` 管理渠道选择和持久事务日志；`launch_helper` 启动受限旧程序助手，父进程退出后由 `execute_helper` 执行替换、健康检查或回滚。`prepare_rollback` 会先检查当前数据兼容性。二进制更新器不会恢复游戏数据。当前格式无需迁移；读取器保留无 schema 配置/账户/实例元数据的读取能力，并接受 schema 1 收据。未知的未来配置或实例字段以及大于 1 的收据 schema 会被拒绝。首轮回归使用从基线 `2edbf0e` 的 Git 归档生成的配置与账户元数据；夹具已脱敏，测试账户凭据没有写入文件。
+`UpdateService::check` 会区分可用程序包与尚未完成发行的分支提交。`stage` 下载并校验有大小限制的 ZIP、归档路径及哈希，然后暂存候选程序。`Installation` 管理渠道选择和持久事务日志；`launch_helper` 启动受限旧程序助手，由 `execute_helper` 异步执行替换、健康检查或回滚；Windows 对临时共享占用有界重试。`prepare_rollback` 会先检查当前数据兼容性。二进制更新器不会恢复游戏数据。当前格式无需迁移；读取器保留无 schema 配置/账户/实例元数据的读取能力，并接受 schema 1 收据。未知的未来配置或实例字段以及大于 1 的收据 schema 会被拒绝。首轮回归使用从基线 `2edbf0e` 的 Git 归档生成的配置与账户元数据；夹具已脱敏，测试账户凭据没有写入文件。
 
 发行归档未签名。HTTPS、大小和 SHA-256 检查可以发现损坏，但不能认证发布者身份；不得将其称为签名或发布者验证。尚未实现系统签名或公证。`update status`、`rollback` 和 `recover` 不需要网络；`check` 和 `apply` 需要网络，且会被 `--network-offline` 阻止。
 
@@ -108,13 +122,17 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 `DiagnosticsService::doctor` 报告 Java 候选、目录访问和是否编译凭据库适配器；不探测凭据库解锁状态。网络与写入探测需显式启用。`diagnose_run` 检查有大小限制的运行日志和时间戳接近的崩溃报告，仅识别已支持模式。导出只序列化白名单字段并替换路径；原始输出预览需单独显式选择，最多 16 KiB，并尽力脱敏。它仍可能包含游戏或模组写入的秘密，CCL 不会上传该报告。
 
-P7 提供三平台发行校验与事务式更新测试，覆盖 Windows 程序共享锁、健康检查失败和入口丢失恢复。首个 P7 需手动安装，因为更早的二进制没有更新协议。当前数据格式无需迁移；旧写入器兼容样本不代表全部历史收据代次。性能工作流使用真实安装服务和固定本地 HTTP 样本，测量冷/热安装、校验与缓存复用、CLI 启动和 ZIP 解析，以及真实更新助手的替换/回退；记录请求与传输字节、逻辑磁盘量和平台可用的峰值内存。只有至少三份匹配平台、工具链和夹具的历史观测后才启用退化门槛，并保留五份滚动历史。报告先写入后再判定失败，以保留故障证据。它不测公网吞吐、Minecraft 主菜单就绪或实际分配磁盘块。上游元数据回归支持每周或手动触发，覆盖原版正式版/快照及已验证版本的加载器目录。
+P7 提供三平台发行校验与事务式更新测试，覆盖 Windows 程序共享锁、健康检查失败和入口丢失恢复。首个 P7 需手动安装，因为更早的二进制没有更新协议。当前数据格式无需迁移；旧写入器兼容样本不代表全部历史收据代次。常规性能工作流在三个平台上使用固定本地 HTTP 安装夹具，测量冷/热安装、缓存复用、CLI 启动和 ZIP 解析，以及真实更新助手的提交/回滚；记录请求与传输字节、逻辑磁盘量和平台可用的峰值内存。至少三份兼容的历史观测后才启用历史退化门槛，最多比较五份滚动样本；即使门槛失败也会上传报告。它不测公网吞吐、Minecraft 主菜单就绪或实际分配磁盘块。
+
+要直接调查性能，可手动触发 `.github/workflows/performance.yml` 并设置 `compare_ref` 为基线分支、标签或完整 40 位提交 SHA。配对比较在同一个 Ubuntu 24.04 运行器上以 Rust 1.99.0 构建两个版本，使用相同 Linux 目标平台。工作流将候选版的 `p7_benchmark.rs` 和 `update_process.rs` 复制到基线工作区，让两个版本使用相同测量程序；报告会记录两个提交、运行器信息和测量程序哈希，并为两个版本分别构建 CLI、基准示例和更新测试。基准以交替顺序执行五组基线/候选配对。每组每个构建记录三次冷/热安装及更新器测量（各共 15 次），另记录七次 CLI/解析测量（共 35 次）。比较冷/热安装、元数据解析、更新提交和健康检查失败回滚的配对中位数；中位退化超过 25% 会导致门槛失败。报告保留 90 天。该比较仅覆盖 Linux，并补充定时/推送触发的历史性能工作流。
+
+每周或手动触发的上游元数据回归覆盖原版正式版/快照目录和已验证 Minecraft 版本的加载器目录。
 
 <a id="microsoft-application"></a>
 
-## Microsoft 应用注册与验收
+## Microsoft 应用设置与可选的在线登录验收
 
-> **预览状态：** Microsoft 登录已经实现，所有者已完成 CCL OAuth 应用注册。真实 Xbox/Minecraft 服务访问与正版账户验收尚未完成。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
+> **所有者决定（2026-10-23）：** 首个稳定版继续支持离线身份和用户名启动。Microsoft 设备登录已实现，但作为实验性的在线集成；所有者推迟了真实账户验证和验收，因此这不是首个稳定版的发行门槛。最新记录的实时重试通过 Microsoft OAuth、Xbox Live 和 XSTS，随后 Minecraft 登录在返回个人资料/权益前响应 HTTP 403，原因尚未确认。完成未来的真实账户验收前，应将在线登录描述为实验功能。
 
 ### 注册公开桌面应用
 
@@ -128,20 +146,20 @@ P7 提供三平台发行校验与事务式更新测试，覆盖 Windows 程序�
 6. 不要创建客户端密钥，也不要把访问令牌或刷新令牌放入启动器设置。
 7. 确认你的应用当前需要满足的 Xbox 和 Minecraft 服务访问要求。完成注册本身不能证明完整登录流程可用。如果服务拒绝该应用，请根据错误和该服务的官方支持流程解决访问问题。
 
-Microsoft 的[应用注册快速入门](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)说明了账户类型；桌面应用指南说明何时应将桌面客户端设为公开客户端，以及如何启用公开客户端流。本项目尚未验证当前应用注册和 API 访问是否已获准用于公众。
+Microsoft 的[应用注册快速入门](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)说明了账户类型；桌面应用指南说明何时应将桌面客户端设为公开客户端，以及如何启用公开客户端流。完成注册和较早的令牌交换步骤，并不能证明已获准面向公众使用 API。
 
-### 应用所有者的验证清单
+### 未来真实账户登录验收的可选清单
 
-将账户登录称为可供公众使用的预览功能前，请记录以下验证证据：
+如果所有者未来希望将 Microsoft 在线登录标记为已通过真实账户验收，请记录以下证据：
 
 - 已注册的公开客户端 ID 与启动器配置一致，并已完成 Microsoft 要求的审核；
 - 设备代码登录可用于拥有 Minecraft Java 版权益的账户；
 - 拒绝、过期、取消、刷新、退出和凭据库不可用等路径均符合预期；
 - CLI 输出、日志、错误文本、普通配置和账户元数据中均没有令牌；
 - Linux 版本在真实且持久的 Secret Service/D-Bus 会话中可用；
-- 服务/API 权限及分发方式符合当前 Microsoft、Xbox 和 Minecraft 要求。
+- 已核实当前 Microsoft、Xbox 和 Minecraft 对真实账户登录及分发的服务/API 要求。
 
-这些检查完成前，必须将身份验证功能和预览包标注为**未经验证，不适合公开分发**。
+最近一次记录的验证没有可用的 Minecraft Java 版正版账户。此限制仅应附加在在线真实账户登录的验收声明中。所有者选择保留离线身份流程，并推迟这项可选验收工作。
 
 <a id="validation"></a>
 
@@ -158,10 +176,116 @@ cargo build --workspace --release --locked
 
 CI 覆盖 Windows x64、macOS arm64、Linux x86_64。Windows 另执行需主动运行的操作系统凭据库探测。真实平台及账户验证与服务夹具应分别记录。预览脚本打包程序、许可证、README 和全部双语公开指南；整理文档时同步更新链接、CLI 诊断路径及两份打包脚本。
 
+CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作区测试，以及三个目标平台的优化发行构建。Windows 还会分别运行账户凭据和服务商密钥的凭据库往返探测。每周/手动上游元数据工作流是独立的只读检查（默认 Linux，也可选择三个平台）。性能工作流同样独立，会记录基准报告，不能代替发行验证。单独的预览工作流会构建和打包制品，但不会发布发行版本。
+
 单元测试夹具覆盖平台搜索与版本响应解析、依赖类型和固定版本、CurseForge 文件元数据及依赖关系、密钥脱敏与请求头限定、更新版本选择、事务式所有权、回滚和冲突。回环 HTTP 夹具会执行 Modrinth 搜索、版本列表和固定依赖递归解析。另有一个可选测试直接查询公开 Modrinth API。
+
+<a id="release"></a>
+
+## 发行清单与命令
+
+### 稳定版发行前
+
+1. 准确描述身份验证和服务商支持范围。离线身份仍受支持；所有者于 2026-10-23 推迟了 Microsoft 在线登录的真实账户验收，该验收不是首个稳定版的发行门槛。将 Microsoft 在线集成描述为实验功能，也不要根据测试夹具或本地保存密钥推断 CurseForge 已授权线上访问。检查当前所有平台的性能制品；调查疑似退化时，使用选定基线执行 Linux 配对比较。
+2. 从干净工作区获取远端引用，将已验收的 `dev` 提交集成至 `main`。保留本地 main 的独立改动，解决并复核合并冲突，不重置分支或强制推送。发行源码就位后，再将 `crates/ccl-core/Cargo.toml` 和 `crates/ccl-cli/Cargo.toml` 中的 `version` 字段设为发行用的三段版本号。运行检查按需更新 `Cargo.lock`，检查差异后再提交，然后确认两个版本一致：
+
+   ```sh
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git merge --no-ff dev
+   # 解决并复核冲突，然后按需修改两个 package 版本。
+   cargo check --workspace
+   python3 scripts/check-package-versions.py --expected X.Y.Z
+   ```
+
+检查 `git diff -- Cargo.lock`，只保留工作区版本变更所需的锁文件更新。发行准备时不要顺带刷新无关依赖版本。
+
+3. 运行本机验证并检查差异。这些是发行工作流在本机目标平台上的源码检查；托管工作流还会在所有发行目标上重复检查。
+
+   ```sh
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo test --workspace --all-targets --locked
+   cargo build --workspace --release --locked
+   git diff --check
+   ```
+
+4. 将版本变更和发行就绪的源码提交并推送到 `main`。若目标版本已经正确，合并后没有额外版本变更，则跳过下面仅用于版本变更的 add/commit 命令。只暂存审核过的文件，包括 package 版本清单和锁文件。确认目标提交可从 `origin/main` 到达，然后创建并推送完全匹配的标签：
+
+   ```sh
+   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml
+   git commit -m "chore: prepare vX.Y.Z"
+   git push origin main
+   git fetch origin main
+   git merge-base --is-ancestor HEAD origin/main
+   # 等待 main 分支 CI 通过，再创建版本标签。
+   git tag -a vX.Y.Z -m "CCL vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+该标签会触发 `.github/workflows/release-stable.yml`。工作流确认标签位于 `main` 且两个 crate 版本与标签一致，运行格式、Clippy、测试和 Windows 凭据库探测，然后在 Windows x64、macOS arm64 和 Linux x86_64 上构建并检查 ZIP。发布任务拒绝使用已有 GitHub 发行的标签，创建草稿发行，生成三个更新器清单，重新下载制品，并校验归档校验和及清单绑定的可执行文件哈希/身份；通过后才发布为最新稳定版。稳定版标签必须唯一，且不能移动到其他提交。
+
+如有需要，可在打标签前使用对应脚本打包一个本机目标版本。三个平台的更新器程序包都是 ZIP：
+
+```sh
+# Linux 本机；Apple 芯片 Mac 改用 aarch64-apple-darwin。
+TARGET=x86_64-unknown-linux-gnu
+cargo build --release --locked --target "$TARGET" -p ccl-cli
+TARGET="$TARGET" ARCHIVE_EXT=zip bash scripts/package-preview.sh
+```
+
+```powershell
+$target = 'x86_64-pc-windows-msvc'
+cargo build --release --locked --target $target -p ccl-cli
+$env:TARGET = $target
+./scripts/package-preview.ps1
+```
+
+普通本机构建在未提供发行构建环境时使用 unpublished 提交标识；可用于本地检查，不能代替工作流产生的更新程序包。打包脚本要求对应的 `target/<三元组>/release/ccl` 程序存在（Windows 文件名为 `ccl.exe`）。归档包含项目许可证、两份 README、配对的中英文指南，以及生成的 `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` 清单。`scripts/third-party-notices.py` 会读取 `ccl-cli` 在所选目标下的常规及构建依赖图，并将可用的许可证/声明文本复制到 `licenses/<crate-version-hash>/`；打包脚本会验证这些文件已进入归档。随后脚本检查归档并生成 SHA-256 文件。校验和可发现意外损坏，但程序包和可执行文件都未签名，因此无法认证发布者。
+
+### 开发版
+
+向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
+
+```sh
+git switch dev
+git pull --ff-only origin dev
+# 完成并提交预期的改动
+git push origin dev
+```
+
+工作流要求三个平台验证和打包期间，被测试提交仍是 `dev` 当前分支头。成功后，它会创建不可变标签 `dev-<完整提交 SHA>`，校验三个 ZIP、校验和与清单，发布预发行版，并保留最新十个符合条件的开发版发行。不要手动创建或推送该标签。如果验证时 `dev` 前进了，旧提交不会发布；应改为验证新分支头。
+
+### 发行门槛故障排查
+
+- **稳定版标签被拒绝：** 确认标签提交是 `origin/main` 的祖先、两个 package 版本与去掉 `v` 后的标签相同，并已提交 `Cargo.lock`。使用 `python3 scripts/check-package-versions.py --expected X.Y.Z` 检查。
+- **`--locked` 报告锁文件需要变更：** 更新两个 package 版本，运行 `cargo check --workspace`，检查并只提交所需的 `Cargo.lock` 变更，然后重跑 locked 检查。
+- **本地链接或构建失败：** 安装[环境](#environment)中列出的目标编译器/链接器和 SDK。本机目标构建通过不能证明其他目标可以链接。
+- **凭据库探测失败：** 解锁操作系统凭据服务。Linux 需要持久的 Secret Service/D-Bus 会话；CCL 会返回错误，不会将凭据明文写入文件。
+- **开发版发行未生成：** 查看三个平台的验证任务，并确认 `dev` 是否已超过被测提交。任务失败或分支头过期不会生成不可变程序包。
+- **哈希校验通过：** 这只能确认字节与清单/校验和一致，不能证明程序包已签名或由已验证身份发布。
+
+<a id="release-notes"></a>
+
+## 首个稳定版发行说明草稿
+
+<!-- release-notes:start -->
+# CialloCraftLauncher 0.1.0
+
+本版本提供 Rust 命令行界面和共享核心，用于安装并启动 Minecraft、管理隔离实例、安装受支持的加载器、导入受支持的 Modrinth/CurseForge/MultiMC/Prism 整合包，以及管理本地内容和备份。启动器可暂存并健康检查自己的可执行文件更新，在检查失败时回滚；它不会迁移游戏数据。
+
+**身份验证和服务商状态：** 支持离线身份启动。Microsoft 在线登录属于实验功能；所有者于 2026-10-23 推迟了真实 Java 账户验证和验收。CurseForge 密钥由用户自行提供并保存在操作系统凭据库中；生产 API 访问取决于服务商授权。
+
+**兼容性与安全：** 程序包未签名。SHA-256 检查只能发现程序包字节变化，无法认证发布者。替换内容的整合包操作前请备份重要存档。
+
+提供 Windows x86_64、macOS arm64 和 Linux x86_64 程序包。安装、支持的格式及当前平台要求见随包附带的指南。
+<!-- release-notes:end -->
+
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。发布前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史 P7 检查不能代表当前发行提交的性能。
 
 <a id="scope"></a>
 
 ## 当前功能范围
 
-核心提供配置、目录选择、HTTP 下载、版本查询与安装、安装托管 Java 运行时到 `.ccl/runtimes`、Microsoft 账户身份验证、启动计划、原生库解压、子进程输出捕获、Modrinth 整合包处理、CurseForge 和 MultiMC/Prism 归档转换、Modrinth/CurseForge 在线内容操作、隔离实例生命周期与保留修订版清理、Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine 加载器、本地内容管理和用户数据备份。整合包收据记录其拥有路径的哈希；更新会使用这些哈希检查本地修改、删除和路径冲突，然后再替换数据。磁盘用量报告统计逻辑字节数；存在硬链接时不承诺对应的物理空间回收量。用户数据备份与 Modrinth 导出用途不同：导出不包含存档和私有服务器列表，并且导出本地二进制文件需要明确授权重新分发。支持 CurseForge API 密钥不代表真实密钥已获得生产授权。Microsoft 账户批准和实时端到端验证尚未完成；在这些条件满足前，不要把账户登录描述为可公开使用。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。
+核心提供配置、目录选择、HTTP 下载、版本查询与安装、安装托管 Java 运行时到 `.ccl/runtimes`、Microsoft 账户身份验证、离线身份启动、启动计划、原生库解压、子进程输出捕获、Modrinth 整合包处理、CurseForge 和 MultiMC/Prism 归档转换、Modrinth/CurseForge 在线内容操作、隔离实例生命周期与保留修订版清理、Fabric/Quilt/Legacy Fabric/Forge/NeoForge/OptiFine 加载器、本地内容管理和用户数据备份。整合包收据记录其拥有路径的哈希；更新会使用这些哈希检查本地修改、删除和路径冲突，然后再替换数据。磁盘用量报告统计逻辑字节数；存在硬链接时不承诺对应的物理空间回收量。用户数据备份与 Modrinth 导出用途不同：导出不包含存档和私有服务器列表，并且导出本地二进制文件需要明确授权重新分发。支持 CurseForge API 密钥不代表真实密钥已获得生产授权。Microsoft 在线登录属于实验功能；所有者于 2026-10-23 推迟了真实账户验收，离线身份仍受支持。保持核心与界面解耦；修改公开行为时同步更新中英文用户文档。

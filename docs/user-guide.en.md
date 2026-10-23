@@ -3,6 +3,7 @@
 [API reference](api.en.md) · [Development guide](development.en.md) · [简体中文](user-guide.zh-CN.md)
 
 - [Quick start](#quickstart)
+- [Installation and prerequisites](#installation)
 - [Game directory](#directories)
 - [Settings and configuration](#configuration)
 - [Loaders and installation](#loaders)
@@ -13,6 +14,7 @@
 - [Networking and offline mode](#networking)
 - [Launcher updates and diagnostics](#maintenance)
 - [Microsoft accounts](#accounts)
+- [Troubleshooting](#troubleshooting)
 
 <a id="quickstart"></a>
 
@@ -32,6 +34,49 @@ ccl logs --lines 100
 ```
 
 Java matching the version and host architecture is detected or installed automatically. Use `--java PATH` to select it explicitly, or `--no-java-download` to disable runtime installation. Use `--json` for structured output; see the [command and output reference](api.en.md#cli).
+
+`versions`, `loaders`, and `online search` return up to 20 entries by default. For `versions` and `loaders`, `--limit 0` returns all available entries; online search is capped by the provider. `logs` shows the latest 100 lines by default.
+
+<a id="installation"></a>
+
+## Installation and prerequisites
+
+Download the archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable and developer release archives use these names:
+
+| System | Archive |
+| --- | --- |
+| Windows x86_64 | `ccl-x86_64-pc-windows-msvc.zip` |
+| macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
+| Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
+
+Download the adjacent `.sha256` checksum file too, then verify the archive before extracting it. In PowerShell, run these commands from the download directory:
+
+```powershell
+$archive = "ccl-x86_64-pc-windows-msvc.zip"
+$expected = (Get-Content "$archive.sha256").Split()[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch" }
+```
+
+On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
+
+Extract the whole archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, `THIRD-PARTY.en.md`, `THIRD-PARTY.zh-CN.md`, and `licenses/` together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the updater stores its transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CCL is a command-line program; it does not include a graphical launcher or an installer wizard. See [launcher updates](#maintenance) for update integrity limits.
+
+You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
+
+The targets above describe build and package coverage. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
+
+### First run
+
+Run `ccl doctor` to inspect configuration, directory access, Java candidates, and credential-store adapter availability. Then use `ccl init` to create the selected game directory, `ccl versions` to check version discovery, and `ccl install VERSION` to install a version. `doctor` is read-only unless a probe is explicitly requested. `init` creates the game directory but does not install Minecraft. Use `ccl launch VERSION --offline --dry-run` to preview a launch with an offline player identity, then omit `--dry-run` to start it. The first launch may download Java and remaining game files.
+
+```sh
+ccl doctor
+ccl init
+ccl versions --limit 10
+ccl install 1.21.1
+ccl launch 1.21.1 --offline --dry-run
+```
 
 <a id="directories"></a>
 
@@ -57,11 +102,51 @@ The user configuration is JSON and defaults to:
 - macOS: `~/Library/Application Support/CialloCraftLauncher/config.json`
 - Linux: `$XDG_CONFIG_HOME/ciallocraftlauncher/config.json`, or `~/.config/ciallocraftlauncher/config.json` if the variable is unset
 
-The mirror root must be an HTTPS URL without credentials, and unknown fields are rejected. Proxy credentials are redacted in displayed settings. On Unix, config files written by the CLI are owner-only. If the default configuration file is missing, defaults are used; a missing file explicitly supplied with `--config` is an error.
+The mirror root must be an HTTPS URL without credentials, and unknown fields are rejected. Proxy credentials are redacted in displayed settings. On Unix, config files written by the CLI are owner-only. If the default configuration file is missing, defaults are used. Commands that read configuration require an explicitly selected `--config PATH` file to exist, including `settings show` and `settings get`. `update status`, `update rollback`, and `update recover` do not read that file. `settings set` and `settings reset` initialize a missing file from defaults; `settings reset --all` can also replace malformed configuration with defaults.
 
-The JSON configuration fields are `downloads.version_list_source`, `downloads.file_source`, `downloads.mirror_root`, `downloads.http_proxy`, `downloads.max_parallel`, and `downloads.offline`. The first two independently control the version-list and file sources and accept `auto`, `official`, or `mirror`; both default to `auto`. Missing fields use defaults. The mirror root is configurable. Version listing and installation use the official version manifest and metadata. Installation downloads the client, libraries, natives, asset index, and assets; it verifies using available metadata hashes and sizes, limits parallel work, retries transient failures, resumes only validated partial transfers, reuses valid cached files, and writes through temporary files before replacement. Concurrent processes use a version lock, and cancellation is supported. Existing conflicting version JSON causes a conflict error rather than being overwritten.
+The configuration fields and defaults are:
 
-CurseForge online API requests require your own key; CCL does not include one. [CurseForge's API documentation](https://docs.curseforge.com/rest-api/) directs third-party modding services to apply for a key; issuance to an individual user is not guaranteed. Run `ccl credentials curseforge set` to enter an issued key through a hidden terminal prompt. CCL saves it in the OS credential vault, scoped to the selected configuration path, never in `config.json`. `ccl credentials curseforge status` shows only whether a key is saved, and `ccl credentials curseforge remove` deletes it. `CCL_CURSEFORGE_API_KEY` remains a temporary environment override and takes precedence over the saved key. Avoid command arguments, shell history, logs, and repository files for secrets. The OS vault must be available (on Linux, this generally requires a running Secret Service session); CCL does not fall back to plaintext storage. CurseForge archive import requires the key only when selected remote files must be resolved; overrides-only archives without selected remote files need no key. The key is sent only to approved provider API/CDN requests. Fixture coverage of header scoping does not establish live provider authorization. See [imports](user-guide.en.md#imports) and [online content](user-guide.en.md#online).
+| Setting | Default | Valid values |
+| --- | --- | --- |
+| `downloads.offline` | `false` | `true` or `false` |
+| `downloads.version_list_source` | `auto` | `auto`, `official`, or `mirror` |
+| `downloads.file_source` | `auto` | `auto`, `official`, or `mirror` |
+| `downloads.mirror_root` | `https://bmclapi2.bangbang93.com` | HTTPS URL without credentials |
+| `downloads.http_proxy` | `null` | A proxy URL or `null` |
+| `downloads.max_parallel` | `8` | Integer from 1 to 64 |
+| `auth.microsoft_client_id` | `null` | Public OAuth client ID or `null` |
+| `launch.java` | `null` | Java executable path, Java home, or `null` |
+| `launch.max_memory_mb` | `2048` | Integer from 256 to 131072 MiB |
+| `launch.auto_install_java` | `true` | `true` or `false` |
+
+For example, this complete configuration uses all defaults:
+
+```json
+{
+  "downloads": {
+    "offline": false,
+    "version_list_source": "auto",
+    "file_source": "auto",
+    "mirror_root": "https://bmclapi2.bangbang93.com",
+    "http_proxy": null,
+    "max_parallel": 8
+  },
+  "auth": {
+    "microsoft_client_id": null
+  },
+  "launch": {
+    "java": null,
+    "max_memory_mb": 2048,
+    "auto_install_java": true
+  }
+}
+```
+
+For mapped Minecraft endpoints, `auto` tries official URLs before the configured mirror; `official` uses only official URLs; `mirror` tries the mirror before official URLs. Unknown hosts retain their original URLs. OptiFine uses the configured mirror endpoint. These settings do not redirect Modrinth, CurseForge, or GitHub requests.
+
+You can omit fields; omitted fields use these defaults. `--memory` overrides `launch.max_memory_mb` for one launch and accepts 256–131072 MiB. Version listing and installation use the official version manifest and metadata. Installation downloads the client, libraries, natives, asset index, and assets; it verifies using available metadata hashes and sizes, limits parallel work, retries transient failures, resumes only validated partial transfers, reuses valid cached files, and writes through temporary files before replacement. Concurrent processes use a version lock, and cancellation is supported. Existing conflicting version JSON causes a conflict error rather than being overwritten.
+
+CurseForge API requests require a user-provided key authorized for the relevant API and file downloads. [CurseForge's API documentation](https://docs.curseforge.com/rest-api/) describes its key process; access depends on provider authorization. Run `ccl credentials curseforge set` to enter an issued key through a hidden terminal prompt. CCL saves it in the OS credential vault, scoped to the selected configuration path, never in `config.json`. `ccl credentials curseforge status` shows whether a key is saved and whether an environment override is active; `ccl credentials curseforge remove` deletes the saved key. `CCL_CURSEFORGE_API_KEY` remains a temporary environment override and takes precedence over the saved key. Avoid command arguments, shell history, logs, and repository files for secrets. The OS vault must be available (on Linux, this generally requires a running Secret Service session); CCL does not fall back to plaintext storage. CurseForge archive import requires a key only when selected remote files must be resolved; overrides-only archives without selected remote files need no key. The key is sent only to approved provider API/CDN requests. Fixture coverage of header scoping does not establish live provider authorization. See [imports](user-guide.en.md#imports) and [online content](user-guide.en.md#online).
 
 Launch settings are `launch.java` (optional executable or Java home), `launch.max_memory_mb` (default `2048`), and `launch.auto_install_java` (default `true`). The selected Java setting can be overridden with `--java`; `--no-java-download` skips managed Java installation for that run. Managed Java runtimes are installed under `<game-directory>/.ccl/runtimes` from official runtime manifests and verified artifacts. `auth.microsoft_client_id` is an optional public OAuth application ID, not a client secret. See [Microsoft account setup](user-guide.en.md#accounts).
 
@@ -265,7 +350,7 @@ CCL reads Minecraft and loader versions from `manifest.json`, resolves pinned pr
 
 Remote file resolution requires your own API key saved with `ccl credentials curseforge set` or temporarily supplied in `CCL_CURSEFORGE_API_KEY`. Do not paste the key into a command argument or commit it. An overrides-only archive with no selected remote files can be converted without a key. A restricted file without a provider-authorized download URL fails with a diagnostic; CCL does not guess a download URL or bypass the author's distribution choice. The API and CDN requirements are documented by [CurseForge](https://docs.curseforge.com/rest-api/) and its [CDN authentication announcement](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/).
 
-This project has no owner-provided CurseForge API key for live acceptance. Provider behavior is checked with service/format fixtures; this is not evidence of production API authorization.
+Provider behavior has service and format fixture coverage. This does not establish successful live authorization or download access with a production key. Provider errors vary; follow the returned message and the provider's access requirements.
 
 ### MultiMC and Prism
 
@@ -340,7 +425,7 @@ ccl update recover
 ccl update recover --installation /path/to/ccl
 ```
 
-Selecting a channel with `--channel` saves that choice. `check` reports whether a compatible published package is available. `apply` downloads and validates its target-specific archive, then starts a helper that waits for the current CLI to exit before replacing the executable. Check `update status` after the command returns. Use `recover` after an interrupted helper or replacement; if the normal executable is unavailable, run recovery from the retained helper with `--installation` pointing to the original executable path. `rollback` uses the retained previous executable only when the current config/account metadata, instances and receipts are readable by that older binary. A binary rollback never restores your game directory, saves or content. Launcher update packages are unsigned: HTTPS, size checks and SHA-256 detect transport or file corruption, but do not independently verify who published a package. `--network-offline` blocks update checks and downloads. Package-manager or read-only installs should be updated through their installation method.
+Selecting a channel with `--channel` saves that choice. `check` reports whether a compatible published package is available. `apply` downloads and validates its target-specific archive, then starts a helper to replace the executable asynchronously. On Windows, temporary executable-sharing failures are retried for up to 30 seconds. Check `update status` after the command returns. If the helper still holds the update lock, wait briefly and retry; a busy response is not a failed transaction. Use `recover` after an interrupted helper or replacement; if the normal executable is unavailable, run recovery from the retained helper with `--installation` pointing to the original executable path. `rollback` uses the retained previous executable only when the current config/account metadata, instances and receipts are readable by that older binary. A binary rollback never restores your game directory, saves or content. Launcher update packages are unsigned: HTTPS, size checks and SHA-256 detect transport or file corruption, but do not independently verify who published a package. `--network-offline` blocks update checks and downloads. Package-manager or read-only installs should be updated through their installation method.
 
 `doctor` checks Java candidates, launcher/game directory access and whether a system credential-store adapter is present. It does not log in or test whether the vault is unlocked. Add `--network-probe` to contact Mojang's version metadata endpoint, or `--write-probe` to create and remove a temporary empty file under CCL-owned data. Both probes are explicit.
 
@@ -356,13 +441,13 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 Run diagnosis uses the saved run record, a bounded game-log prefix and timestamp-correlated crash reports to recognize a small set of common failure patterns. It reports evidence and suggestions; an unknown failure is not forced into a category. Structured diagnostic export uses allowlisted fields and replaces local paths. It excludes account databases, credential stores, worlds and server lists. The optional raw preview includes up to 16 KiB of game output and applies best-effort redaction, but may still contain account names, tokens or other content written by the game or mods. Review the file before sharing it. CCL does not upload diagnostic reports.
 
-These P7 features are implemented but have not completed the full release acceptance matrix. See the [API reference](api.en.md#maintenance) for current data compatibility limits and the [development guide](development.en.md#maintenance) for release and validation details.
+The agreed P7 maintenance scope passed acceptance, including three-platform CI and packaging and live GitHub update/rollback checks on macOS and Linux. Windows CI and package validation do not establish physical Windows game-launch behavior. The release is unsigned, and the compatibility checks cover defined historical samples rather than every data set produced by every older build. See the [API reference](api.en.md#maintenance) for data compatibility limits and the [development guide](development.en.md#maintenance) for validation details.
 
 <a id="accounts"></a>
 
 ## Microsoft accounts
 
-> **Preview status:** Microsoft sign-in is implemented and the owner has registered the CCL OAuth application. Real Xbox/Minecraft service access and entitled-account acceptance remain incomplete. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
+> **Experimental online integration:** Microsoft device login, Xbox Live/XSTS exchange, and Minecraft service integration are implemented. Full entitled-account acceptance is deferred for the first release; offline identity launch remains supported. Automated coverage and an OAuth device-flow check do not establish that every account can launch the game: service access, profile data, and Minecraft entitlement are evaluated separately. Check the reported authentication stage and machine error code if login or launch fails.
 
 Application owners: see [registration and acceptance](development.en.md#microsoft-application).
 
@@ -392,12 +477,28 @@ ccl account select ACCOUNT-ID
 ccl launch VERSION
 ```
 
-With a selected account, `launch` uses it by default and refreshes credentials when needed. To launch offline instead, pass `--offline` or `--username NAME`. `--account ACCOUNT-ID` selects a specific saved account for one launch. `account logout [ACCOUNT-ID]` removes local credentials and account metadata; it does not revoke Microsoft consent.
+With a selected account, `launch` uses it by default and refreshes credentials when needed. Pass `--offline` to select an offline identity; you can combine it with `--username NAME` to choose that identity's name. These options each conflict with `--account ACCOUNT-ID`, which selects a saved account for one launch. `account logout [ACCOUNT-ID]` removes local credentials and account metadata; it does not revoke Microsoft consent.
 
 Authentication failures identify the service stage and HTTP status, with allowlisted machine error codes when available. Raw service error text, tokens and account identifiers are not printed. A service rejection is separate from a verified lack of Java entitlement; a generic 401/403 alone does not establish the cause.
+
+A recorded live retry completed Microsoft OAuth, Xbox Live and XSTS, then received HTTP 403 at Minecraft login before profile or entitlement data was returned. That status does not identify the service-side cause or establish whether the account owns the game. The authentication stage and error code are the useful details to report when troubleshooting.
 
 ### Credential storage
 
 Access and refresh tokens are stored only through the operating system credential store. Account names and IDs are kept separately in `accounts.json`; that metadata file contains no tokens. On macOS and Windows the operating system credential vault is used. On Linux, a Secret Service implementation reachable through the active D-Bus session must be installed and unlocked. A headless system without a persistent Secret Service cannot use Microsoft login. There is no plaintext credential fallback. A graphical desktop is not required if you provide and unlock a persistent Secret Service in your session.
 
 If secure storage is unavailable, login or refresh fails with an error. Start a desktop session with an unlocked keyring, or use offline launch until secure storage is available. Do not work around this by copying tokens into a file or shell command.
+
+<a id="troubleshooting"></a>
+
+## Troubleshooting
+
+- **Version discovery or downloads fail:** check connectivity and proxy settings with `ccl settings show`. `--network-offline` and `downloads.offline` disable HTTP requests; clear offline mode before fetching missing files. The `doctor --network-probe` check tests access to Mojang's version metadata endpoint.
+- **The game cannot find Java:** run `ccl doctor`, allow the managed runtime download, or pass a compatible Java executable/home with `--java PATH`. `--no-java-download` intentionally fails if no suitable runtime is installed.
+- **A launch exits immediately:** inspect `ccl logs --lines 200` or select a run with `ccl logs --run RUN-ID`; for a managed instance, add `--instance ID`. Run `ccl diagnose --run RUN-ID` to inspect the saved result and nearby crash report. The run record stores the game's actual exit code; the CLI returns `8` when the game exits unsuccessfully.
+- **Configuration is invalid:** check the JSON file and setting name. `ccl settings reset --all` replaces invalid configuration with defaults; use `--config PATH` when working with a non-default file.
+- **Microsoft login or launch fails:** inspect the service stage and allowlisted machine error code. Confirm the public client ID and credential vault, then distinguish Microsoft authorization, Xbox/XSTS access, Minecraft profile access, and entitlement errors. A generic HTTP 401/403 does not by itself prove that the account lacks ownership.
+- **CurseForge requests are denied:** confirm that the saved key or `CCL_CURSEFORGE_API_KEY` is active and authorized for the API and requested file. A key accepted for search may not authorize a restricted file download; follow the provider's authorization and distribution rules.
+- **A loader or pack install reports unsupported/conflicting content:** check the selected Minecraft/loader release, inspect pack metadata with `ccl pack inspect`, and review locally modified owned files before using `--replace-modified`.
+
+Share logs or diagnostic exports only after reviewing them. Raw game logs and the optional diagnostic log preview can contain account names, tokens, or mod-written content.

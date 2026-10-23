@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       compare_ref:
-        description: Optional commit, branch, or tag to compare against this dispatch's commit on the same Linux runner
+        description: Optional full commit SHA, branch, or tag to compare against this dispatch's commit on the same Linux runner
         required: false
         type: string
         default: ''
@@ -149,7 +149,7 @@ jobs:
           CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$candidate_sha" CCL_BUILD_TARGET="$TARGET" \
             cargo test --release --locked --target "$TARGET" --manifest-path candidate/Cargo.toml \
               --target-dir candidate/target -p ccl-cli --test update_process --no-run
-      - name: Run 15 alternating paired samples per build
+      - name: Run five alternating pairs (15 install/update and 35 parser samples per build)
         shell: bash
         env:
           CCL_BUILD_CHANNEL: dev

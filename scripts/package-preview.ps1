@@ -9,6 +9,8 @@ Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $stage 'docs') | Out-Null
 Copy-Item "target/$target/release/ccl.exe" (Join-Path $stage 'ccl.exe')
 Copy-Item LICENSE, README.md, README.zh-CN.md $stage
+python scripts/third-party-notices.py --target $target --output-dir $stage
+if ($LASTEXITCODE -ne 0) { throw 'Third-party notice generation failed' }
 $documents = @(Get-ChildItem docs -File | Where-Object { $_.Name -match '\.(en|zh-CN)\.md$' })
 foreach ($document in $documents) {
     $counterpart = if ($document.Name -match '\.en\.md$') { $document.FullName -replace '\.en\.md$', '.zh-CN.md' } else { $document.FullName -replace '\.zh-CN\.md$', '.en.md' }
@@ -19,7 +21,10 @@ $requiredGuides = @('user-guide.en.md', 'user-guide.zh-CN.md', 'api.en.md', 'api
 foreach ($guide in $requiredGuides) {
     if (-not (Test-Path (Join-Path $stage "docs/$guide"))) { throw "Missing guide: $guide" }
 }
-$requiredFiles = @('ccl.exe', 'LICENSE', 'README.md', 'README.zh-CN.md') + @($documents | ForEach-Object { "docs/$($_.Name)" })
+$licenseFiles = @(Get-ChildItem (Join-Path $stage 'licenses') -File -Recurse)
+if ($licenseFiles.Count -eq 0) { throw 'No third-party license texts were generated' }
+$licensePaths = @($licenseFiles | ForEach-Object { $_.FullName.Substring($stage.Length + 1).Replace('\', '/') })
+$requiredFiles = @('ccl.exe', 'LICENSE', 'README.md', 'README.zh-CN.md', 'THIRD-PARTY.en.md', 'THIRD-PARTY.zh-CN.md') + @($documents | ForEach-Object { "docs/$($_.Name)" }) + $licensePaths
 & (Join-Path $stage 'ccl.exe') --help | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Packaged ccl --help failed' }
 foreach ($required in $requiredFiles) {

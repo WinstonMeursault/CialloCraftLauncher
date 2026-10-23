@@ -145,9 +145,10 @@ jobs:
           fi
           cleanup_draft() { gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true; }
           trap cleanup_draft ERR
+          python3 scripts/release-notes.py --version "${RELEASE_TAG#v}" --output release-notes.md
           gh release create "$RELEASE_TAG" --draft dist/*.zip dist/*.sha256 dist/manifest-*.json \
             --verify-tag --title "CCL ${RELEASE_TAG}" \
-            --notes "Unsigned CCL stable release. All three target packages passed the release validation workflow."
+            --notes-file release-notes.md
           mkdir -p verify
           gh release download "$RELEASE_TAG" --dir verify
           (cd verify && sha256sum -c *.sha256)
