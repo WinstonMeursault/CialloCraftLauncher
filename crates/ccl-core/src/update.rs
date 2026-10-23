@@ -982,27 +982,40 @@ fn run_health(
     game: &Path,
 ) -> Result<()> {
     let token = nonce()?;
-    let result = run_bounded(
+    let bytes = run_bounded(
         Command::new(executable)
             .arg("__update-health")
             .arg(&token)
             .arg(config)
             .arg(game),
-    );
-    if let Ok(bytes) = result {
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| invalid("invalid health check response"))?;
-        if value["nonce"] == token
-            && value["compatible"] == true
-            && serde_json::from_value::<BuildIdentity>(value["build"].clone())
-                .ok()
-                .as_ref()
-                == Some(identity)
-        {
-            return Ok(());
-        }
+    )
+    .map_err(safe_health_error)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| invalid("invalid health check response"))?;
+    if value["nonce"] != token {
+        return Err(invalid("health check response nonce mismatch"));
     }
-    Err(invalid("new executable health check failed"))
+    if value["compatible"] != true {
+        return Err(invalid("new executable reports incompatible data"));
+    }
+    let reported = serde_json::from_value::<BuildIdentity>(value["build"].clone())
+        .map_err(|_| invalid("new executable returned an invalid build identity"))?;
+    if &reported != identity {
+        return Err(invalid(
+            "new executable reported a different build identity",
+        ));
+    }
+    Ok(())
+}
+fn safe_health_error(error: UpdateError) -> UpdateError {
+    match error {
+        UpdateError::Io(source) => invalid(&format!(
+            "health subprocess I/O failed (kind {:?}, OS error {:?})",
+            source.kind(),
+            source.raw_os_error()
+        )),
+        other => other,
+    }
 }
 fn executable_identity(executable: &Path) -> Result<BuildIdentity> {
     let data = run_bounded(Command::new(executable).arg("__build-identity"))?;
@@ -1018,12 +1031,35 @@ fn run_bounded(command: &mut Command) -> Result<Vec<u8>> {
         .write(true)
         .open(&path)?;
     let result = (|| {
-        let mut child = command
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .stdout(Stdio::from(file.try_clone()?))
-            .spawn()?;
         let deadline = Instant::now() + Duration::from_secs(10);
+        // A newly published executable may briefly be open for writing at its new
+        // destination. Linux reports ETXTBSY for exec until that writer closes. Retry
+        // only that condition; the executable must still pass the full health check.
+        let mut child = loop {
+            match command
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .stdout(Stdio::from(file.try_clone()?))
+                .spawn()
+            {
+                Ok(child) => break child,
+                Err(error) if executable_text_busy(&error) => {
+                    if Instant::now() >= deadline {
+                        return Err(invalid(
+                            "executable remained write-locked beyond health-check deadline (OS error 26)",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    return Err(invalid(&format!(
+                        "executable subprocess could not start (kind {:?}, OS error {:?})",
+                        error.kind(),
+                        error.raw_os_error()
+                    )));
+                }
+            }
+        };
         loop {
             if let Some(status) = child.try_wait()? {
                 if !status.success() {
@@ -1043,6 +1079,17 @@ fn run_bounded(command: &mut Command) -> Result<Vec<u8>> {
     drop(file);
     let _ = fs::remove_file(path);
     result
+}
+fn executable_text_busy(error: &std::io::Error) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        error.raw_os_error() == Some(26) // ETXTBSY
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = error;
+        false
+    }
 }
 fn verify_file(path: &Path, hash: &str) -> Result<()> {
     reject_symlink(path)?;
@@ -1505,6 +1552,53 @@ mod tests {
         let payload = serde_json::to_string(identity).unwrap();
         format!("#!/bin/sh\nif [ \"$1\" = __build-identity ]; then printf '%s\\n' '{payload}'; exit 0; fi\nif [ \"$1\" = __update-health ]; then printf '{{\"nonce\":\"%s\",\"build\":{payload},\"compatible\":{healthy}}}\\n' \"$2\"; exit 0; fi\nexit 1\n").into_bytes()
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn health_subprocess_retries_a_temporarily_write_locked_executable() {
+        let temp = Temp::new();
+        let identity = BuildIdentity::current();
+        let executable = temp.0.join("ccl");
+        fs::write(&executable, shell(&identity, true)).unwrap();
+        executable_mode(&executable).unwrap();
+        let writer = OpenOptions::new().write(true).open(&executable).unwrap();
+        let error = match Command::new(&executable).arg("__build-identity").spawn() {
+            Ok(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Linux executed a write-locked executable instead of returning ETXTBSY");
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.raw_os_error(), Some(26));
+
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        let executable_for_worker = executable.clone();
+        let worker = thread::spawn(move || {
+            let _ = started_tx.send(());
+            let result = run_bounded(Command::new(executable_for_worker).arg("__build-identity"))
+                .and_then(|output| {
+                    serde_json::from_slice::<BuildIdentity>(&output)
+                        .map_err(|_| invalid("health fixture returned invalid identity"))
+                });
+            let _ = result_tx.send(result);
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("health worker did not start");
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(500)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(writer);
+        let reported = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("health worker did not finish after the writer closed")
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(reported, identity);
+    }
     #[cfg(unix)]
     fn transaction() -> (Temp, Installation, Journal) {
         let temp = Temp::new();
@@ -1675,7 +1769,10 @@ mod tests {
         let bad = shell(&journal.new_identity, false);
         fs::write(install.directory.join("candidate"), &bad).unwrap();
         journal.new_sha256 = digest(&bad);
-        assert!(execute_transaction(&install, &mut journal).is_err());
+        assert!(matches!(
+            execute_transaction(&install, &mut journal),
+            Err(UpdateError::Invalid(message)) if message.contains("incompatible data")
+        ));
         restore(&install, &journal).unwrap();
         assert_eq!(fs::read(&install.target).unwrap(), original);
     }

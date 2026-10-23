@@ -193,7 +193,7 @@ CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作�
    git fetch origin
    git switch main
    git pull --ff-only origin main
-   git merge --no-ff dev
+   git merge --no-ff origin/dev
    # 解决并复核冲突，然后按需修改两个 package 版本。
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z

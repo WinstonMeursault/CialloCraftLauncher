@@ -113,7 +113,14 @@ def run_parser_samples(binary: Path, iterations: int, scratch: Path):
 
 
 def run_update_benchmark(cwd: Path):
-    result = subprocess.run(UPDATE_TEST, cwd=cwd, capture_output=True, text=True, check=False)
+    command = list(UPDATE_TEST)
+    target = os.environ.get("CCL_BUILD_TARGET")
+    if target:
+        # Match the workflow's explicit --target prebuild; otherwise Cargo
+        # silently builds a second host-target test binary during measurement.
+        separator = command.index("--")
+        command[separator:separator] = ["--target", target]
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
     combined = result.stdout + "\n" + result.stderr
     if result.returncode:
         raise RuntimeError(f"update transaction benchmark failed:\n{combined}")

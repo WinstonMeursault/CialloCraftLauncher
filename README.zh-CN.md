@@ -26,7 +26,7 @@ Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实�
 ## 安装与开始使用
 
 1. 打开 [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)，选择发行，下载与上表目标匹配的归档及其 `.sha256` 文件。开发标签以 `dev-` 开头，稳定标签为 `v<VERSION>`。GitHub 自动提供的源码归档不是可执行程序包。
-2. 按[使用指南](docs/user-guide.zh-CN.md#quickstart)完成摘要核对与平台设置，解压整个归档，在解压目录运行程序，或将该目录加入 `PATH`。
+2. 按[使用指南](docs/user-guide.zh-CN.md#installation)完成摘要核对与平台设置，解压整个归档，在解压目录运行程序，或将该目录加入 `PATH`。
 3. 运行 `ccl --help` 和 `ccl doctor`（加入 `PATH` 前，Unix 使用 `./ccl`，PowerShell 使用 `.\ccl.exe`），再按指南完成配置、账户设置和安装。
 
 程序包未签名、未公证；HTTPS 与摘要可检测损坏，不能独立认证发布者。最低系统版本及其他架构尚未认证。Linux 的 Microsoft 账户/平台 key 存储需要可用且已解锁的 Secret Service/D-Bus 会话，没有明文凭据回退。

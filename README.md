@@ -26,7 +26,7 @@ Microsoft device login, refresh, OS credential storage and browser authorization
 ## Install and get started
 
 1. Open [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases), choose a release and download the archive matching the target above, with its `.sha256` file. Developer tags start with `dev-`; stable tags use `v<VERSION>`. GitHub's automatic source archives are not executable packages.
-2. Follow the checksum and platform setup instructions in the [user guide](docs/user-guide.en.md#quickstart), extract the entire archive and run the binary from its extracted directory, or add that directory to `PATH`.
+2. Follow the checksum and platform setup instructions in the [user guide](docs/user-guide.en.md#installation), extract the entire archive and run the binary from its extracted directory, or add that directory to `PATH`.
 3. Run `ccl --help` and `ccl doctor` (`./ccl` on Unix or `.\ccl.exe` in PowerShell before adding it to `PATH`), then follow the guide for configuration, account setup and installation.
 
 Packages are unsigned and not notarized. HTTPS and checksums detect corruption but do not independently authenticate the publisher. Minimum OS versions and additional architectures have not been certified. Linux Microsoft-account/provider-key storage requires an available, unlocked Secret Service/D-Bus session; there is no plaintext credential fallback.

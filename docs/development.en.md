@@ -195,7 +195,7 @@ Unit fixtures cover provider search and version payload mapping, dependency type
    git fetch origin
    git switch main
    git pull --ff-only origin main
-   git merge --no-ff dev
+   git merge --no-ff origin/dev
    # Resolve/review any conflicts, then edit both package versions if needed.
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z
