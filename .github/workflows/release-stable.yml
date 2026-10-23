@@ -1,0 +1,176 @@
+name: Stable Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-package:
+    name: Validate and package (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - label: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - label: Linux x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - name: Verify stable tag is on main and matches crate version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          version="${RELEASE_TAG#v}"
+          python3 scripts/check-package-versions.py --expected "$version"
+          test "$RELEASE_TAG" = "v$version"
+      - name: Validate source
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+          cargo test --workspace --all-targets --locked --target ${{ matrix.target }}
+      - name: Verify Windows credential vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} os_secure_store_probe_round_trips_without_account_credentials -- --ignored
+      - name: Verify Windows provider key vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} provider_key_vault_round_trip_never_uses_a_config_file -- --ignored
+      - name: Set build identity
+        id: identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Build release executable
+        env:
+          CCL_BUILD_CHANNEL: stable
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli
+      - name: Assemble ZIP and checksum
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: zip
+        run: bash scripts/package-preview.sh
+      - name: Assemble ZIP and checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: ./scripts/package-preview.ps1
+      - name: Confirm packaged executable reports the tagged version
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          binary="target/$TARGET/release/ccl"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="$binary.exe"; fi
+          output="$("$binary" --version)"
+          test "$output" = "ccl $VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ccl-release-${{ matrix.target }}
+          path: dist/*.zip*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish stable release
+    needs: validate-package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ccl-release-*
+          path: dist
+          merge-multiple: true
+      - name: Build per-platform updater manifests
+        env:
+          CCL_BUILD_CHANNEL: stable
+          CCL_BUILD_BRANCH: main
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_VERSION: ${{ github.ref_name }}
+          CCL_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/check-package-versions.py --expected "${CCL_BUILD_VERSION#v}"
+          CCL_BUILD_VERSION="${CCL_BUILD_VERSION#v}" python3 - <<'PY'
+          import os, subprocess
+          targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+          for target in targets:
+              subprocess.run(["python3", "scripts/release-manifest.py", "--target", target,
+                              "--archive", f"dist/ccl-{target}.zip"], check=True, env=os.environ)
+          PY
+      - name: Create draft, verify uploaded assets, and publish version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$(find dist -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name 'manifest-*.json' | wc -l)" -eq 3
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Refusing to reuse existing release $RELEASE_TAG" >&2
+            exit 1
+          fi
+          cleanup_draft() { gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true; }
+          trap cleanup_draft ERR
+          python3 scripts/release-notes.py --version "${RELEASE_TAG#v}" --output release-notes.md
+          gh release create "$RELEASE_TAG" --draft dist/*.zip dist/*.sha256 dist/manifest-*.json \
+            --verify-tag --title "CCL ${RELEASE_TAG}" \
+            --notes-file release-notes.md
+          mkdir -p verify
+          gh release download "$RELEASE_TAG" --dir verify
+          (cd verify && sha256sum -c *.sha256)
+          python3 - <<'PY'
+          import hashlib, json, pathlib, zipfile
+          root = pathlib.Path("verify")
+          manifests = list(root.glob("manifest-*.json"))
+          archives = list(root.glob("ccl-*.zip"))
+          assert len(manifests) == 3 and len(archives) == 3
+          for path in manifests:
+              manifest = json.loads(path.read_text())
+              archive = root / manifest["asset"]["name"]
+              data = archive.read_bytes()
+              assert len(data) == manifest["asset"]["size"]
+              assert hashlib.sha256(data).hexdigest() == manifest["asset"]["sha256"]
+              target = manifest["target"]
+              binary = "ccl.exe" if "windows" in target else "ccl"
+              executable = zipfile.ZipFile(archive).read(f"ccl-{target}/{binary}")
+              assert len(executable) == manifest["executable_size"]
+              assert hashlib.sha256(executable).hexdigest() == manifest["executable_sha256"]
+              assert manifest["commit"] == "${{ github.sha }}"
+              assert manifest["channel"] == "stable" and manifest["branch"] == "main"
+          PY
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          trap - ERR

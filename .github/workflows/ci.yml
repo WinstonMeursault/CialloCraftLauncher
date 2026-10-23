@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-targets --locked --target ${{ matrix.target }}
+
+      - name: Verify Windows credential vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} os_secure_store_probe_round_trips_without_account_credentials -- --ignored
+
+      - name: Verify Windows provider key vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} provider_key_vault_round_trip_never_uses_a_config_file -- --ignored
+
+      - name: Build
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}

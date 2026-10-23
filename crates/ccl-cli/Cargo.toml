@@ -1,0 +1,27 @@
+[package]
+name = "ccl-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for CialloCraftLauncher"
+
+[[bin]]
+name = "ccl"
+path = "src/main.rs"
+
+[dependencies]
+ccl-core = { path = "../ccl-core" }
+clap.workspace = true
+reqwest.workspace = true
+rpassword = "7.5.4"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

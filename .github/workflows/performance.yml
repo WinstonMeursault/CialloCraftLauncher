@@ -1,0 +1,173 @@
+name: Performance Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      compare_ref:
+        description: Optional full commit SHA, branch, or tag to compare against this dispatch's commit on the same Linux runner
+        required: false
+        type: string
+        default: ''
+  schedule:
+    - cron: '23 4 * * *'
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure (${{ matrix.target }})
+    if: github.event_name != 'workflow_dispatch' || inputs.compare_ref == ''
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build deterministic benchmark and CLI binaries
+        env:
+          CCL_BUILD_CHANNEL: ${{ github.ref_name == 'main' && 'stable' || 'dev' }}
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p ccl-core --example p7_benchmark
+          cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli --bin ccl
+      - name: Download last five successful same-branch samples
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          mkdir -p baseline
+          run_ids="$(gh run list --workflow performance.yml --branch "$GITHUB_REF_NAME" --status success --limit 5 --json databaseId --jq '.[].databaseId')"
+          while IFS= read -r run_id; do
+            [[ -n "$run_id" ]] || continue
+            mkdir -p "baseline/$run_id"
+            gh run download "$run_id" --name "perf-$TARGET" --dir "baseline/$run_id" || true
+          done <<< "$run_ids"
+      - name: Run deterministic performance regression sample
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          CCL_BUILD_CHANNEL: ${{ github.ref_name == 'main' && 'stable' || 'dev' }}
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cli_binary="target/$TARGET/release/ccl"
+          core_example="target/$TARGET/release/examples/p7_benchmark"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cli_binary="$cli_binary.exe"
+            core_example="$core_example.exe"
+          fi
+          args=(--core-example "$core_example" --cli-binary "$cli_binary" --output perf-report/report.json --repo "$GITHUB_WORKSPACE" --run-update-benchmark)
+          if compgen -G 'baseline/*/report.json' >/dev/null; then args+=(--baseline baseline); fi
+          python3 scripts/performance-regression.py "${args[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-${{ matrix.target }}
+          path: perf-report/report.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  paired-linux:
+    name: Paired Linux comparison
+    if: github.event_name == 'workflow_dispatch' && inputs.compare_ref != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.compare_ref }}
+          path: baseline
+          fetch-depth: 1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Use one benchmark harness for both revisions
+        shell: bash
+        run: |
+          cp candidate/crates/ccl-core/examples/p7_benchmark.rs baseline/crates/ccl-core/examples/p7_benchmark.rs
+          cp candidate/crates/ccl-cli/tests/update_process.rs baseline/crates/ccl-cli/tests/update_process.rs
+      - name: Record runner identity and build both revisions
+        shell: bash
+        run: |
+          lscpu
+          cat /etc/os-release
+          baseline_sha="$(git -C baseline rev-parse --verify 'HEAD^{commit}')"
+          candidate_sha="$(git -C candidate rev-parse --verify 'HEAD^{commit}')"
+          if [[ "$baseline_sha" == "$candidate_sha" ]]; then
+            echo "compare_ref resolves to the candidate commit; choose a different ref" >&2
+            exit 1
+          fi
+          echo "Baseline commit: $baseline_sha"
+          echo "Candidate commit: $candidate_sha"
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$baseline_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo build --release --locked --target "$TARGET" --manifest-path baseline/Cargo.toml \
+              --target-dir baseline/target -p ccl-core --example p7_benchmark
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$baseline_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo build --release --locked --target "$TARGET" --manifest-path baseline/Cargo.toml \
+              --target-dir baseline/target -p ccl-cli --bin ccl
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$candidate_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo build --release --locked --target "$TARGET" --manifest-path candidate/Cargo.toml \
+              --target-dir candidate/target -p ccl-core --example p7_benchmark
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$candidate_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo build --release --locked --target "$TARGET" --manifest-path candidate/Cargo.toml \
+              --target-dir candidate/target -p ccl-cli --bin ccl
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$baseline_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo test --release --locked --target "$TARGET" --manifest-path baseline/Cargo.toml \
+              --target-dir baseline/target -p ccl-cli --test update_process --no-run
+          CCL_BUILD_CHANNEL=dev CCL_BUILD_COMMIT="$candidate_sha" CCL_BUILD_TARGET="$TARGET" \
+            cargo test --release --locked --target "$TARGET" --manifest-path candidate/Cargo.toml \
+              --target-dir candidate/target -p ccl-cli --test update_process --no-run
+      - name: Run five alternating pairs (15 install/update and 35 parser samples per build)
+        shell: bash
+        env:
+          CCL_BUILD_CHANNEL: dev
+          CCL_BUILD_TARGET: x86_64-unknown-linux-gnu
+        run: |
+          python3 candidate/scripts/performance-compare.py \
+            --baseline-core-example "baseline/target/$TARGET/release/examples/p7_benchmark" \
+            --baseline-cli-binary "baseline/target/$TARGET/release/ccl" \
+            --baseline-repo baseline \
+            --candidate-core-example "candidate/target/$TARGET/release/examples/p7_benchmark" \
+            --candidate-cli-binary "candidate/target/$TARGET/release/ccl" \
+            --candidate-repo candidate \
+            --output perf-compare/report.json \
+            --pairs 5 --iterations-per-run 3
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-paired-linux
+          path: perf-compare/report.json
+          if-no-files-found: warn
+          retention-days: 90

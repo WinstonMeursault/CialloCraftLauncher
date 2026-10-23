@@ -1,0 +1,26 @@
+[package]
+name = "ccl-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-independent core for CialloCraftLauncher"
+
+[dependencies]
+fs2.workspace = true
+getrandom = "0.2"
+keyring.workspace = true
+md5.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zip.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
