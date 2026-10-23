@@ -15,10 +15,10 @@
 ## CLI commands
 
 ```text
-ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
+ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|credentials|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
 ```
 
-Global options can be placed before the subcommand. Commands run non-interactively and do not wait for standard input.
+Global options can be placed before the subcommand. Commands run non-interactively except `credentials curseforge set`, which requires a terminal and reads the key with echo disabled, including when `--json` is used.
 
 | Command | Behavior |
 | --- | --- |
@@ -28,6 +28,7 @@ Global options can be placed before the subcommand. Commands run non-interactive
 | `update status|rollback|recover` | Inspects the update transaction, starts a compatible rollback, or resumes interrupted helper work. |
 | `init` | Selects and creates a game directory using the [directory priority](user-guide.en.md#directories). |
 | `settings show\|get\|set\|reset` | Displays, reads, changes, or resets persisted settings. Proxy credentials are hidden in displayed settings. |
+| `credentials curseforge set\|status\|remove` | Enters a key through a hidden terminal prompt, reports whether a key is saved and an environment override exists, or removes the saved key. Keys are scoped to the selected configuration path and stored in the OS credential vault. `CCL_CURSEFORGE_API_KEY` overrides the saved key; removal does not clear that variable. |
 | `account check-storage\|login\|list\|select\|refresh\|logout` | Checks the OS credential vault, signs in with a Microsoft account using device code, lists/selects accounts, refreshes, or removes local credentials. Login checks the vault before contacting Microsoft, prints the device code and opens the default browser; `account login --no-browser` disables opening. See [Microsoft account setup](user-guide.en.md#accounts). |
 | `versions [--limit N]` | Lists available game versions. `--limit N` limits the result; `--limit 0` lists all versions. |
 | `install VERSION` | Installs the named game version into the selected game directory. |
@@ -63,6 +64,8 @@ Game stdout and stderr are captured in `<game-directory>/.ccl/logs/<run-id>.log`
 
 Commands return an object with `ok`. Successful payload fields depend on the command, for example `versions`, `instance`, `managed_instances`, `launch`, and `log`. Errors contain `error.code` and `error.message`. Progress goes to stderr. clap help and argument errors remain text even with `--json`.
 
+`credentials curseforge status` returns `provider`, `saved`, and `environment_override`; `set` and `remove` return `provider` and `saved`. These responses never contain the key. A successful save confirms local storage, not authorization by the provider.
+
 ```json
 {"ok":false,"error":{"code":"content_conflict","message":"..."}}
 ```
@@ -94,6 +97,7 @@ cargo doc -p ccl-core --no-deps --open
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | Provider content, dependency resolution and transactions |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | Device authorization and launch identity |
 | `accounts::AccountStore / accounts::OsSecretStore` | `list / select / credentials / remove; probe` | Account metadata and OS-protected credentials |
+| `accounts::OsProviderKeyStore` | `for_config_file / set_curseforge / get_curseforge / remove_curseforge` | Configuration-scoped provider keys in the OS credential vault; no plaintext fallback |
 | `compatibility::inspect_compatibility` | `inspect_compatibility(config_path, game_root)` | Read-only compatibility report for config, account metadata, instances and receipts; no credential access |
 | `update::UpdateService / update::Installation` | `check / stage; status / set_channel / prepare_rollback / launch_helper` | Release checks and executable update transaction |
 | `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | Local health checks, bounded run classification and allowlisted exports |

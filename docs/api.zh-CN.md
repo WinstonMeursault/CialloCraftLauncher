@@ -15,10 +15,10 @@
 ## CLI 命令
 
 ```text
-ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
+ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagnose|update|init|settings|credentials|account|versions|install|instances|loaders|instance|pack|content|online|launch|logs>
 ```
 
-全局选项可以放在子命令前。命令以非交互方式运行，不会等待标准输入。
+全局选项可以放在子命令前。除 `credentials curseforge set` 外，命令均以非交互方式运行；该命令需要终端并关闭输入回显，使用 `--json` 时也会提示输入密钥。
 
 | 命令 | 行为 |
 | --- | --- |
@@ -28,6 +28,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `update status|rollback|recover` | 查看更新事务、启动兼容的回退，或恢复中断的助手操作。 |
 | `init` | 按[目录优先级](user-guide.zh-CN.md#directories)选择并创建游戏目录。 |
 | `settings show\|get\|set\|reset` | 显示、读取、修改或重置持久化设置；显示时会隐藏代理凭据。 |
+| `credentials curseforge set\|status\|remove` | 通过隐藏输入的终端提示录入密钥、报告是否已保存及是否存在环境变量覆盖，或删除已保存密钥。密钥按所选配置文件路径隔离并保存于系统凭据库。`CCL_CURSEFORGE_API_KEY` 优先于已保存密钥；删除操作不会清除该变量。 |
 | `account check-storage\|login\|list\|select\|refresh\|logout` | 检查操作系统凭据库、使用设备代码登录 Microsoft 账户、查看或选择账户、刷新凭据或删除本地凭据。登录前会先检查凭据库，显示设备代码并自动打开默认浏览器；`account login --no-browser` 可禁用自动打开。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。 |
 | `versions [--limit N]` | 列出可用的游戏版本。`--limit N` 限制结果数量；`--limit 0` 列出全部版本。 |
 | `install VERSION` | 将指定游戏版本安装到所选游戏目录。 |
@@ -63,6 +64,8 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 命令返回带有 `ok` 的对象。成功字段按命令区分，例如 `versions`、`instance`、`managed_instances`、`launch`、`log`。错误包含 `error.code` 和 `error.message`。进度写入标准错误；即使启用 `--json`，clap 帮助及参数错误仍为文本。
 
+`credentials curseforge status` 返回 `provider`、`saved` 和 `environment_override`；`set` 和 `remove` 返回 `provider` 和 `saved`。这些响应不会包含密钥。保存成功仅确认本地存储成功，不代表已获得平台授权。
+
 ```json
 {"ok":false,"error":{"code":"content_conflict","message":"..."}}
 ```
@@ -94,6 +97,7 @@ cargo doc -p ccl-core --no-deps --open
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | 平台内容、依赖解析及事务 |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | 设备授权及启动身份 |
 | `accounts::AccountStore / accounts::OsSecretStore` | `list / select / credentials / remove; probe` | 账户元数据及操作系统凭据库 |
+| `accounts::OsProviderKeyStore` | `for_config_file / set_curseforge / get_curseforge / remove_curseforge` | 按配置隔离并保存于系统凭据库的平台密钥；不降级为明文保存 |
 | `compatibility::inspect_compatibility` | `inspect_compatibility(config_path, game_root)` | 只读检查配置、账户元数据、实例和收据，不访问凭据 |
 | `update::UpdateService / update::Installation` | `check / stage; status / set_channel / prepare_rollback / launch_helper` | 发行检查和程序更新事务 |
 | `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | 本地健康检查、有限日志分类和白名单导出 |
