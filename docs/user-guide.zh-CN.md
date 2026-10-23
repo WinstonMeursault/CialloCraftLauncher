@@ -362,7 +362,7 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 ## Microsoft 账户
 
-> **预览状态：** Microsoft 登录已经实现，但尚未使用真实账户验证。CCL 的 OAuth 应用尚未注册。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
+> **预览状态：** Microsoft 登录已经实现，所有者已完成 CCL OAuth 应用注册。真实 Xbox/Minecraft 服务访问与正版账户验收尚未完成。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
 
 应用所有者请参阅[注册及验收要求](development.zh-CN.md#microsoft-application)。
 
@@ -384,7 +384,7 @@ ccl account login
 ccl account login --client-id YOUR-APPLICATION-CLIENT-ID
 ```
 
-启动器会显示 Microsoft 验证网址和一次性设备代码。请在浏览器中打开该网址，登录并输入代码。不要分享设备代码；任何先输入该代码的人都可能授权正在等待的登录。CLI 会等待授权完成。之后可以使用：
+启动器会显示 Microsoft 验证网址和一次性设备代码，并自动打开默认浏览器。请在该页面登录并输入代码。无图形界面等环境可用 `account login --no-browser` 自行打开页面。自动打开失败时仍会保留网址并继续等待授权。不要分享设备代码；任何先输入该代码的人都可能授权正在等待的登录。CLI 会等待授权完成。之后可以使用：
 
 ```sh
 ccl account list
@@ -393,6 +393,8 @@ ccl launch VERSION
 ```
 
 选定账户后，`launch` 默认使用该账户，并在需要时刷新凭据。离线启动可传入 `--offline` 或 `--username NAME`。`--account ACCOUNT-ID` 可为单次启动指定已保存的账户。`account logout [ACCOUNT-ID]` 会删除本地凭据和账户元数据，但不会撤销 Microsoft 授权。
+
+认证失败会标明服务阶段和 HTTP 状态，并在可用时显示白名单机器错误码；不会打印原始服务错误文本、令牌或账户标识。服务拒绝与已确认的 Java 版无权益是不同结果，不能仅凭通用 401/403 确定原因。
 
 ### 凭据存储
 

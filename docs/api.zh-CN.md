@@ -28,7 +28,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `update status|rollback|recover` | 查看更新事务、启动兼容的回退，或恢复中断的助手操作。 |
 | `init` | 按[目录优先级](user-guide.zh-CN.md#directories)选择并创建游戏目录。 |
 | `settings show\|get\|set\|reset` | 显示、读取、修改或重置持久化设置；显示时会隐藏代理凭据。 |
-| `account check-storage\|login\|list\|select\|refresh\|logout` | 检查操作系统凭据库、使用设备代码登录 Microsoft 账户、查看或选择账户、刷新凭据或删除本地凭据。登录前会先检查凭据库。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。 |
+| `account check-storage\|login\|list\|select\|refresh\|logout` | 检查操作系统凭据库、使用设备代码登录 Microsoft 账户、查看或选择账户、刷新凭据或删除本地凭据。登录前会先检查凭据库，显示设备代码并自动打开默认浏览器；`account login --no-browser` 可禁用自动打开。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。 |
 | `versions [--limit N]` | 列出可用的游戏版本。`--limit N` 限制结果数量；`--limit 0` 列出全部版本。 |
 | `install VERSION` | 将指定游戏版本安装到所选游戏目录。 |
 | `instances` | 列出已安装的原版版本及其所需的 Java 主版本号。 |

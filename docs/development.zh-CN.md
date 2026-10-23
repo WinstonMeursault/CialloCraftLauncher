@@ -114,7 +114,7 @@ P7 提供三平台发行校验与事务式更新测试，覆盖 Windows 程序�
 
 ## Microsoft 应用注册与验收
 
-> **预览状态：** Microsoft 登录已经实现，但尚未使用真实账户验证。CCL 的 OAuth 应用尚未注册。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
+> **预览状态：** Microsoft 登录已经实现，所有者已完成 CCL OAuth 应用注册。真实 Xbox/Minecraft 服务访问与正版账户验收尚未完成。必须使用该应用通过完整的 Microsoft、Xbox 和 Minecraft 登录流程，才能满足 CLI 预览版的账户验收要求。
 
 ### 注册公开桌面应用
 

@@ -114,7 +114,7 @@ P7 provides three-platform release validation and transactional updater tests, i
 
 ## Microsoft application registration and acceptance
 
-> **Preview status:** Microsoft sign-in is implemented but has not been verified with a real account. A CCL OAuth application has not yet been registered. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
+> **Preview status:** Microsoft sign-in is implemented and the owner has registered the CCL OAuth application. Real Xbox/Minecraft service access and entitled-account acceptance remain incomplete. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
 
 ### Register a public desktop application
 

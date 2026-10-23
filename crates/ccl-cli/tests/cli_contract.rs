@@ -440,7 +440,7 @@ fn login_without_client_id_gives_registration_guidance_without_network() {
     let output = command(&root)
         .args(["--json", "--config"])
         .arg(&config)
-        .args(["account", "login"])
+        .args(["account", "login", "--no-browser"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(3));

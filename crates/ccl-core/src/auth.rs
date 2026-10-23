@@ -9,6 +9,33 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MS_SCOPE: &str = "XboxLive.signin offline_access";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const MAX_ERROR_BODY: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthStage {
+    MicrosoftDeviceCode,
+    MicrosoftToken,
+    MicrosoftRefresh,
+    XboxLive,
+    Xsts,
+    MinecraftLogin,
+    Entitlements,
+    Profile,
+}
+impl std::fmt::Display for AuthStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MicrosoftDeviceCode => "Microsoft device code",
+            Self::MicrosoftToken => "Microsoft token exchange",
+            Self::MicrosoftRefresh => "Microsoft token refresh",
+            Self::XboxLive => "Xbox Live authentication",
+            Self::Xsts => "Xbox XSTS authorization",
+            Self::MinecraftLogin => "Minecraft login",
+            Self::Entitlements => "Minecraft entitlements check",
+            Self::Profile => "Minecraft profile lookup",
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct AuthEndpoints {
@@ -110,6 +137,14 @@ pub enum AuthError {
     Cancelled,
     #[error("device code expired before sign-in completed")]
     Expired,
+    #[error("{stage} rejected the request ({status_text}{code_text}){hint_text}", status_text = status.map(|s| format!("HTTP {s}")).unwrap_or_else(|| "configuration error".into()), code_text = code.as_ref().map(|c| format!(", code {c}")).unwrap_or_default(), hint_text = hint.as_ref().map(|h| format!(". {h}")).unwrap_or_default())]
+    StageRejected {
+        stage: AuthStage,
+        status: Option<u16>,
+        code: Option<String>,
+        hint: Option<&'static str>,
+    },
+    /// Kept for callers compiled against the former free-form rejection API.
     #[error("authentication service rejected the request ({0})")]
     Rejected(String),
     #[error("authentication service returned an invalid response")]
@@ -129,9 +164,7 @@ pub struct MicrosoftAuth {
 impl MicrosoftAuth {
     pub fn new(config: AuthConfig) -> Result<Self, AuthError> {
         if config.client_id.trim().is_empty() {
-            return Err(AuthError::Rejected(
-                "OAuth client ID is not configured".into(),
-            ));
+            return Err(rejected(AuthStage::MicrosoftDeviceCode, 0, None, None));
         }
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -140,7 +173,7 @@ impl MicrosoftAuth {
         if let Some(proxy) = &config.proxy {
             builder = builder.proxy(
                 reqwest::Proxy::all(proxy)
-                    .map_err(|_| AuthError::Rejected("configured HTTP proxy is invalid".into()))?,
+                    .map_err(|_| rejected(AuthStage::MicrosoftDeviceCode, 0, None, None))?,
             );
         }
         Ok(Self {
@@ -173,7 +206,7 @@ impl MicrosoftAuth {
             ])
             .send();
         let response = send_request(request, cancel).await?;
-        let v = parse_json(response, cancel).await?;
+        let v = parse_json(response, cancel, AuthStage::MicrosoftDeviceCode).await?;
         let d: DeviceResponse =
             serde_json::from_value(v).map_err(|_| AuthError::InvalidResponse)?;
         if d.expires_in == 0
@@ -228,6 +261,7 @@ impl MicrosoftAuth {
                 _ = tokio::time::sleep_until(tokio::time::Instant::from_std(device.deadline)) => return Err(AuthError::Expired),
             };
             let success = response.status().is_success();
+            let response_status = response.status().as_u16();
             // OAuth pending/slow_down responses use HTTP 400. Decode their error
             // identifier before treating other unsuccessful statuses as failures.
             let value = tokio::select! {
@@ -243,16 +277,34 @@ impl MicrosoftAuth {
                     }
                     "expired_token" => return Err(AuthError::Expired),
                     "authorization_declined" => {
-                        return Err(AuthError::Rejected("sign-in was declined".into()));
+                        return Err(rejection_from_value(
+                            AuthStage::MicrosoftToken,
+                            response_status,
+                            &value,
+                        ));
                     }
                     "bad_verification_code" => {
-                        return Err(AuthError::Rejected("device code was rejected".into()));
+                        return Err(rejection_from_value(
+                            AuthStage::MicrosoftToken,
+                            response_status,
+                            &value,
+                        ));
                     }
-                    _ => return Err(AuthError::Rejected("Microsoft sign-in failed".into())),
+                    _ => {
+                        return Err(rejection_from_value(
+                            AuthStage::MicrosoftToken,
+                            response_status,
+                            &value,
+                        ));
+                    }
                 }
             }
             if !success {
-                return Err(AuthError::Rejected("Microsoft sign-in failed".into()));
+                return Err(rejection_from_value(
+                    AuthStage::MicrosoftToken,
+                    response_status,
+                    &value,
+                ));
             }
             break serde_json::from_value::<OAuthResponse>(value)
                 .map_err(|_| AuthError::InvalidResponse)?;
@@ -346,7 +398,12 @@ impl MicrosoftAuth {
             .find(|a| a.id == id)
             .ok_or(AuthError::InvalidResponse)?;
         let client_id = metadata.oauth_client_id.clone().ok_or_else(|| {
-            AuthError::Rejected("account is missing its OAuth client ID; sign in again".into())
+            rejected(
+                AuthStage::MicrosoftRefresh,
+                0,
+                None,
+                Some("Sign in to this account again."),
+            )
         })?;
         let future = self
             .client
@@ -358,7 +415,7 @@ impl MicrosoftAuth {
             ])
             .send();
         let response = tokio::select! { r = future => r.map_err(|_|AuthError::Network)?, _ = wait_cancel(cancel) => return Err(AuthError::Cancelled) };
-        let value = parse_json(response, Some(cancel)).await?;
+        let value = parse_json(response, Some(cancel), AuthStage::MicrosoftRefresh).await?;
         let mut oauth: OAuthResponse =
             serde_json::from_value(value).map_err(|_| AuthError::InvalidResponse)?;
         oauth
@@ -383,9 +440,7 @@ impl MicrosoftAuth {
             .minecraft_exchange(oauth, client_id, Some(cancel))
             .await?;
         if renewed.metadata.id != id {
-            return Err(AuthError::Rejected(
-                "refreshed account identity changed".into(),
-            ));
+            return Err(rejected(AuthStage::MicrosoftRefresh, 0, None, None));
         }
         metadata = renewed.metadata;
         store.upsert_with_refresh_lock(metadata.clone(), renewed.secrets, refresh_lock)?;
@@ -400,13 +455,13 @@ impl MicrosoftAuth {
         if cancel.is_some_and(CancellationToken::is_cancelled) {
             return Err(AuthError::Cancelled);
         }
-        let xbox=post_json(&self.client,&self.config.endpoints.xbox_live,serde_json::json!({"Properties":{"AuthMethod":"RPS","SiteName":"user.auth.xboxlive.com","RpsTicket":format!("d={}",oauth.access_token)},"RelyingParty":"http://auth.xboxlive.com","TokenType":"JWT"}),cancel).await?;
+        let xbox=post_json(&self.client,&self.config.endpoints.xbox_live,serde_json::json!({"Properties":{"AuthMethod":"RPS","SiteName":"user.auth.xboxlive.com","RpsTicket":format!("d={}",oauth.access_token)},"RelyingParty":"http://auth.xboxlive.com","TokenType":"JWT"}),cancel,AuthStage::XboxLive).await?;
         let x_token = str_field(&xbox, "Token")?;
         let uhs = xbox
             .pointer("/DisplayClaims/xui/0/uhs")
             .and_then(|v| v.as_str())
             .ok_or(AuthError::InvalidResponse)?;
-        let xsts=post_json(&self.client,&self.config.endpoints.xsts,serde_json::json!({"Properties":{"SandboxId":"RETAIL","UserTokens":[x_token]},"RelyingParty":"rp://api.minecraftservices.com/","TokenType":"JWT"}),cancel).await?;
+        let xsts=post_json(&self.client,&self.config.endpoints.xsts,serde_json::json!({"Properties":{"SandboxId":"RETAIL","UserTokens":[x_token]},"RelyingParty":"rp://api.minecraftservices.com/","TokenType":"JWT"}),cancel,AuthStage::Xsts).await?;
         let xsts_token = str_field(&xsts, "Token")?;
         if xsts
             .pointer("/DisplayClaims/xui/0/uhs")
@@ -424,6 +479,7 @@ impl MicrosoftAuth {
             &self.config.endpoints.minecraft,
             serde_json::json!({"identityToken":format!("XBL3.0 x={};{}",uhs,xsts_token)}),
             cancel,
+            AuthStage::MinecraftLogin,
         )
         .await?;
         let mc_token = str_field(&mc, "access_token")?;
@@ -433,7 +489,7 @@ impl MicrosoftAuth {
             .bearer_auth(mc_token)
             .send();
         let ent = send_request(ent, cancel).await?;
-        let ent = parse_json(ent, cancel).await?;
+        let ent = parse_json(ent, cancel, AuthStage::Entitlements).await?;
         let owns_java = ent
             .get("items")
             .and_then(|v| v.as_array())
@@ -454,7 +510,7 @@ impl MicrosoftAuth {
             .bearer_auth(mc_token)
             .send();
         let prof = send_request(prof, cancel).await?;
-        let prof = parse_json(prof, cancel).await?;
+        let prof = parse_json(prof, cancel, AuthStage::Profile).await?;
         let id = str_field(&prof, "id")?.to_owned();
         let username = str_field(&prof, "name")?.to_owned();
         let expires = now().saturating_add(
@@ -501,6 +557,7 @@ async fn post_json(
     url: &Url,
     body: serde_json::Value,
     cancel: Option<&CancellationToken>,
+    stage: AuthStage,
 ) -> Result<serde_json::Value, AuthError> {
     let future = c
         .post(url.clone())
@@ -508,7 +565,7 @@ async fn post_json(
         .json(&body)
         .send();
     let r = send_request(future, cancel).await?;
-    parse_json(r, cancel).await
+    parse_json(r, cancel, stage).await
 }
 async fn send_request<F>(
     future: F,
@@ -527,18 +584,101 @@ where
 async fn parse_json(
     r: reqwest::Response,
     cancel: Option<&CancellationToken>,
+    stage: AuthStage,
 ) -> Result<serde_json::Value, AuthError> {
     if !r.status().is_success() {
         let status = r.status();
-        return Err(AuthError::Rejected(
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                "credentials were refused".into()
-            } else {
-                "authentication service returned an error".into()
-            },
-        ));
+        let body = read_bounded_error_body(r, cancel).await?;
+        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default();
+        return Err(rejection_from_value(stage, status.as_u16(), &value));
     }
     parse_body(r, cancel).await
+}
+
+fn rejected(
+    stage: AuthStage,
+    status: u16,
+    code: Option<String>,
+    hint: Option<&'static str>,
+) -> AuthError {
+    AuthError::StageRejected {
+        stage,
+        status: (status != 0).then_some(status),
+        code,
+        hint,
+    }
+}
+
+fn rejection_from_value(stage: AuthStage, status: u16, value: &serde_json::Value) -> AuthError {
+    let code = numeric_machine_code(value);
+    let hint = match (stage, code.as_deref()) {
+        (AuthStage::XboxLive | AuthStage::Xsts, Some("2148916233")) => {
+            Some("Create an Xbox profile for this Microsoft account, then try again.")
+        }
+        (AuthStage::XboxLive | AuthStage::Xsts, Some("2148916238")) => Some(
+            "This account is treated as a child account; a family organizer may need to enable Xbox access.",
+        ),
+        (AuthStage::XboxLive | AuthStage::Xsts, Some("2148916235")) => {
+            Some("Xbox services are unavailable in this account's region.")
+        }
+        (AuthStage::MicrosoftToken | AuthStage::MicrosoftRefresh, Some("700016")) => Some(
+            "The OAuth application was not found in this tenant; check the configured client ID and app registration.",
+        ),
+        _ => None,
+    };
+    rejected(stage, status, code, hint)
+}
+
+fn numeric_machine_code(value: &serde_json::Value) -> Option<String> {
+    let numeric = |v: &serde_json::Value| {
+        if let Some(n) = v.as_u64() {
+            return Some(n.to_string());
+        }
+        let s = v.as_str()?;
+        (s.len() <= 20 && !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| s.to_owned())
+    };
+    value
+        .get("XErr")
+        .and_then(numeric)
+        .or_else(|| {
+            value
+                .get("error_codes")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.iter().find_map(numeric))
+        })
+        .or_else(|| {
+            // Some Microsoft OAuth responses place AADSTS numeric codes in `error`.
+            value
+                .get("error")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.strip_prefix("AADSTS"))
+                .filter(|s| s.len() <= 20 && !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .map(str::to_owned)
+        })
+}
+
+async fn read_bounded_error_body(
+    mut response: reqwest::Response,
+    cancel: Option<&CancellationToken>,
+) -> Result<Vec<u8>, AuthError> {
+    let mut body = Vec::with_capacity(MAX_ERROR_BODY);
+    while body.len() < MAX_ERROR_BODY {
+        let next = match cancel {
+            Some(token) => tokio::select! {
+                result = response.chunk() => result.map_err(|_| AuthError::InvalidResponse)?,
+                _ = wait_cancel(token) => return Err(AuthError::Cancelled),
+            },
+            None => response
+                .chunk()
+                .await
+                .map_err(|_| AuthError::InvalidResponse)?,
+        };
+        let Some(chunk) = next else { break };
+        let remaining = MAX_ERROR_BODY - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+    Ok(body)
 }
 async fn parse_body(
     r: reqwest::Response,
@@ -725,7 +865,7 @@ mod tests {
         assert_eq!(account.metadata.xuid.as_deref(), Some("123"));
         assert_eq!(account.secrets.access_token(), "mc-token");
         assert_eq!(account.secrets.refresh_token(), "ms-refresh");
-        let err = AuthError::Rejected("Microsoft sign-in failed".into());
+        let err = rejected(AuthStage::MicrosoftToken, 401, None, None);
         assert!(!err.to_string().contains("ms-access"));
     }
 
@@ -734,6 +874,80 @@ mod tests {
         assert!(valid_verification_uri("https://microsoft.com/devicelogin"));
         assert!(!valid_verification_uri("http://microsoft.com/devicelogin"));
         assert!(!valid_verification_uri("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn rejection_keeps_only_stage_status_and_numeric_machine_codes() {
+        let body = serde_json::json!({
+            "XErr": 2148916233u64,
+            "Message": "token=do-not-display user@example.com",
+            "error_description": "raw response do-not-display",
+        });
+        let err = rejection_from_value(AuthStage::XboxLive, 403, &body);
+        let display = err.to_string();
+        assert!(display.contains("Xbox Live authentication"));
+        assert!(display.contains("HTTP 403"));
+        assert!(display.contains("2148916233"));
+        assert!(display.contains("Create an Xbox profile"));
+        assert!(!display.contains("do-not-display"));
+        assert!(!display.contains("user@example.com"));
+        let xsts = rejection_from_value(AuthStage::Xsts, 403, &body);
+        assert!(xsts.to_string().contains("Xbox XSTS authorization"));
+        assert!(xsts.to_string().contains("Create an Xbox profile"));
+        let other_stage = rejection_from_value(AuthStage::MinecraftLogin, 403, &body);
+        assert!(other_stage.to_string().contains("Minecraft login"));
+        assert!(!other_stage.to_string().contains("Create an Xbox profile"));
+        assert_eq!(
+            numeric_machine_code(&serde_json::json!({"error":"AADSTS700016"})).as_deref(),
+            Some("700016")
+        );
+    }
+
+    #[tokio::test]
+    async fn xsts_rejection_fixture_keeps_status_and_numeric_xerr() {
+        let root = mock_server(vec![
+            (
+                "POST /device HTTP/",
+                r#"{"device_code":"opaque","user_code":"ABCD","verification_uri":"https://microsoft.com/devicelogin","message":"Enter code","expires_in":60,"interval":1}"#,
+            ),
+            (
+                "POST /token HTTP/",
+                r#"{"access_token":"ms-access","refresh_token":"ms-refresh"}"#,
+            ),
+            (
+                "POST /xbox HTTP/",
+                r#"{"Token":"xbl-token","DisplayClaims":{"xui":[{"uhs":"hash"}]}}"#,
+            ),
+            (
+                "POST /xsts HTTP/",
+                "!401\n{\"XErr\":2148916233,\"Message\":\"private raw text\"}",
+            ),
+        ]);
+        let mut config = AuthConfig::new("test-client");
+        config.endpoints.device_code = root.join("device").unwrap();
+        config.endpoints.token = root.join("token").unwrap();
+        config.endpoints.xbox_live = root.join("xbox").unwrap();
+        config.endpoints.xsts = root.join("xsts").unwrap();
+        let auth = MicrosoftAuth::new(config).unwrap();
+        let device = auth.begin_device_login().await.unwrap();
+        let result = auth
+            .complete_device_login(device, &CancellationToken::default())
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("XSTS rejection fixture unexpectedly authenticated"),
+        };
+        assert!(matches!(
+            error,
+            AuthError::StageRejected {
+                stage: AuthStage::Xsts,
+                status: Some(401),
+                code: Some(ref code),
+                ..
+            } if code == "2148916233"
+        ));
+        assert!(error.to_string().contains("Create an Xbox profile"));
+        assert!(!error.to_string().contains("private raw text"));
     }
 
     #[tokio::test]
@@ -810,6 +1024,14 @@ mod tests {
             .refresh_account(&store, "abcd1234", &CancellationToken::default())
             .await
             .unwrap_err();
+        assert!(matches!(
+            err,
+            AuthError::StageRejected {
+                stage: AuthStage::XboxLive,
+                status: Some(403),
+                ..
+            }
+        ));
         assert!(!err.to_string().contains("secret-ms-token"));
         assert_eq!(
             store

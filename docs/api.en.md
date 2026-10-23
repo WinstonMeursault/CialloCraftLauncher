@@ -28,7 +28,7 @@ Global options can be placed before the subcommand. Commands run non-interactive
 | `update status|rollback|recover` | Inspects the update transaction, starts a compatible rollback, or resumes interrupted helper work. |
 | `init` | Selects and creates a game directory using the [directory priority](user-guide.en.md#directories). |
 | `settings show\|get\|set\|reset` | Displays, reads, changes, or resets persisted settings. Proxy credentials are hidden in displayed settings. |
-| `account check-storage\|login\|list\|select\|refresh\|logout` | Checks the OS credential vault, signs in with a Microsoft account using device code, lists/selects accounts, refreshes, or removes local credentials. Login checks the vault before contacting Microsoft. See [Microsoft account setup](user-guide.en.md#accounts). |
+| `account check-storage\|login\|list\|select\|refresh\|logout` | Checks the OS credential vault, signs in with a Microsoft account using device code, lists/selects accounts, refreshes, or removes local credentials. Login checks the vault before contacting Microsoft, prints the device code and opens the default browser; `account login --no-browser` disables opening. See [Microsoft account setup](user-guide.en.md#accounts). |
 | `versions [--limit N]` | Lists available game versions. `--limit N` limits the result; `--limit 0` lists all versions. |
 | `install VERSION` | Installs the named game version into the selected game directory. |
 | `instances` | Lists installed vanilla versions and their required Java major versions. |

@@ -362,7 +362,7 @@ These P7 features are implemented but have not completed the full release accept
 
 ## Microsoft accounts
 
-> **Preview status:** Microsoft sign-in is implemented but has not been verified with a real account. A CCL OAuth application has not yet been registered. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
+> **Preview status:** Microsoft sign-in is implemented and the owner has registered the CCL OAuth application. Real Xbox/Minecraft service access and entitled-account acceptance remain incomplete. The complete Microsoft, Xbox, and Minecraft flow must pass with that application before this feature can meet the CLI preview acceptance gate.
 
 Application owners: see [registration and acceptance](development.en.md#microsoft-application).
 
@@ -384,7 +384,7 @@ Or pass an ID for one login:
 ccl account login --client-id YOUR-APPLICATION-CLIENT-ID
 ```
 
-The launcher prints a Microsoft verification address and one-time device code. Open that address in a browser, sign in, and enter the code. Do not share the code; anyone who enters it first could authorize the pending login. The CLI waits for completion. Then use:
+The launcher prints a Microsoft verification address and one-time device code, and automatically opens the default browser. Sign in there and enter the code. Use `account login --no-browser` to open the page yourself, such as when signing in on a headless server. If automatic opening fails, the printed address remains usable and login continues. Do not share the code; anyone who enters it first could authorize the pending login. The CLI waits for completion. Then use:
 
 ```sh
 ccl account list
@@ -393,6 +393,8 @@ ccl launch VERSION
 ```
 
 With a selected account, `launch` uses it by default and refreshes credentials when needed. To launch offline instead, pass `--offline` or `--username NAME`. `--account ACCOUNT-ID` selects a specific saved account for one launch. `account logout [ACCOUNT-ID]` removes local credentials and account metadata; it does not revoke Microsoft consent.
+
+Authentication failures identify the service stage and HTTP status, with allowlisted machine error codes when available. Raw service error text, tokens and account identifiers are not printed. A service rejection is separate from a verified lack of Java entitlement; a generic 401/403 alone does not establish the cause.
 
 ### Credential storage
 
