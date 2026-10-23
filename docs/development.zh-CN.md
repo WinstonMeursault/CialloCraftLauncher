@@ -242,7 +242,7 @@ $env:TARGET = $target
 ./scripts/package-preview.ps1
 ```
 
-普通本机构建在未提供发行构建环境时使用 unpublished 提交标识；可用于本地检查，不能代替工作流产生的更新程序包。打包脚本要求对应的 `target/<三元组>/release/ccl` 程序存在（Windows 文件名为 `ccl.exe`）。归档包含项目许可证、两份 README、配对的中英文指南，以及生成的 `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` 清单。`scripts/third-party-notices.py` 会读取 `ccl-cli` 在所选目标下的常规及构建依赖图，并将可用的许可证/声明文本复制到 `licenses/<crate-version-hash>/`；打包脚本会验证这些文件已进入归档。随后脚本检查归档并生成 SHA-256 文件。校验和可发现意外损坏，但程序包和可执行文件都未签名，因此无法认证发布者。
+普通本机构建在未提供发行构建环境时使用 unpublished 提交标识；可用于本地检查，不能代替工作流产生的更新程序包。打包脚本要求对应的 `target/<三元组>/release/ccl` 程序存在（Windows 文件名为 `ccl.exe`）。归档根目录包含项目许可证、两份 README、配对的中英文指南、生成的 `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` 清单，以及包含原始许可证和声明文本的 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 双语文本包。`scripts/third-party-notices.py` 会读取 `ccl-cli` 在所选目标下的常规及构建依赖图；每份清单都链接到对应语言文本包内的确定性锚点。两份文本包会翻译介绍标签，同时保留完全一致的原始许可证文本字节；第三方原文统一收录在这两个文件中。打包脚本会验证四个声明文件均已进入归档，且 ZIP 不超过 256 个条目，以确保当前读取器可以安装。更新器既有的 256 项 ZIP 限制保持不变。打包脚本还会检查归档并生成 SHA-256 文件。校验和可发现意外损坏，但程序包和可执行文件都未签名，因此无法认证发布者。
 
 ### 开发版
 

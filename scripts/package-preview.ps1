@@ -21,10 +21,8 @@ $requiredGuides = @('user-guide.en.md', 'user-guide.zh-CN.md', 'api.en.md', 'api
 foreach ($guide in $requiredGuides) {
     if (-not (Test-Path (Join-Path $stage "docs/$guide"))) { throw "Missing guide: $guide" }
 }
-$licenseFiles = @(Get-ChildItem (Join-Path $stage 'licenses') -File -Recurse)
-if ($licenseFiles.Count -eq 0) { throw 'No third-party license texts were generated' }
-$licensePaths = @($licenseFiles | ForEach-Object { $_.FullName.Substring($stage.Length + 1).Replace('\', '/') })
-$requiredFiles = @('ccl.exe', 'LICENSE', 'README.md', 'README.zh-CN.md', 'THIRD-PARTY.en.md', 'THIRD-PARTY.zh-CN.md') + @($documents | ForEach-Object { "docs/$($_.Name)" }) + $licensePaths
+if (Test-Path (Join-Path $stage 'licenses')) { throw 'Unexpected separate third-party license files' }
+$requiredFiles = @('ccl.exe', 'LICENSE', 'README.md', 'README.zh-CN.md', 'THIRD-PARTY.en.md', 'THIRD-PARTY.zh-CN.md', 'THIRD-PARTY-LICENSES.en.md', 'THIRD-PARTY-LICENSES.zh-CN.md') + @($documents | ForEach-Object { "docs/$($_.Name)" })
 & (Join-Path $stage 'ccl.exe') --help | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Packaged ccl --help failed' }
 foreach ($required in $requiredFiles) {
@@ -32,6 +30,16 @@ foreach ($required in $requiredFiles) {
 }
 $archive = Join-Path $dist "$name.zip"
 Compress-Archive -Path $stage -DestinationPath $archive -Force
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
+try {
+  $entryCount = $zip.Entries.Count
+  $hasSeparateLicenses = @($zip.Entries | Where-Object { $_.FullName -match '(^|/)licenses/' }).Count -gt 0
+} finally {
+  $zip.Dispose()
+}
+if ($entryCount -gt 256) { throw "Archive has $entryCount entries; updater limit is 256" }
+if ($hasSeparateLicenses) { throw 'Archive contains separate third-party license files' }
 $smoke = Join-Path $env:TEMP "$name-archive-smoke"
 Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
 Expand-Archive -Path $archive -DestinationPath $smoke -Force

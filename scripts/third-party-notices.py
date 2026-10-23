@@ -58,6 +58,7 @@ def license_files(package):
     manifest = Path(package["manifest_path"])
     root = manifest.parent
     found = set()
+    missing_declared = []
     declared = package.get("license_file")
     if declared:
         path = Path(declared)
@@ -65,6 +66,8 @@ def license_files(package):
             path = root / path
         if path.is_file():
             found.add(path)
+        else:
+            missing_declared.append(path)
 
     for path in root.rglob("*"):
         if path.is_file() and LICENSE_NAME.match(path.name):
@@ -79,7 +82,7 @@ def license_files(package):
             non_text.append(path)
             continue
         usable.append(path)
-    return root, usable, non_text
+    return root, usable, non_text, missing_declared
 
 
 def package_identity(package, workspace):
@@ -112,13 +115,20 @@ def markdown_cell(value):
     return str(value).replace("|", "\\|").replace("\n", " ").strip()
 
 
+def inline_code(value):
+    runs = [len(match.group(0)) for match in re.finditer(r"`+", value)]
+    fence = "`" * (max(runs, default=0) + 1)
+    return f"{fence}{value}{fence}"
+
+
 def render_inventory(language, target, root_package, cargo_version, rustc_version, lock_hash, entries):
     if language == "en":
+        bundle_name = "THIRD-PARTY-LICENSES.en.md"
         title = "Third-party notices"
         scope = (
             f"This inventory lists the normal and build-time third-party dependencies "
             f"resolved for `{root_package['name']} {root_package['version']}` on `{target}`. "
-            "License and notice files are copied verbatim from the corresponding crate sources."
+            f"Original license and notice texts are included verbatim in `{bundle_name}`."
         )
         metadata = (
             f"Cargo: `{cargo_version}`; Rust: `{rustc_version}`; "
@@ -126,10 +136,11 @@ def render_inventory(language, target, root_package, cargo_version, rustc_versio
         )
         headers = ("Crate", "Version", "Cargo license", "Source", "Bundled texts")
     else:
+        bundle_name = "THIRD-PARTY-LICENSES.zh-CN.md"
         title = "第三方许可证与声明"
         scope = (
             f"此清单列出为 `{root_package['name']} {root_package['version']}` 在 `{target}` "
-            "解析的普通依赖和构建依赖。许可证与声明文本从对应的 crate 源码中原样复制。"
+            f"解析的普通依赖和构建依赖。原始许可证与声明文本完整保存在 `{bundle_name}` 中。"
         )
         metadata = (
             f"Cargo：`{cargo_version}`；Rust：`{rustc_version}`；"
@@ -142,7 +153,10 @@ def render_inventory(language, target, root_package, cargo_version, rustc_versio
     for entry in entries:
         source = entry["source_url"]
         source_cell = f"<{source}>" if source.startswith("https://") else source
-        text_paths = ", ".join(f"[`{path}`]({path})" for path in entry["files"])
+        text_paths = ", ".join(
+            f"[{inline_code(item['source_path'])}]({bundle_name}#{item['anchor']})"
+            for item in entry["texts"]
+        )
         cells = (
             f"`{entry['name']}`",
             f"`{entry['version']}`",
@@ -153,6 +167,41 @@ def render_inventory(language, target, root_package, cargo_version, rustc_versio
         lines.append("| " + " | ".join(markdown_cell(cell) for cell in cells) + " |")
     lines.append("")
     return "\n".join(lines)
+
+
+def render_license_bundle(entries, language):
+    if language == "en":
+        intro = (
+            "# Third-party license and notice texts\n\n"
+            "Original source texts are included verbatim and are not translated.\n\n"
+        )
+        source_label = "Source file: "
+    else:
+        intro = (
+            "# 第三方许可证与声明原文\n\n"
+            "以下原始文本从对应 crate 源码中逐字收录，未作翻译。\n\n"
+        )
+        source_label = "源文件："
+    output = bytearray(intro.encode("utf-8"))
+    anchors = set()
+    for entry in entries:
+        output.extend(f"## {entry['name']} {entry['version']}\n\n".encode("utf-8"))
+        for item in entry["texts"]:
+            anchor = item["anchor"]
+            if anchor in anchors:
+                raise RuntimeError(f"duplicate license bundle anchor: {anchor}")
+            anchors.add(anchor)
+            output.extend(f'<a id="{anchor}"></a>\n\n'.encode("utf-8"))
+            output.extend(f"### {source_label}{item['source_path']}\n\n".encode("utf-8"))
+            text = item["contents"]
+            runs = [len(match.group(0)) for match in re.finditer(rb"`+", text)]
+            fence = b"`" * (max(3, max(runs, default=0) + 1))
+            output.extend(fence + b"text\n")
+            output.extend(text)
+            if not text.endswith((b"\n", b"\r")):
+                output.extend(b"\n")
+            output.extend(fence + b"\n\n")
+    return bytes(output), anchors
 
 
 def main():
@@ -177,13 +226,14 @@ def main():
     lock_path = repo / "Cargo.lock"
     lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
 
+    legacy_bundle = output_dir / "THIRD-PARTY-LICENSES.md"
+    if legacy_bundle.exists():
+        legacy_bundle.unlink()
     licenses_dir = output_dir / "licenses"
     if licenses_dir.exists():
         shutil.rmtree(licenses_dir)
-    licenses_dir.mkdir(parents=True, exist_ok=True)
     errors = []
     entries = []
-    used_dirs = set()
     for package in packages:
         name = package["name"]
         version = package["version"]
@@ -191,38 +241,46 @@ def main():
         if not isinstance(license_expression, str) or not license_expression.strip():
             errors.append(f"{name} {version}: Cargo metadata has no license field")
             continue
-        root, files, non_text = license_files(package)
+        root, files, non_text, missing_declared = license_files(package)
+        if missing_declared:
+            errors.append(
+                f"{name} {version}: declared license file is missing: "
+                + ", ".join(map(str, missing_declared))
+            )
+            continue
+        if non_text:
+            errors.append(
+                f"{name} {version}: non-UTF-8 license/notice text files: "
+                + ", ".join(map(str, non_text))
+            )
+            continue
         if not files:
-            suffix = f"; non-text license-named files: {', '.join(map(str, non_text))}" if non_text else ""
-            errors.append(f"{name} {version}: no UTF-8 license/notice text found under {root}{suffix}")
+            errors.append(f"{name} {version}: no UTF-8 license/notice text found under {root}")
             continue
 
         identity = package_identity(package, repo)
-        suffix = hashlib.sha256(f"{name}@{version}|{identity}".encode()).hexdigest()[:12]
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{name}-{version}").strip("-.") or "crate"
-        directory = f"{slug}-{suffix}"
-        if directory in used_dirs:
-            errors.append(f"{name} {version}: duplicate license output directory {directory}")
-            continue
-        used_dirs.add(directory)
-        package_output = licenses_dir / directory
-        copied_paths = []
+        source_texts = []
         for file_path in files:
             try:
                 relative = file_path.relative_to(root)
             except ValueError:
                 relative = Path("declared") / file_path.name
-            destination = package_output / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(file_path, destination)
-            copied_paths.append(destination.relative_to(output_dir).as_posix())
+            source_path = relative.as_posix()
+            anchor = "license-" + hashlib.sha256(
+                f"{name}@{version}|{identity}|{source_path}".encode("utf-8")
+            ).hexdigest()[:20]
+            source_texts.append({
+                "source_path": source_path,
+                "anchor": anchor,
+                "contents": file_path.read_bytes(),
+            })
 
         entries.append({
             "name": name,
             "version": version,
             "license": license_expression.strip(),
             "source_url": source_url(package, repo),
-            "files": sorted(copied_paths),
+            "texts": source_texts,
         })
 
     if errors:
@@ -230,6 +288,14 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for language in ("en", "zh-CN"):
+        bundle, anchors = render_license_bundle(entries, language)
+        expected_anchors = {
+            item["anchor"] for entry in entries for item in entry["texts"]
+        }
+        if anchors != expected_anchors:
+            raise RuntimeError(f"{language} license bundle anchors do not match inventory references")
+        bundle_file = output_dir / f"THIRD-PARTY-LICENSES.{language}.md"
+        bundle_file.write_bytes(bundle)
         output = output_dir / f"THIRD-PARTY.{language}.md"
         with output.open("w", encoding="utf-8", newline="\n") as destination:
             destination.write(render_inventory(
