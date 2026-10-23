@@ -281,11 +281,11 @@ CCL 读取 `mmc-pack.json` 组件，并从 `minecraft/` 或 `.minecraft/` 导入
 
 ## 在线搜索、依赖与更新
 
-在线搜索仅支持 Modrinth，且无需密钥。CurseForge 的版本查询、依赖解析和在线安装仍需要在进程环境中设置用户自有的 `CCL_CURSEFORGE_API_KEY`；启动器不会持久化它。Modrinth 搜索可按项目类型、Minecraft 版本、加载器筛选。必需依赖及固定版本会自动解析并检查兼容性；可选依赖会列出，分析会报告不兼容选择。
+Modrinth 无需密钥。CurseForge 在线请求需要在进程环境中设置用户自有的 `CCL_CURSEFORGE_API_KEY`，启动器不会持久化它。搜索可按项目类型、Minecraft 版本、加载器筛选。必需依赖及固定版本会自动解析并检查兼容性；可选依赖会列出，分析会报告不兼容选择。
 
 安装其他项目会保留无关模组。更新时若受管理文件被修改、删除，或新文件与未托管内容冲突，操作会停止。`updates` 检查可用更新；使用 `install` 应用选定版本。
 
-`online search` 的平台参数仅接受 `modrinth`；其余适用的在线内容命令接受 `modrinth` 或 `curseforge`。项目和版本参数可以使用对应平台的项目 slug/ID 和版本 ID。以下示例覆盖七个子命令：
+`online` 的平台参数接受 `modrinth` 或 `curseforge`。项目和版本参数可以使用对应平台的项目 slug/ID 和版本 ID。以下示例覆盖七个子命令：
 
 ```sh
 ccl online search modrinth sodium --minecraft 1.21.1 --loader fabric --kind mod --limit 10
@@ -299,7 +299,7 @@ ccl online pack-install my-pack modrinth example-pack --version VERSION_ID --inc
 
 `install` 会解析项目及必需依赖，并安装到已有实例。`pack-install` 会下载平台整合包并创建或更新实例。`updates` 和 `analyze` 会检查已有实例的收据。调用 CurseForge API 的命令需要在进程环境中设置 `CCL_CURSEFORGE_API_KEY`；Modrinth 不需要密钥。密钥请求头范围测试成功不代表真实 CurseForge 密钥已获得在线授权。
 
-这些 API 使用 `DownloadConfig` 的代理和离线设置。CurseForge 版本查询和直接下载仍需要用户提供密钥；CCL 不提供 CurseForge 搜索。Modrinth 不需要密钥。启用离线模式时，在线请求会失败。
+这些 API 使用 `DownloadConfig` 的代理和离线设置。CurseForge 搜索、版本查询和直接下载都需要用户提供密钥；Modrinth 不需要密钥。启用离线模式时，在线请求会失败。
 
 <a id="networking"></a>
 

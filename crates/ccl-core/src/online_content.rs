@@ -55,7 +55,7 @@ impl std::fmt::Debug for OnlineConfig {
 pub enum OnlineError {
     #[error("online content is unavailable while offline")]
     Offline,
-    #[error("CurseForge operation requires a user-configured API key")]
+    #[error("CurseForge search requires a user-configured API key")]
     MissingCurseForgeKey,
     #[error("provider request failed: {0}")]
     Request(String),
@@ -607,29 +607,85 @@ impl OnlineContentService {
         Ok(resolved)
     }
 
-    /// Search public Modrinth projects.
-    pub async fn search(&self, query: &SearchQuery) -> Result<Vec<ProjectHit>, OnlineError> {
+    /// Search projects on the selected provider.
+    pub async fn search(
+        &self,
+        provider: Provider,
+        query: &SearchQuery,
+    ) -> Result<Vec<ProjectHit>, OnlineError> {
         self.online()?;
         if query.query.trim().is_empty() {
             return Err(OnlineError::Invalid("query must not be blank".into()));
         }
-        let mut request = self
-            .client
-            .get(format!("{}/search", self.modrinth_api))
-            .query(&[
-                ("query", query.query.as_str()),
-                ("limit", &query.limit.clamp(1, 100).to_string()),
-            ]);
-        let facets = modrinth_facets(query);
-        if !facets.is_empty() {
-            request = request.query(&[("facets", serde_json::to_string(&facets)?)]);
+        match provider {
+            Provider::Modrinth => {
+                let mut request = self
+                    .client
+                    .get(format!("{}/search", self.modrinth_api))
+                    .query(&[
+                        ("query", query.query.as_str()),
+                        ("limit", &query.limit.clamp(1, 100).to_string()),
+                    ]);
+                let facets = modrinth_facets(query);
+                if !facets.is_empty() {
+                    request = request.query(&[("facets", serde_json::to_string(&facets)?)]);
+                }
+                let response = self.send(request).await?;
+                let value: MrSearch = response
+                    .json()
+                    .await
+                    .map_err(|e| OnlineError::Request(e.to_string()))?;
+                Ok(project_hits_from_modrinth(value, provider))
+            }
+            Provider::CurseForge => {
+                let mut request = self
+                    .client
+                    .get(format!("{}/mods/search", self.curseforge_api))
+                    .query(&[
+                        ("gameId", "432"),
+                        ("searchFilter", query.query.as_str()),
+                        ("pageSize", &query.limit.clamp(1, 50).to_string()),
+                    ]);
+                request = self.authorize_curseforge(request)?;
+                if let Some(v) = &query.game_version {
+                    request = request.query(&[("gameVersion", v)]);
+                }
+                if let Some(t) = &query.project_type {
+                    let id = match t.as_str() {
+                        "mod" => "6",
+                        "modpack" => "4471",
+                        "resourcepack" => "12",
+                        "shader" => "6552",
+                        _ => {
+                            return Err(OnlineError::Invalid(format!(
+                                "unsupported CurseForge project type `{t}`"
+                            )));
+                        }
+                    };
+                    request = request.query(&[("classId", id)]);
+                }
+                if let Some(loader) = query.loaders.first() {
+                    let id = match loader.as_str() {
+                        "forge" => "1",
+                        "fabric" => "4",
+                        "quilt" => "5",
+                        "neoforge" => "6",
+                        _ => {
+                            return Err(OnlineError::Invalid(format!(
+                                "unsupported CurseForge loader `{loader}`"
+                            )));
+                        }
+                    };
+                    request = request.query(&[("modLoaderType", id)]);
+                }
+                let response = self.send(request).await?;
+                let value: CfEnvelope<Vec<CfMod>> = response
+                    .json()
+                    .await
+                    .map_err(|e| OnlineError::Request(e.to_string()))?;
+                Ok(project_hits_from_curseforge(value, provider))
+            }
         }
-        let response = self.send(request).await?;
-        let value: MrSearch = response
-            .json()
-            .await
-            .map_err(|e| OnlineError::Request(e.to_string()))?;
-        Ok(project_hits_from_modrinth(value))
     }
 
     /// List provider versions for a project, optionally filtered by game version and loader.
@@ -1458,18 +1514,51 @@ struct CfVersionDependency {
     mod_id: u64,
     relation_type: u32,
 }
-fn project_hits_from_modrinth(value: MrSearch) -> Vec<ProjectHit> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfMod {
+    id: u64,
+    name: String,
+    slug: String,
+    summary: String,
+    download_count: u64,
+    logo: Option<CfLogo>,
+}
+#[derive(Deserialize)]
+struct CfLogo {
+    url: String,
+}
+
+fn project_hits_from_modrinth(value: MrSearch, provider: Provider) -> Vec<ProjectHit> {
     value
         .hits
         .into_iter()
         .map(|h| ProjectHit {
-            provider: Provider::Modrinth,
+            provider,
             id: h.project_id,
             slug: h.slug,
             title: h.title,
             description: h.description,
             downloads: h.downloads,
             icon_url: h.icon_url,
+        })
+        .collect()
+}
+fn project_hits_from_curseforge(
+    value: CfEnvelope<Vec<CfMod>>,
+    provider: Provider,
+) -> Vec<ProjectHit> {
+    value
+        .data
+        .into_iter()
+        .map(|h| ProjectHit {
+            provider,
+            id: h.id.to_string(),
+            slug: h.slug,
+            title: h.name,
+            description: h.summary,
+            downloads: h.download_count,
+            icon_url: h.logo.map(|x| x.url),
         })
         .collect()
 }
@@ -1553,13 +1642,16 @@ mod tests {
     async fn public_modrinth_fabric_api_project_has_compatible_versions() {
         let client = OnlineContentService::new(OnlineConfig::default()).unwrap();
         let hits = client
-            .search(&SearchQuery {
-                query: "Fabric API".into(),
-                game_version: Some("1.20.1".into()),
-                loaders: vec!["fabric".into()],
-                project_type: Some("mod".into()),
-                limit: 10,
-            })
+            .search(
+                Provider::Modrinth,
+                &SearchQuery {
+                    query: "Fabric API".into(),
+                    game_version: Some("1.20.1".into()),
+                    loaders: vec!["fabric".into()],
+                    project_type: Some("mod".into()),
+                    limit: 10,
+                },
+            )
             .await
             .unwrap();
         let fabric_api = hits.iter().find(|hit| hit.slug == "fabric-api").unwrap();

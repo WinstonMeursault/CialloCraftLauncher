@@ -281,11 +281,11 @@ These imports preserve private userdata, including worlds or server lists when p
 
 ## Online search, dependencies and updates
 
-Online search supports Modrinth only and needs no key. CurseForge version lookup, dependency resolution and online installation still require your own `CCL_CURSEFORGE_API_KEY` in the process environment; the launcher does not persist it. Modrinth search supports project type, Minecraft version and loader filters. Required dependencies and pinned versions are resolved and checked for compatibility; optional dependencies are listed, and incompatible selections are reported by analysis.
+Use Modrinth without a key. CurseForge online requests require your own `CCL_CURSEFORGE_API_KEY` in the process environment; the launcher does not persist it. Search supports project type, Minecraft version and loader filters. Required dependencies and pinned versions are resolved and checked for compatibility; optional dependencies are listed, and incompatible selections are reported by analysis.
 
 Installing another project retains unrelated mods. Updates stop if owned files were changed or deleted, or if new files collide with unmanaged local content. `updates` checks availability; use `install` to apply the selected version.
 
-`online search` accepts only `modrinth` as its provider; other applicable online content commands accept `modrinth` or `curseforge`. Project and version arguments can use the provider's project slug/ID and version ID. These examples show all seven subcommands:
+`online` accepts `modrinth` or `curseforge` as the provider. Project and version arguments can use the provider's project slug/ID and version ID. These examples show all seven subcommands:
 
 ```sh
 ccl online search modrinth sodium --minecraft 1.21.1 --loader fabric --kind mod --limit 10
@@ -299,7 +299,7 @@ ccl online pack-install my-pack modrinth example-pack --version VERSION_ID --inc
 
 `install` resolves and installs the selected project and required dependencies into an existing instance. `pack-install` downloads a provider pack and creates or updates an instance. `updates` and `analyze` inspect the receipt for an existing instance. CurseForge commands that call its API need `CCL_CURSEFORGE_API_KEY` in the process environment; Modrinth does not require a key. A successful fixture test of key header scoping does not establish live authorization for a real CurseForge key.
 
-The APIs use `DownloadConfig` for proxy and offline behavior. A CurseForge key is still required for version lookup and direct downloads; CCL does not provide CurseForge search. Modrinth needs no key. Online requests fail when offline mode is enabled.
+The APIs use `DownloadConfig` for proxy and offline behavior. A CurseForge key is required for CurseForge search, version lookup, and direct downloads; Modrinth needs no key. Online requests fail when offline mode is enabled.
 
 <a id="networking"></a>
 

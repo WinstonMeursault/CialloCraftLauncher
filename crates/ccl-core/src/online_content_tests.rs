@@ -200,10 +200,13 @@ async fn offline_online_operations_fail_before_api_requests() {
     ));
     assert!(matches!(
         client
-            .search(&SearchQuery {
-                query: "test".into(),
-                ..Default::default()
-            })
+            .search(
+                Provider::CurseForge,
+                &SearchQuery {
+                    query: "test".into(),
+                    ..Default::default()
+                }
+            )
             .await,
         Err(OnlineError::Offline)
     ));
@@ -222,7 +225,7 @@ fn filename_validation_rejects_cross_platform_and_path_escapes() {
 #[test]
 fn modrinth_search_and_version_fixtures_preserve_dependency_kinds_and_pins() {
     let search:MrSearch=serde_json::from_value(serde_json::json!({"hits":[{"project_id":"p-id","slug":"fabric-api","title":"Fabric API","description":"fixture","downloads":12,"icon_url":null}]})).unwrap();
-    let projects = project_hits_from_modrinth(search);
+    let projects = project_hits_from_modrinth(search, Provider::Modrinth);
     assert_eq!(projects[0].slug, "fabric-api");
     assert_eq!(projects[0].downloads, 12);
     let fixture:MrVersion=serde_json::from_value(serde_json::json!({"id":"root-v2","project_id":"root","name":"Root","version_number":"2.0","game_versions":["1.21.1"],"loaders":["fabric"],"files":[{"filename":"root.jar","url":"https://cdn.modrinth.com/root.jar","size":5,"hashes":{"sha1":"abc","sha512":"def"},"primary":true}],"dependencies":[{"project_id":"dep","version_id":"dep-v1","dependency_type":"required"},{"project_id":"addon","version_id":null,"dependency_type":"optional"},{"project_id":"broken","version_id":null,"dependency_type":"incompatible"},{"project_id":"embedded","dependency_type":"embedded"}]})).unwrap();
@@ -260,7 +263,7 @@ fn curseforge_auth_header_is_caller_supplied_and_debug_output_redacts_it() {
     let service = OnlineContentService::new(config).unwrap();
     let request = service
         .authorize_curseforge(
-            reqwest::Client::new().get("https://api.curseforge.com/v1/mods/42/files"),
+            reqwest::Client::new().get("https://api.curseforge.com/v1/mods/search"),
         )
         .unwrap()
         .build()
@@ -269,7 +272,7 @@ fn curseforge_auth_header_is_caller_supplied_and_debug_output_redacts_it() {
     let without = OnlineContentService::new(OnlineConfig::default()).unwrap();
     assert!(matches!(
         without.authorize_curseforge(
-            reqwest::Client::new().get("https://api.curseforge.com/v1/mods/42/files")
+            reqwest::Client::new().get("https://api.curseforge.com/v1/mods/search")
         ),
         Err(OnlineError::MissingCurseForgeKey)
     ));
@@ -332,10 +335,13 @@ async fn modrinth_fixture_server_exercises_search_versions_and_recursive_pinned_
         .unwrap()
         .with_endpoints(&base, &base);
     let hits = service
-        .search(&SearchQuery {
-            query: "root".into(),
-            ..Default::default()
-        })
+        .search(
+            Provider::Modrinth,
+            &SearchQuery {
+                query: "root".into(),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(hits[0].id, "root");

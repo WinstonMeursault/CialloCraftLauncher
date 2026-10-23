@@ -37,7 +37,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `instance rename ID DESTINATION\|copy ID DESTINATION\|delete ID --yes\|history ID\|restore ID REVISION\|disk-usage ID\|clean ID [--keep N] [--include-previous] [--apply]` | 重命名、复制、删除、查看、恢复和清理实例保留修订版。默认只预览清理计划；只有指定 `--apply` 才会执行。参阅[实例生命周期](user-guide.zh-CN.md#instances)。 |
 | `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | 检查并导入 Modrinth、CurseForge 和 MultiMC/Prism 导出包；导出 Modrinth `.mrpack`。参阅[导入指南](user-guide.zh-CN.md#imports)及 [Modrinth 与实例内容指南](user-guide.zh-CN.md#packs)。 |
 | `content list ID KIND\|add ID KIND SOURCE [--name NAME]\|remove ID KIND NAME\|enable ID NAME\|disable ID NAME\|backup ID OUTPUT\|restore ID ARCHIVE` | 管理本地模组、资源包、光影包、存档和可移植用户数据备份。`KIND` 为 `mods`、`resourcepacks`、`shaderpacks` 或 `saves`。 |
-| `online search\|versions\|resolve\|install\|updates\|analyze\|pack-install` | 仅搜索 Modrinth；解析适用平台的依赖、安装或更新内容，并分析已记录的在线内容。参阅[在线内容](user-guide.zh-CN.md#online)。 |
+| `online search\|versions\|resolve\|install\|updates\|analyze\|pack-install` | 搜索 Modrinth 或 CurseForge、解析依赖、安装或更新内容，并分析已记录的在线内容。参阅[在线内容](user-guide.zh-CN.md#online)。 |
 | `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | 启动原版版本或隔离实例。默认使用所选 Microsoft 账户，也可显式使用离线账户。Java 可自动探测或按需从 Mojang 运行时清单安装。 |
 | `logs [--instance ID] [--run ID] [--lines 100]` | 输出最近一次运行日志，或指定运行记录的日志，并限制输出行数。`--instance` 选择独立实例的日志。 |
 
@@ -130,7 +130,7 @@ token.cancel();
 - Modrinth 使用公开 API 查询项目和版本，并解析必需依赖。精确指定的依赖版本会被保留，并按目标 Minecraft 版本和加载器验证。可选依赖会列出但不会自动安装；分析时会报告不兼容依赖。
 - CurseForge 使用其 REST API。调用方必须通过 `OnlineConfig` 提供自己的 API 密钥；启动器不会内置或持久化该密钥。下载请求只会向下载请求允许的确切 HTTPS CurseForge CDN 主机附加密钥。如果 API 未提供文件下载 URL，该文件会保持不可用；启动器不会猜测网站下载地址。
 
-Modrinth 搜索支持按项目类型、Minecraft 版本和加载器筛选；核心 `search` 服务只搜索 Modrinth。两个平台的版本文件都提供可用的哈希值和大小。CurseForge 数字项目 ID 会作为字符串保留在平台无关的 API 中。
+搜索支持按项目类型、Minecraft 版本和加载器筛选。两个平台的版本文件都提供可用的哈希值和大小。CurseForge 数字项目 ID 会作为字符串保留在平台无关的 API 中。
 
 ### 实例操作
 

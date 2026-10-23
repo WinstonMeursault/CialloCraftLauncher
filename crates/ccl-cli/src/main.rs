@@ -250,9 +250,8 @@ enum OnlineCommand {
         include_optional: bool,
     },
     Search {
-        /// Search provider. Only Modrinth supports catalog search.
-        #[arg(value_name = "PROVIDER", value_parser = ["modrinth"])]
-        provider: String,
+        #[arg(value_parser=parse_provider)]
+        provider: Provider,
         query: String,
         #[arg(long)]
         minecraft: Option<String>,
@@ -1045,7 +1044,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
                 }
                 OnlineCommand::Search {
-                    provider: _,
+                    provider,
                     query,
                     minecraft,
                     loader,
@@ -1053,13 +1052,16 @@ async fn run(cli: &Cli) -> Result<Value> {
                     limit,
                 } => {
                     let projects = service
-                        .search(&SearchQuery {
-                            query: query.clone(),
-                            game_version: minecraft.clone(),
-                            loaders: loader.clone(),
-                            project_type: Some(kind.clone()),
-                            limit: *limit,
-                        })
+                        .search(
+                            *provider,
+                            &SearchQuery {
+                                query: query.clone(),
+                                game_version: minecraft.clone(),
+                                loaders: loader.clone(),
+                                project_type: Some(kind.clone()),
+                                limit: *limit,
+                            },
+                        )
                         .await?;
                     Ok(json!({"ok":true,"projects":projects}))
                 }
