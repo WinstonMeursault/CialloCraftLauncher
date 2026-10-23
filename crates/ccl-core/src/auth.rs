@@ -463,11 +463,12 @@ impl MicrosoftAuth {
             .ok_or(AuthError::InvalidResponse)?;
         let xsts=post_json(&self.client,&self.config.endpoints.xsts,serde_json::json!({"Properties":{"SandboxId":"RETAIL","UserTokens":[x_token]},"RelyingParty":"rp://api.minecraftservices.com/","TokenType":"JWT"}),cancel,AuthStage::Xsts).await?;
         let xsts_token = str_field(&xsts, "Token")?;
-        if xsts
+        let xsts_uhs = xsts
             .pointer("/DisplayClaims/xui/0/uhs")
             .and_then(|v| v.as_str())
-            .is_some_and(|xsts_uhs| xsts_uhs != uhs)
-        {
+            .filter(|value| !value.is_empty())
+            .ok_or(AuthError::InvalidResponse)?;
+        if xsts_uhs != uhs {
             return Err(AuthError::InvalidResponse);
         }
         let xu = xsts
@@ -830,7 +831,7 @@ mod tests {
             ),
             (
                 "POST /xsts HTTP/",
-                r#"{"Token":"xsts-token","DisplayClaims":{"xui":[{"xid":"123"}]}}"#,
+                r#"{"Token":"xsts-token","DisplayClaims":{"xui":[{"uhs":"hash","xid":"123"}]}}"#,
             ),
             (
                 "POST /minecraft HTTP/",
@@ -948,6 +949,44 @@ mod tests {
         ));
         assert!(error.to_string().contains("Create an Xbox profile"));
         assert!(!error.to_string().contains("private raw text"));
+    }
+
+    #[tokio::test]
+    async fn invalid_xsts_uhs_stops_before_minecraft_login() {
+        for xsts_response in [
+            r#"{"Token":"xsts-token","DisplayClaims":{"xui":[{"xid":"123"}]}}"#,
+            r#"{"Token":"xsts-token","DisplayClaims":{"xui":[{"uhs":"different-hash","xid":"123"}]}}"#,
+        ] {
+            let (root, observed) = mock_server_observed(vec![
+                (
+                    "POST /device HTTP/",
+                    r#"{"device_code":"opaque","user_code":"ABCD","verification_uri":"https://microsoft.com/devicelogin","message":"Enter code","expires_in":60,"interval":1}"#,
+                ),
+                (
+                    "POST /token HTTP/",
+                    r#"{"access_token":"ms-access","refresh_token":"ms-refresh"}"#,
+                ),
+                (
+                    "POST /xbox HTTP/",
+                    r#"{"Token":"xbl-token","DisplayClaims":{"xui":[{"uhs":"hash"}]}}"#,
+                ),
+                ("POST /xsts HTTP/", xsts_response),
+            ]);
+            let mut config = AuthConfig::new("test-client");
+            config.endpoints.device_code = root.join("device").unwrap();
+            config.endpoints.token = root.join("token").unwrap();
+            config.endpoints.xbox_live = root.join("xbox").unwrap();
+            config.endpoints.xsts = root.join("xsts").unwrap();
+            config.endpoints.minecraft = root.join("minecraft").unwrap();
+            let auth = MicrosoftAuth::new(config).unwrap();
+            let device = auth.begin_device_login().await.unwrap();
+            let result = auth
+                .complete_device_login(device, &CancellationToken::default())
+                .await;
+
+            assert!(matches!(result, Err(AuthError::InvalidResponse)));
+            assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 4);
+        }
     }
 
     #[tokio::test]

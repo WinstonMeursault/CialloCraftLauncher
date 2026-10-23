@@ -163,7 +163,10 @@ fn start_helper(f: &Fixture, nonce: &str) -> Child {
         .spawn()
         .unwrap()
 }
-fn wait_bounded(mut child: Child) -> Output {
+fn wait_bounded(child: Child) -> Output {
+    wait_bounded_with_poll(child, Duration::from_millis(25))
+}
+fn wait_bounded_with_poll(mut child: Child, poll_interval: Duration) -> Output {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if child.try_wait().unwrap().is_some() {
@@ -173,7 +176,7 @@ fn wait_bounded(mut child: Child) -> Output {
             let _ = child.kill();
             panic!("update helper exceeded 60-second test bound");
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(poll_interval);
     }
 }
 fn transaction_state(f: &Fixture) -> String {
@@ -264,26 +267,35 @@ fn benchmark_update_transactions() {
     for _ in 0..3 {
         let commit_fixture = fixture(&valid_candidate, valid_identity.clone());
         let start = Instant::now();
-        let output = wait_bounded(start_helper(&commit_fixture, &commit_fixture.nonce));
+        let child = start_helper(&commit_fixture, &commit_fixture.nonce);
+        let output = wait_bounded_with_poll(child, Duration::from_millis(1));
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(transaction_state(&commit_fixture), "committed");
-        commit_ms.push(start.elapsed().as_millis() as u64);
+        commit_ms.push(elapsed_ms);
 
         let rollback_fixture = fixture(&valid_candidate, rollback_identity.clone());
         let start = Instant::now();
-        let output = wait_bounded(start_helper(&rollback_fixture, &rollback_fixture.nonce));
+        let child = start_helper(&rollback_fixture, &rollback_fixture.nonce);
+        let output = wait_bounded_with_poll(child, Duration::from_millis(1));
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
         assert_eq!(output.status.code(), Some(17));
         assert_eq!(transaction_state(&rollback_fixture), "rolled_back");
-        rollback_ms.push(start.elapsed().as_millis() as u64);
+        assert_eq!(
+            fs::read(&rollback_fixture.target).unwrap(),
+            rollback_fixture.old_bytes,
+            "health failure must restore the previous executable"
+        );
+        rollback_ms.push(elapsed_ms);
     }
     println!(
         "CCL_UPDATE_BENCHMARK={}",
         json!({
-            "scenario": "helper_update_and_rollback",
+            "scenario": "helper_update_and_health_failure_rollback",
             "commit_ms": commit_ms,
             "rollback_ms": rollback_ms,
             "candidate_bytes": valid_candidate.len(),

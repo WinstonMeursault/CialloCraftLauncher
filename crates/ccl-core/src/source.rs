@@ -9,9 +9,9 @@ pub enum DownloadKind {
     File,
 }
 
-/// URL alternatives in preference order. Auto prefers Mojang and falls back to
-/// BMCLAPI when the request fails; explicit preferences retain the other source
-/// as a fallback when the preferred endpoint is unavailable.
+/// URL alternatives in preference order. Auto tries official URLs before the
+/// configured mirror; Mirror tries mapped mirror URLs before official URLs.
+/// Official uses only official URLs. Unmapped hosts retain their original URL.
 pub fn url_candidates(
     official_url: &str,
     kind: DownloadKind,

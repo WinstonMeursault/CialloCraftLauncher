@@ -263,7 +263,8 @@ def main():
         )
     report = {
         "schema_version": 1,
-        "benchmark_suite": "p7_deterministic_local_performance",
+        "benchmark_suite": "p7_deterministic_local_performance_v2",
+        "measurement_harness_version": 2,
         "runner_os": os.environ.get("RUNNER_OS", platform.system()),
         "runner_arch": os.environ.get("RUNNER_ARCH", platform.machine()),
         "toolchain": toolchain_version(),
@@ -280,6 +281,7 @@ def main():
         "id": os.environ.get("GITHUB_RUN_ID", f"{report['commit']}:{report['observed_at']}"),
         "observed_at": report["observed_at"],
         "benchmark_suite": report["benchmark_suite"],
+        "measurement_harness_version": report["measurement_harness_version"],
         "runner_os": report["runner_os"],
         "runner_arch": report["runner_arch"],
         "toolchain": report["toolchain"],

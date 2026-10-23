@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+pub const MIN_LAUNCH_MEMORY_MB: u32 = 256;
+pub const MAX_LAUNCH_MEMORY_MB: u32 = 131_072;
+
 /// Preference for official or mirrored download endpoints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -149,10 +152,10 @@ impl LauncherConfig {
             reqwest::Proxy::all(proxy)
                 .map_err(|_| Error::InvalidConfig("downloads.http_proxy is invalid".into()))?;
         }
-        if self.launch.max_memory_mb < 512 || self.launch.max_memory_mb > 131_072 {
-            return Err(Error::InvalidConfig(
-                "launch.max_memory_mb must be in 512..=131072".into(),
-            ));
+        if !(MIN_LAUNCH_MEMORY_MB..=MAX_LAUNCH_MEMORY_MB).contains(&self.launch.max_memory_mb) {
+            return Err(Error::InvalidConfig(format!(
+                "launch.max_memory_mb must be in {MIN_LAUNCH_MEMORY_MB}..={MAX_LAUNCH_MEMORY_MB} MiB"
+            )));
         }
         if let Some(id) = &self.auth.microsoft_client_id
             && !is_public_client_id(id)

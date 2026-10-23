@@ -2,7 +2,7 @@
 pub use crate::launch_plan::LaunchPlan;
 use crate::{
     TaskContext, TaskEvent,
-    config::DownloadConfig,
+    config::{DownloadConfig, MAX_LAUNCH_MEMORY_MB, MIN_LAUNCH_MEMORY_MB},
     download::{DownloadManager, DownloadRequest},
     java::{self, JavaRuntime},
     launch_plan::{self, LaunchPlatform, MicrosoftIdentity, OfflineAccount, PlanOptions},
@@ -179,10 +179,10 @@ impl LaunchService {
     ) -> Result<PreparedLaunch, LaunchError> {
         check_cancelled(&context)?;
         safe_segment(&request.version)?;
-        if !(256..=65536).contains(&request.max_memory_mb) {
-            return Err(LaunchError::Invalid(
-                "memory must be in 256..=65536 MiB".into(),
-            ));
+        if !(MIN_LAUNCH_MEMORY_MB..=MAX_LAUNCH_MEMORY_MB).contains(&request.max_memory_mb) {
+            return Err(LaunchError::Invalid(format!(
+                "memory must be in {MIN_LAUNCH_MEMORY_MB}..={MAX_LAUNCH_MEMORY_MB} MiB"
+            )));
         }
         let account = OfflineAccount::new(
             request

@@ -1,6 +1,9 @@
 //! Pure construction of the Java command line for a Minecraft version.
 
-use crate::metadata::{Argument, Arguments, RuleContext, VersionMetadata, library_allowed};
+use crate::{
+    config::{MAX_LAUNCH_MEMORY_MB, MIN_LAUNCH_MEMORY_MB},
+    metadata::{Argument, Arguments, RuleContext, VersionMetadata, library_allowed},
+};
 use md5::{Digest, Md5};
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use std::{
@@ -18,7 +21,11 @@ pub enum PlanError {
     InvalidIdentity,
     #[error("invalid version identifier")]
     InvalidVersion,
-    #[error("maximum memory must be between 256 and 65536 MiB")]
+    #[error(
+        "maximum memory must be between {min} and {max} MiB",
+        min = MIN_LAUNCH_MEMORY_MB,
+        max = MAX_LAUNCH_MEMORY_MB
+    )]
     InvalidMemory,
     #[error("version metadata is missing {0}")]
     Missing(&'static str),
@@ -274,7 +281,7 @@ fn build_plan(
     {
         return Err(PlanError::InvalidVersion);
     }
-    if !(256..=65_536).contains(&options.max_memory_mb) {
+    if !(MIN_LAUNCH_MEMORY_MB..=MAX_LAUNCH_MEMORY_MB).contains(&options.max_memory_mb) {
         return Err(PlanError::InvalidMemory);
     }
     let main = metadata
@@ -863,6 +870,41 @@ mod tests {
             build_launch_plan(&metadata, &options),
             Err(PlanError::InvalidMemory)
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_memory_bounds_match_launch_plan_bounds() {
+        let (root, mut options) = setup();
+        let metadata =
+            VersionMetadata::parse(r#"{"id":"v1","mainClass":"Main","downloads":{"client":{}}}"#)
+                .unwrap();
+
+        for memory in [MIN_LAUNCH_MEMORY_MB, MAX_LAUNCH_MEMORY_MB] {
+            let mut config = crate::config::LauncherConfig::default();
+            config.launch.max_memory_mb = memory;
+            config.validate().unwrap();
+
+            options.max_memory_mb = memory;
+            let plan = build_launch_plan(&metadata, &options).unwrap();
+            assert!(
+                plan.arguments
+                    .iter()
+                    .any(|arg| arg == &format!("-Xmx{memory}M"))
+            );
+        }
+
+        for memory in [MIN_LAUNCH_MEMORY_MB - 1, MAX_LAUNCH_MEMORY_MB + 1] {
+            let mut config = crate::config::LauncherConfig::default();
+            config.launch.max_memory_mb = memory;
+            assert!(config.validate().is_err());
+
+            options.max_memory_mb = memory;
+            assert!(matches!(
+                build_launch_plan(&metadata, &options),
+                Err(PlanError::InvalidMemory)
+            ));
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }
