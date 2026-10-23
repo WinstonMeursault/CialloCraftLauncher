@@ -515,7 +515,7 @@ async fn convert_curseforge(
             .filter(|x| !x.trim().is_empty())
             .ok_or_else(|| {
                 ImportFormatError::Invalid(
-                    "CurseForge file resolution requires CCL_CURSEFORGE_API_KEY".into(),
+                    "CurseForge file resolution requires a user-provided API key (CCL_CURSEFORGE_API_KEY)".into(),
                 )
             })?
     } else {

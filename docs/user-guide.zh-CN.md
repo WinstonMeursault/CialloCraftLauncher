@@ -61,7 +61,7 @@ ccl logs --lines 100
 
 JSON 配置字段为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel` 和 `downloads.offline`。前两项分别控制版本列表和文件来源，接受 `auto`、`official` 或 `mirror`，默认均为 `auto`。缺失字段使用默认值。镜像根地址可配置。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
 
-请求 CurseForge 在线 API 需要用户自行提供 `CCL_CURSEFORGE_API_KEY`；启动器不会内置或保存该密钥。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
+请求 CurseForge 在线 API 需要用户自己的密钥；CCL 不内置密钥。运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 仅显示是否保存；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
 
 启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。
 
@@ -263,7 +263,7 @@ ccl pack import imported ./export-v2.zip --replace-modified
 
 CCL 从 `manifest.json` 读取 Minecraft 和加载器版本，通过官方 API 解析固定的项目/文件 ID，校验声明的 SHA-1 和大小，并以事务导入覆盖文件及选定客户端文件。默认跳过可选文件，使用 `--include-optional` 可包含它们。文件下载仅向明确识别的 CurseForge HTTPS CDN 主机发送 `x-api-key`；不会把密钥加入归档 URL、收据或日志。重定向到其他允许主机时不会发送密钥。
 
-远程文件解析需要在 `CCL_CURSEFORGE_API_KEY` 中提供自己的 API key。不要把密钥放入命令参数或提交到仓库。不含选定远程文件的纯覆盖归档可在没有 key 时转换。若受限文件没有提供者授权的下载 URL，会明确报错；CCL 不猜测下载 URL，也不绕过作者的分发选择。API 和 CDN 要求见 [CurseForge 文档](https://docs.curseforge.com/rest-api/)及其 [CDN 身份验证公告](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)。
+远程文件解析需要用 `ccl credentials curseforge set` 保存自己的 API key，或临时设置 `CCL_CURSEFORGE_API_KEY`。不要把密钥放入命令参数或提交到仓库。不含选定远程文件的纯覆盖归档可在没有 key 时转换。若受限文件没有提供者授权的下载 URL，会明确报错；CCL 不猜测下载 URL，也不绕过作者的分发选择。API 和 CDN 要求见 [CurseForge 文档](https://docs.curseforge.com/rest-api/)及其 [CDN 身份验证公告](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)。
 
 本项目目前没有所有者提供的 CurseForge API key 用于真实验收。提供者行为通过服务/格式夹具检查，这不代表已取得生产 API 授权。
 
@@ -281,7 +281,7 @@ CCL 读取 `mmc-pack.json` 组件，并从 `minecraft/` 或 `.minecraft/` 导入
 
 ## 在线搜索、依赖与更新
 
-Modrinth 无需密钥。CurseForge 在线请求需要在进程环境中设置用户自有的 `CCL_CURSEFORGE_API_KEY`，启动器不会持久化它。搜索可按项目类型、Minecraft 版本、加载器筛选。必需依赖及固定版本会自动解析并检查兼容性；可选依赖会列出，分析会报告不兼容选择。
+Modrinth 无需密钥。CurseForge 在线请求需用 `ccl credentials curseforge set` 保存用户自有密钥，或临时设置 `CCL_CURSEFORGE_API_KEY`。搜索可按项目类型、Minecraft 版本、加载器筛选。必需依赖及固定版本会自动解析并检查兼容性；可选依赖会列出，分析会报告不兼容选择。
 
 安装其他项目会保留无关模组。更新时若受管理文件被修改、删除，或新文件与未托管内容冲突，操作会停止。`updates` 检查可用更新；使用 `install` 应用选定版本。
 
@@ -297,7 +297,7 @@ ccl online analyze my-instance
 ccl online pack-install my-pack modrinth example-pack --version VERSION_ID --include-optional
 ```
 
-`install` 会解析项目及必需依赖，并安装到已有实例。`pack-install` 会下载平台整合包并创建或更新实例。`updates` 和 `analyze` 会检查已有实例的收据。调用 CurseForge API 的命令需要在进程环境中设置 `CCL_CURSEFORGE_API_KEY`；Modrinth 不需要密钥。密钥请求头范围测试成功不代表真实 CurseForge 密钥已获得在线授权。
+`install` 会解析项目及必需依赖，并安装到已有实例。`pack-install` 会下载平台整合包并创建或更新实例。`updates` 和 `analyze` 会检查已有实例的收据。调用 CurseForge API 的命令需要已保存密钥或 `CCL_CURSEFORGE_API_KEY`；Modrinth 不需要密钥。密钥请求头范围测试成功不代表真实 CurseForge 密钥已获得在线授权。
 
 这些 API 使用 `DownloadConfig` 的代理和离线设置。CurseForge 搜索、版本查询和直接下载都需要用户提供密钥；Modrinth 不需要密钥。启用离线模式时，在线请求会失败。
 

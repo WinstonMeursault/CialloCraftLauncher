@@ -348,6 +348,106 @@ impl SecretStore for MemorySecretStore {
 pub struct OsSecretStore {
     service: String,
 }
+
+/// A provider API key scoped to a launcher configuration and kept only in the OS vault.
+/// It is deliberately separate from account tokens and from the JSON configuration.
+pub struct OsProviderKeyStore {
+    service: String,
+}
+
+impl OsProviderKeyStore {
+    pub fn for_config_file(path: &std::path::Path) -> Result<Self, AccountError> {
+        let absolute = canonicalize_future_path(path)?;
+        use sha1::{Digest, Sha1};
+        let hash = Sha1::digest(absolute.to_string_lossy().as_bytes());
+        Ok(Self {
+            service: format!("CialloCraftLauncher/{}/provider-keys", hex_lower(&hash)),
+        })
+    }
+
+    fn entry(&self) -> Result<keyring::Entry, AccountError> {
+        keyring::Entry::new(&self.service, "curseforge")
+            .map_err(|_| AccountError::SecureStorage("cannot access OS credential vault".into()))
+    }
+
+    pub fn set_curseforge(&self, key: &str) -> Result<(), AccountError> {
+        if key.is_empty() || key.len() > 1024 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err(AccountError::Invalid);
+        }
+        self.entry()?.set_password(key).map_err(|_| {
+            AccountError::SecureStorage("could not save key in OS credential vault".into())
+        })
+    }
+
+    pub fn get_curseforge(&self) -> Result<Option<String>, AccountError> {
+        match self.entry()?.get_password() {
+            Ok(key) => Ok(Some(key)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err(AccountError::SecureStorage(
+                "could not read key from OS credential vault".into(),
+            )),
+        }
+    }
+
+    pub fn remove_curseforge(&self) -> Result<(), AccountError> {
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(AccountError::SecureStorage(
+                "could not remove key from OS credential vault".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_key_tests {
+    use super::*;
+
+    #[test]
+    fn provider_keys_are_scoped_to_config_and_reject_header_unsafe_input() {
+        let base = std::env::temp_dir().join(format!("ccl-key-scope-{}", std::process::id()));
+        let one = OsProviderKeyStore::for_config_file(&base.join("one/config.json")).unwrap();
+        let same =
+            OsProviderKeyStore::for_config_file(&base.join("one/../one/config.json")).unwrap();
+        let other = OsProviderKeyStore::for_config_file(&base.join("two/config.json")).unwrap();
+        assert_eq!(one.service, same.service);
+        assert_ne!(one.service, other.service);
+        for unsafe_key in ["", "key\nInjected: yes", "key with spaces", "é"] {
+            assert!(matches!(
+                one.set_curseforge(unsafe_key),
+                Err(AccountError::Invalid)
+            ));
+        }
+        assert!(matches!(
+            one.set_curseforge(&"x".repeat(1025)),
+            Err(AccountError::Invalid)
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires an unlocked OS credential vault"]
+    fn provider_key_vault_round_trip_never_uses_a_config_file() {
+        let unique = std::env::temp_dir().join(format!(
+            "ccl-provider-vault-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let config = unique.join("config.json");
+        let store = OsProviderKeyStore::for_config_file(&config).unwrap();
+        assert!(store.get_curseforge().unwrap().is_none());
+        store.set_curseforge("temporary-test-key").unwrap();
+        assert_eq!(
+            store.get_curseforge().unwrap().as_deref(),
+            Some("temporary-test-key")
+        );
+        assert!(!config.exists());
+        store.remove_curseforge().unwrap();
+        assert!(store.get_curseforge().unwrap().is_none());
+    }
+}
 impl OsSecretStore {
     pub fn new(service: impl Into<String>) -> Self {
         Self {

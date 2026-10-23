@@ -128,7 +128,7 @@ token.cancel();
 ### Providers
 
 - Modrinth uses its public API for projects, versions, and required dependency resolution. Exact pinned dependency versions are retained and checked against the selected Minecraft version and loader. Optional dependencies are listed but not installed automatically; incompatible dependencies are reported during analysis.
-- CurseForge uses its REST API. The caller must provide its own API key through `OnlineConfig`; the launcher does not include or persist the key. Download requests attach the key only to the exact HTTPS CurseForge CDN hosts allowed by the download request. If the API omits a file's download URL, that file is left unavailable; the launcher does not guess a website URL.
+- CurseForge uses its REST API. The caller must provide its own API key through `OnlineConfig`; core does not persist the key, while the CLI can store a user key in the OS credential vault. Download requests attach the key only to the exact HTTPS CurseForge CDN hosts allowed by the download request. If the API omits a file's download URL, that file is left unavailable; the launcher does not guess a website URL.
 
 Search results can be filtered by project type, Minecraft version, and loader. Both providers expose version files with available hashes and sizes. CurseForge's numeric project IDs are retained as strings in the provider-neutral API.
 

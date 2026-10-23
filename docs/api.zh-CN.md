@@ -128,7 +128,7 @@ token.cancel();
 ### 内容平台
 
 - Modrinth 使用公开 API 查询项目和版本，并解析必需依赖。精确指定的依赖版本会被保留，并按目标 Minecraft 版本和加载器验证。可选依赖会列出但不会自动安装；分析时会报告不兼容依赖。
-- CurseForge 使用其 REST API。调用方必须通过 `OnlineConfig` 提供自己的 API 密钥；启动器不会内置或持久化该密钥。下载请求只会向下载请求允许的确切 HTTPS CurseForge CDN 主机附加密钥。如果 API 未提供文件下载 URL，该文件会保持不可用；启动器不会猜测网站下载地址。
+- CurseForge 使用其 REST API。调用方必须通过 `OnlineConfig` 提供自己的 API 密钥；核心不持久化密钥，CLI 可将用户密钥保存到系统凭据库。下载请求只会向下载请求允许的确切 HTTPS CurseForge CDN 主机附加密钥。如果 API 未提供文件下载 URL，该文件会保持不可用；启动器不会猜测网站下载地址。
 
 搜索支持按项目类型、Minecraft 版本和加载器筛选。两个平台的版本文件都提供可用的哈希值和大小。CurseForge 数字项目 ID 会作为字符串保留在平台无关的 API 中。
 

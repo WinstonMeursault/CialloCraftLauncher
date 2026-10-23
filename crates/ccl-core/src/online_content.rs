@@ -55,7 +55,7 @@ impl std::fmt::Debug for OnlineConfig {
 pub enum OnlineError {
     #[error("online content is unavailable while offline")]
     Offline,
-    #[error("CurseForge search requires a user-configured API key")]
+    #[error("CurseForge requires a user-provided API key")]
     MissingCurseForgeKey,
     #[error("provider request failed: {0}")]
     Request(String),

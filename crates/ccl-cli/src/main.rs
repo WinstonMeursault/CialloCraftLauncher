@@ -12,7 +12,7 @@ use std::{
 
 use ccl_core::{
     CancellationToken, Error, Result, TaskContext, TaskEvent,
-    accounts::{AccountStore, OsSecretStore},
+    accounts::{AccountStore, OsProviderKeyStore, OsSecretStore},
     auth::{AuthConfig, MicrosoftAuth},
     config::{ConfigStore, LauncherConfig, default_config_path},
     content::{ContentKind, ContentService},
@@ -88,6 +88,11 @@ enum Command {
     Settings {
         #[command(subcommand)]
         command: SettingsCommand,
+    },
+    /// Manage provider API keys in the OS credential vault.
+    Credentials {
+        #[command(subcommand)]
+        command: CredentialsCommand,
     },
     /// Sign in and manage Microsoft accounts.
     Account {
@@ -346,6 +351,29 @@ enum SettingsCommand {
 }
 
 #[derive(Subcommand)]
+enum CredentialsCommand {
+    /// Manage your own CurseForge API key.
+    Curseforge {
+        #[command(subcommand)]
+        command: CredentialKeyCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CredentialKeyCommand {
+    /// Enter a key through a hidden terminal prompt and save it in the OS credential vault.
+    Set {
+        /// Captures accidental positional input so clap does not echo a secret in its error.
+        #[arg(hide = true)]
+        accidental_input: Vec<String>,
+    },
+    /// Show whether a key is saved and whether an environment override is active.
+    Status,
+    /// Remove the saved key (does not change an environment override).
+    Remove,
+}
+
+#[derive(Subcommand)]
 enum InstanceCommand {
     List,
     Show {
@@ -554,6 +582,38 @@ async fn run(cli: &Cli) -> Result<Value> {
     let _transport = HttpClient::new(&config.downloads)?;
 
     match &cli.command {
+        Command::Credentials { command } => match command {
+            CredentialsCommand::Curseforge { command } => {
+                let store = OsProviderKeyStore::for_config_file(&config_path)?;
+                match command {
+                    CredentialKeyCommand::Set { accidental_input } => {
+                        if !accidental_input.is_empty() {
+                            return Err(Error::InvalidConfig(
+                                "enter the API key only at the hidden terminal prompt, without command arguments".into(),
+                            ));
+                        }
+                        let key =
+                            rpassword::prompt_password("CurseForge API key: ").map_err(|_| {
+                                Error::InvalidConfig(
+                                    "a terminal is required to enter the CurseForge API key".into(),
+                                )
+                            })?;
+                        store.set_curseforge(&key)?;
+                        Ok(json!({"ok":true,"provider":"curseforge","saved":true}))
+                    }
+                    CredentialKeyCommand::Status => Ok(json!({
+                        "ok":true,
+                        "provider":"curseforge",
+                        "saved":store.get_curseforge()?.is_some(),
+                        "environment_override":env::var_os("CCL_CURSEFORGE_API_KEY").is_some(),
+                    })),
+                    CredentialKeyCommand::Remove => {
+                        store.remove_curseforge()?;
+                        Ok(json!({"ok":true,"provider":"curseforge","saved":false}))
+                    }
+                }
+            }
+        },
         Command::Settings { command } => {
             let store = ConfigStore::new(&config_path);
             match command {
@@ -928,7 +988,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                             &ImportOptionsExt {
                                 include_optional: *include_optional,
                                 replace_modified: *replace_modified,
-                                curseforge_api_key: env::var("CCL_CURSEFORGE_API_KEY").ok(),
+                                curseforge_api_key: if ImportFormatService::inspect(archive)?["format"] == "curseforge" {
+                                    optional_curseforge_key(&config_path)?
+                                } else {
+                                    None
+                                },
                                 allowed_hosts: allow_hosts.clone(),
                             },
                             Some(operation_context()),
@@ -987,10 +1051,22 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
         }
         Command::Online { command } => {
-            let service = OnlineContentService::from_download_config(
-                &config.downloads,
-                env::var("CCL_CURSEFORGE_API_KEY").ok(),
-            )?;
+            let explicit_curseforge = match command {
+                OnlineCommand::Install { provider, .. }
+                | OnlineCommand::PackInstall { provider, .. }
+                | OnlineCommand::Search { provider, .. }
+                | OnlineCommand::Versions { provider, .. }
+                | OnlineCommand::Resolve { provider, .. } => *provider == Provider::CurseForge,
+                OnlineCommand::Updates { .. } | OnlineCommand::Analyze { .. } => false,
+            };
+            let key = if config.downloads.offline {
+                None
+            } else if explicit_curseforge {
+                curseforge_key(&config_path)?
+            } else {
+                optional_curseforge_key(&config_path)?
+            };
+            let service = OnlineContentService::from_download_config(&config.downloads, key)?;
             match command {
                 OnlineCommand::Install {
                     id,
@@ -1205,6 +1281,26 @@ async fn run(cli: &Cli) -> Result<Value> {
                 )
             }
         }
+    }
+}
+
+fn curseforge_key(config_path: &Path) -> Result<Option<String>> {
+    match env::var("CCL_CURSEFORGE_API_KEY") {
+        Ok(key) => return Ok(Some(key)),
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(Error::InvalidConfig(
+                "CCL_CURSEFORGE_API_KEY must contain text".into(),
+            ));
+        }
+        Err(env::VarError::NotPresent) => {}
+    }
+    Ok(OsProviderKeyStore::for_config_file(config_path)?.get_curseforge()?)
+}
+
+fn optional_curseforge_key(config_path: &Path) -> Result<Option<String>> {
+    match curseforge_key(config_path) {
+        Err(Error::Account(ccl_core::accounts::AccountError::SecureStorage(_))) => Ok(None),
+        result => result,
     }
 }
 

@@ -52,6 +52,9 @@ jobs:
       - name: Verify Windows credential vault
         if: runner.os == 'Windows'
         run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} os_secure_store_probe_round_trips_without_account_credentials -- --ignored
+      - name: Verify Windows provider key vault
+        if: runner.os == 'Windows'
+        run: cargo test -p ccl-core --lib --locked --target ${{ matrix.target }} provider_key_vault_round_trip_never_uses_a_config_file -- --ignored
       - name: Set build identity
         id: identity
         shell: bash

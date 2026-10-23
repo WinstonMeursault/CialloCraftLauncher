@@ -32,6 +32,28 @@ fn command(root: &PathBuf) -> Command {
     command
 }
 
+#[test]
+fn curseforge_key_command_never_accepts_a_key_argument_or_echoes_input() {
+    let root = sandbox();
+    let game = root.join("game");
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args([
+            "credentials",
+            "curseforge",
+            "set",
+            "SECRET_SHOULD_NOT_APPEAR",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("SECRET_SHOULD_NOT_APPEAR"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("SECRET_SHOULD_NOT_APPEAR"));
+    assert!(!game.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn write_instance(root: &Path, id: &str, major: u32) {
     let directory = root.join("versions").join(id);
     fs::create_dir_all(&directory).unwrap();
