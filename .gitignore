@@ -31,3 +31,6 @@ rustc-ice-*.txt
 # GUI frontend build and package manager cache
 **/node_modules/
 /apps/ccl-gui/dist/
+
+# Tauri generates platform-specific ACL schemas during desktop builds
+/crates/ccl-gui/gen/
