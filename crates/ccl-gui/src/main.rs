@@ -200,6 +200,7 @@ fn main() {
                         window
                             .dialog()
                             .message(message)
+                            .parent(window)
                             .title("CCL")
                             .kind(MessageDialogKind::Info)
                             .buttons(MessageDialogButtons::Ok)
@@ -237,6 +238,7 @@ fn main() {
                 window
                     .dialog()
                     .message(message)
+                    .parent(window)
                     .title("CCL")
                     .kind(MessageDialogKind::Warning)
                     .buttons(MessageDialogButtons::YesNo)
