@@ -92,6 +92,15 @@ impl Drop for Fixture {
 }
 
 fn serve(mut stream: TcpStream, routes: &HashMap<String, Vec<u8>>) {
+    // Windows accepted sockets inherit the nonblocking listener mode.
+    // This worker serves a complete request synchronously on every platform.
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut request = Vec::new();
     let mut buffer = [0u8; 1024];
     loop {

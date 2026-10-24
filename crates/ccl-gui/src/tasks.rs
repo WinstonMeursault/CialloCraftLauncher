@@ -43,6 +43,7 @@ struct Record {
     snapshot: TaskSnapshot,
     token: CancellationToken,
     last_publish: Instant,
+    dirty: bool,
 }
 #[derive(Default)]
 struct Records {
@@ -123,15 +124,36 @@ impl TaskRegistry {
             };
             edit(&mut record.snapshot);
             record.snapshot.revision += 1;
+            record.dirty = true;
             let publish = force || record.last_publish.elapsed() >= Duration::from_millis(100);
             if publish {
                 record.last_publish = Instant::now();
+                record.dirty = false;
             }
             publish.then(|| record.snapshot.clone())
         };
         if let Some(snapshot) = publication {
             self.publish_snapshot(snapshot);
         }
+    }
+    fn flush_pending(&self, id: u64) {
+        let snapshot = {
+            let mut guard = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(record) = guard
+                .current
+                .as_mut()
+                .filter(|r| r.snapshot.id == id && r.dirty)
+            else {
+                return;
+            };
+            if record.last_publish.elapsed() < Duration::from_millis(100) {
+                return;
+            }
+            record.dirty = false;
+            record.last_publish = Instant::now();
+            record.snapshot.clone()
+        };
+        self.publish_snapshot(snapshot);
     }
     pub fn cancel(&self, id: u64) -> GuiResult<TaskSnapshot> {
         let snapshot = {
@@ -145,6 +167,8 @@ impl TaskRegistry {
                 r.snapshot.state = TaskState::Cancelling;
                 r.snapshot.revision += 1;
                 r.token.cancel();
+                r.dirty = false;
+                r.last_publish = Instant::now();
             }
             r.snapshot.clone()
         };
@@ -186,6 +210,7 @@ impl TaskRegistry {
                 snapshot: initial.clone(),
                 token: token.clone(),
                 last_publish: Instant::now(),
+                dirty: false,
             });
         }
         let id = initial.id;
@@ -245,7 +270,20 @@ impl TaskRegistry {
                         .enable_all()
                         .build()
                         .map_err(|_| GuiError::new("worker_error", "Cannot create task runtime"))?;
-                    runtime.block_on(work(handle))
+                    let flush_registry = registry.clone();
+                    runtime.block_on(async move {
+                        // Flush the final coalesced log/progress batch even when the
+                        // producer becomes idle. This timer exists only during work.
+                        let flush = tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                flush_registry.flush_pending(id);
+                            }
+                        });
+                        let result = work(handle).await;
+                        flush.abort();
+                        result
+                    })
                 }))
                 .unwrap_or_else(|_| {
                     Err(GuiError::new(
@@ -304,6 +342,7 @@ impl TaskRegistry {
             s.authorization = None;
             s.revision += 1;
             record.last_publish = Instant::now();
+            record.dirty = false;
             let snapshot = s.clone();
             if guard.history.len() == 8 {
                 guard.history.pop_front();

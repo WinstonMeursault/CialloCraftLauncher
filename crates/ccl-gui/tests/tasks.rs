@@ -177,3 +177,33 @@ fn active_task_rejects_a_second_start_and_survives_visibility_changes() {
     assert_eq!(registry.snapshot().unwrap().id, started.id);
     assert_eq!(wait_terminal(&registry).state, TaskState::Succeeded);
 }
+
+#[test]
+fn single_log_is_delivered_while_producer_becomes_idle() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let registry = TaskRegistry::new(Arc::new(move |snapshot| {
+        let _ = sender.send(snapshot);
+    }));
+    let task = registry
+        .start("launch", |handle| async move {
+            handle
+                .context
+                .emit(TaskEvent::Log {
+                    stream: "stdout".into(),
+                    line: "one real-time line".into(),
+                })
+                .unwrap();
+            while !handle.context.cancellation.is_cancelled() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(GuiError::new("cancelled", "Stopped fixture"))
+        })
+        .unwrap();
+    let published = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the last throttled log batch must be flushed without another producer event");
+    assert_eq!(published.state, TaskState::Running);
+    assert_eq!(published.logs, vec!["one real-time line"]);
+    registry.cancel(task.id).unwrap();
+    assert_eq!(wait_terminal(&registry).state, TaskState::Cancelled);
+}
