@@ -4,6 +4,7 @@
 
 - [环境](#environment)
 - [构建与运行](#build)
+- [GUI G0 预览](#gui-preview)
 - [架构与工作区](#architecture)
 - [代码边界](#boundaries)
 - [配置与数据目录](#data)
@@ -42,13 +43,43 @@ cargo run -p ccl-cli -- --help
 
 用户流程见[使用指南](user-guide.zh-CN.md)，命令、输出及核心服务见 [API 文档](api.zh-CN.md)。
 
+<a id="gui-preview"></a>
+
+## GUI G0 预览
+
+当前 GUI 工作是 `codex/gui-g0` 分支上的 G0 原型；截至 2026-10-24，验证仍在进行。下面的命令描述预期的本地检查流程，不代表检查已通过。`ccl-gui` crate 版本为 `0.2.0-alpha.1`；该 alpha 适配器版本不会改变 `ccl-core` 或 `ccl-cli` 的 `0.1.0` 版本，也不代表 0.2 产品功能已经完成。
+
+`crates/ccl-gui` 是 Rust 适配器/库，默认 feature 集为空（`default = []`）。可选的 `desktop` feature 启用 Tauri 2 和桌面程序。`apps/ccl-gui` 是 React/TypeScript/Vite 前端。CLI 和默认 Rust 构建不依赖 Node.js 或 WebView。前端使用 Node 24 和 pnpm 11.25.0。
+
+G0 通过 `ccl-core` 读取共享原版版本和托管实例，并使用系统目录选择器让用户选择已有游戏根目录。它只保存单独 `gui.json` 中的 GUI 偏好设置（`theme`、`language` 和已选根目录）；主题支持系统、浅色和深色，语言支持简体中文和 English。缺失的游戏根目录只会被解析并显示，不会创建。保存偏好设置或选择根目录会创建/更新 GUI 偏好设置文件。若所选目录已有托管实例，核心实例列表操作可能获取锁或恢复中断事务，因此无法保证对既有游戏目录的启动过程只读。
+
+任务页面只有合成 `TaskContext` 探针，用于覆盖进度、日志、单任务忙碌处理、取消和有界历史（最多保留 1,000 行，每行最多 512 字符）；它没有将游戏启动、下载、账户或更新器操作接入 GUI。此原型中的发现、账户、日志页面和启动按钮仍不可用。
+
+使用 `CCL_GUI_DATA_DIR` 和 `CCL_GUI_CONFIG_PATH` 将测试指向临时 GUI 数据与配置路径。`CCL_GUI_GAME_DIR` 会固定游戏根目录；设置它时，GUI 会拒绝更改根目录的请求。测试系统根目录选择器时请取消设置该变量。正常启动路径不会创建缺失的游戏目录。
+
+### 构建并检查桌面原型
+
+在仓库根目录执行；需先安装 Node 24、pnpm 11.25.0、Rust 及目标平台的本地依赖：
+
+```sh
+cd apps/ccl-gui
+pnpm install --frozen-lockfile
+pnpm build
+node --test tests/task-snapshot.test.ts
+cd ../..
+cargo test -p ccl-gui --locked
+cargo run -p ccl-gui --features desktop --release --locked
+```
+
+Node 测试检查过期/新任务快照的排序；当前 `.github/workflows/gui.yml` 会在构建前端前运行此 Node 测试。工作流还会运行工作区格式检查、默认 feature 下的适配器测试、桌面版 Clippy，以及优化桌面版构建；CI 覆盖 Windows x64、macOS arm64 和 Linux x86_64。Linux job 安装 `libwebkit2gtk-4.1-dev`、`build-essential`、`libssl-dev`、`libxdo-dev`、`librsvg2-dev`、`libayatana-appindicator3-dev` 和 `patchelf`。Tauri 使用系统 WebView：Windows 为 WebView2，macOS 为 WKWebView，Linux 为 WebKitGTK 4.1；参见 [Tauri v2 前置要求](https://v2.tauri.app/start/prerequisites/)。这些上游前置要求不代表 CCL 已确认最低操作系统版本，当前尚未完成此验证。
+
 <a id="architecture"></a>
 
 ## 架构与工作区
 
 ### 目标
 
-CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供配置、目录、网络、下载和安装逻辑；命令行与未来的图形界面调用相同的核心服务。核心不依赖终端或图形界面，因此以后增加 GUI 不需要把业务逻辑移入界面层。
+CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心提供配置、目录、网络、下载和安装逻辑；命令行和当前 G0 桌面原型调用相同的核心服务。核心不依赖任何一种界面，因此后续 UI 可以继续复用这些服务，而无需把业务逻辑移入界面层。
 
 首批目标平台：
 
@@ -60,6 +91,7 @@ CialloCraftLauncher 以命令行为首个界面。可复用的 Rust 核心提供
 
 - `crates/ccl-core`：共享服务、配置、错误、HTTP 传输、任务事件、安装、Java 探测和启动编排。
 - `crates/ccl-cli`：命令行参数、文本或 JSON 输出、退出码，以及对核心的调用。
+- `crates/ccl-gui` 和 `apps/ccl-gui`：可选桌面适配器及 G0 React/TypeScript/Vite 前端；当前范围和检查见 [GUI G0 预览](#gui-preview)。
 - `docs`：面向用户和贡献者的公开文档。
 
 核心通过任务上下文报告进度，并提供协作式取消句柄。界面展示事件并收集输入；核心执行工作、验证配置并返回结构化错误。核心不得依赖界面。

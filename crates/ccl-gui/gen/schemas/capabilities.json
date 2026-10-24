@@ -1,0 +1,1 @@
+{"main-events":{"identifier":"main-events","description":"The bundled main window may subscribe to bounded task snapshots. No shell, filesystem or remote-page privileges.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}}

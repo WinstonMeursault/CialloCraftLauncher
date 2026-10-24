@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/ccl-core", "crates/ccl-cli"]
+members = ["crates/ccl-core", "crates/ccl-cli", "crates/ccl-gui"]
+default-members = ["crates/ccl-core", "crates/ccl-cli"]
 resolver = "3"
 
 [workspace.package]
