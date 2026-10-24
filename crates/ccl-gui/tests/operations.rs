@@ -1,6 +1,8 @@
+#[cfg(unix)]
+use ccl_core::instances::InstanceError;
 use ccl_core::{
     CancellationToken, TaskContext, config::DownloadConfig, install::InstallService,
-    instances::InstanceError, loaders::LoaderKind,
+    loaders::LoaderKind,
 };
 use ccl_gui::operations::{
     GuiOperations, InstallRequest, LaunchIdentity, LaunchIdentityKind, LaunchRequest,
@@ -473,4 +475,33 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn managed_vanilla_install_uses_verified_downloads_on_every_platform() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new();
+    let installer = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(&fixture.url);
+    let root = temp.path().join("game");
+    let service = GuiOperations::new(root.clone(), temp.path().join("config.json"))
+        .unwrap()
+        .with_install_service(installer);
+    let request = InstallRequest {
+        id: "portable-fixture".into(),
+        minecraft: "fixture-1".into(),
+        loader: None,
+        loader_version: None,
+        shared: false,
+    };
+    let installed = service.install(request.clone(), context()).await.unwrap();
+    assert_eq!(installed["instance"]["loader"], Value::Null);
+    let client = root.join(".ccl/instances/portable-fixture/game/versions/fixture-1/fixture-1.jar");
+    assert_eq!(fs::read(&client).unwrap(), b"GUI operations fixture client");
+    assert_eq!(
+        service.install(request, context()).await.unwrap_err().code,
+        "instance_conflict"
+    );
+    assert_eq!(fs::read(client).unwrap(), b"GUI operations fixture client");
 }

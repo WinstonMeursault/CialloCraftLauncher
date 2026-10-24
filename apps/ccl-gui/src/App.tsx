@@ -86,6 +86,7 @@ export default function App() {
   const [loader, setLoader] = useState('')
   const [loaderVersions, setLoaderVersions] = useState<LoaderVersion[]>([])
   const [loaderLoading, setLoaderLoading] = useState(false)
+  const loaderRequest = useRef(0)
   const [loaderVersion, setLoaderVersion] = useState('')
   const [versionKind, setVersionKind] = useState('all')
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null)
@@ -257,6 +258,7 @@ export default function App() {
 
   const openCreate = async () => {
     setModal('create'); setVersions([]); setVersionId(''); setInstanceId(''); setLoader(''); setLoaderVersions([]); setLoaderVersion(''); setVersionKind('all')
+    loaderRequest.current += 1; setLoaderLoading(false)
     setVersionsLoading(true); setError(null)
     try {
       const items = await invoke<GameVersion[]>('list_versions')
@@ -267,20 +269,25 @@ export default function App() {
   }
 
   const changeLoader = async (nextLoader: string, minecraft = versionId) => {
+    const sequence = ++loaderRequest.current
     setLoader(nextLoader); setLoaderVersions([]); setLoaderVersion('')
-    if (!nextLoader || !minecraft) return
+    if (!nextLoader || !minecraft) { setLoaderLoading(false); return }
     setLoaderLoading(true); setError(null)
     try {
       const items = await invoke<LoaderVersion[]>('list_loaders', { minecraft, loader: nextLoader })
-      setLoaderVersions(items); setLoaderVersion(items[0]?.version ?? '')
-    } catch (cause) { captureError(cause) }
-    finally { setLoaderLoading(false) }
+      if (sequence === loaderRequest.current) { setLoaderVersions(items); setLoaderVersion(items[0]?.version ?? '') }
+    } catch (cause) { if (sequence === loaderRequest.current) captureError(cause) }
+    finally { if (sequence === loaderRequest.current) setLoaderLoading(false) }
+  }
+  const chooseVersion = (version: string) => {
+    setVersionId(version)
+    if (loader) void changeLoader(loader, version)
   }
 
   const installInstance = async (event: FormEvent) => {
     event.preventDefault()
-    const id = instanceId.trim()
-    if (!id || !versionId || working || activeTask || (loader && !loaderVersion)) return
+    const id = shared ? versionId : instanceId.trim()
+    if (!id || !versionId || working || activeTask || (!shared && loader && !loaderVersion)) return
     const request = { id, minecraft: versionId, loader: shared ? null : loader || null, loader_version: shared ? null : loaderVersion || null, shared }
     const result = await startTask(() => invoke<TaskSnapshot>('install_instance', { request }))
     if (result) setModal(null)
@@ -496,7 +503,7 @@ export default function App() {
         </>}
     </main>
 
-    {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={setVersionId} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} shared={shared} setShared={setShared} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
+    {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={chooseVersion} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} shared={shared} setShared={setShared} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
     {modal === 'import' && <ImportModal t={t} preview={importPreview} inspect={inspectImport} id={importId} setId={setImportId} includeOptional={includeOptional} setIncludeOptional={setIncludeOptional} replaceModified={replaceModified} setReplaceModified={setReplaceModified} allowedHosts={allowedHosts} setAllowedHosts={setAllowedHosts} manualHosts={manualHosts} setManualHosts={setManualHosts} working={working || !!activeTask} close={() => setModal(null)} submit={importInstance} />}
     {pendingCancel && <ConfirmDialog t={t} task={pendingCancel} working={working} cancel={() => setPendingCancel(null)} confirm={confirmCancel} />}
   </div>
@@ -540,7 +547,7 @@ function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter
           <form className="launch-form" onSubmit={launch}>
             <div className="identity-options"><label><input type="radio" name="identity" checked={tIdentity === 'offline'} onChange={() => setLaunchForm({ ...launchForm, identity: 'offline' })}/>{t.offlineIdentity}</label><label><input type="radio" name="identity" checked={tIdentity === 'microsoft'} onChange={() => { setLaunchForm({ ...launchForm, identity: 'microsoft' }); loadAccounts() }}/>{t.microsoftLabel}</label></div>
             {tIdentity === 'offline' ? <label className="field"><span>{t.username}</span><input autoComplete="off" value={launchForm.username} onChange={event => setLaunchForm({ ...launchForm, username: event.target.value })}/></label> : <label className="field"><span>{t.selectAccount}</span><select value={launchForm.accountId} onChange={event => setLaunchForm({ ...launchForm, accountId: event.target.value })}><option value="">{t.selectAccount}</option>{accountListing.accounts.map(account => <option key={account.id} value={account.id}>{account.username} · {account.account_type}</option>)}</select></label>}
-            <details className="launch-options"><summary>{t.launchOptions}</summary><div className="launch-options-body"><label className="field"><span>{t.javaPath}</span><input value={launchForm.java} onChange={event => setLaunchForm({ ...launchForm, java: event.target.value })}/></label><label className="field"><span>{t.memory}</span><input inputMode="numeric" type="number" min="1" step="1" value={launchForm.memory} onChange={event => setLaunchForm({ ...launchForm, memory: event.target.value })}/></label><label className="check-row"><input type="checkbox" checked={launchForm.autoInstallJava} onChange={event => setLaunchForm({ ...launchForm, autoInstallJava: event.target.checked })}/>{t.autoInstallJava}</label><label className="check-row"><input type="checkbox" checked={launchForm.dryRun} onChange={event => setLaunchForm({ ...launchForm, dryRun: event.target.checked })}/>{t.dryRun}</label></div></details>
+            <details className="launch-options"><summary>{t.launchOptions}</summary><div className="launch-options-body"><label className="field"><span>{t.javaPath}</span><input value={launchForm.java} onChange={event => setLaunchForm({ ...launchForm, java: event.target.value })}/></label><label className="field"><span>{t.memory}</span><input inputMode="numeric" type="number" min="256" max="131072" step="1" value={launchForm.memory} onChange={event => setLaunchForm({ ...launchForm, memory: event.target.value })}/></label><label className="check-row"><input type="checkbox" checked={launchForm.autoInstallJava} onChange={event => setLaunchForm({ ...launchForm, autoInstallJava: event.target.checked })}/>{t.autoInstallJava}</label><label className="check-row"><input type="checkbox" checked={launchForm.dryRun} onChange={event => setLaunchForm({ ...launchForm, dryRun: event.target.checked })}/>{t.dryRun}</label></div></details>
             <button className="button primary launch-button" disabled={working || activeTask || (tIdentity === 'microsoft' && !launchForm.accountId)}>{working ? t.starting : t.launchGame}</button>
           </form>
         </> : <div className="empty-detail"><div className="empty-detail-mark">✧</div><h2>{t.empty}</h2><p>{t.emptyHint}</p></div>}
@@ -567,8 +574,8 @@ function CreateModal({ t, versions, versionsLoading, versionId, setVersionId, ve
   const visibleVersions = versionKind === 'all' ? versions : versions.filter(version => version.kind === versionKind)
   return <ModalFrame closeLabel={t.close} title={t.newInstance} close={close}>
     <form className="modal-form" onSubmit={submit}>
-      <label className="field"><span>{t.name}</span><input required value={instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
-      <label className="field"><span>{t.version}</span><select required value={versionId} disabled={versionsLoading || !versions.length} onChange={event => { setVersionId(event.target.value); if (loader) changeLoader(loader, event.target.value) }}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</select></label>
+      <label className="field"><span>{t.name}</span><input required={!shared} disabled={shared} value={shared ? versionId : instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
+      <label className="field"><span>{t.version}</span><select required value={versionId} disabled={versionsLoading || !versions.length} onChange={event => setVersionId(event.target.value)}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</select></label>
       <label className="field"><span>{t.versionKind}</span><select value={versionKind} onChange={event => { const kind = event.target.value; setVersionKind(kind); if (kind !== 'all' && !versions.some(item => item.id === versionId && item.kind === kind)) setVersionId(versions.find(item => item.kind === kind)?.id ?? '') }}><option value="all">{t.all}</option>{kinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}</select></label>
       <label className="check-row"><input type="checkbox" checked={shared} onChange={event => setShared(event.target.checked)}/>{t.sharedVanilla}</label>
       <label className="field"><span>{t.loader}</span><select value={loader} disabled={shared} onChange={event => changeLoader(event.target.value)}><option value="">Vanilla</option>{LOADERS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
@@ -656,8 +663,8 @@ function LogsPage({ t, entries, selectedKey, setSelectedKey, runs, selectedRunId
     {logsPaused && <section className="logs-panel live-launch-panel"><div className="panel-heading"><div><h2>{t.currentLaunch}</h2><p>{liveEntry ? `${t.selected}: ${liveEntry} · ` : ''}{liveTask ? `${liveTask.phase} · #${liveTask.id}` : t.starting}</p></div><span className="state-tag state-running">{liveTask ? t.state[liveTask.state] : t.state.running}</span></div><pre className="run-log">{live.length ? live.join('\n') : t.noLogs}</pre></section>}
     <section className={`logs-panel${logsPaused ? ' saved-logs-paused' : ''}`}><div className="log-controls"><label className="field"><span>{t.chooseEntry}</span><select value={selectedKey ?? ''} disabled={logsPaused} onChange={event => setSelectedKey(event.target.value)}><option value="">{t.chooseEntry}</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.id}</option>)}</select></label><label className="field"><span>{t.chooseRun}</span><select value={selectedRunId ?? ''} disabled={logsPaused || runs.length === 0} onChange={event => selectRun(event.target.value || null)}><option value="">{t.latestRun}</option>{runs.map(item => <option key={item.run_id} value={item.run_id}>{item.version} · {item.run_id}</option>)}</select></label><button className="button secondary" onClick={refresh} disabled={!selectedKey || logLoading || logsPaused}>{logLoading ? t.loading : t.refreshLogs}</button></div>
       {logsPaused && <p className="saved-logs-note">{t.savedPaused}</p>}
-      {run && <dl className="run-metadata"><Meta label={t.gameVersion} value={run.version}/><Meta label={t.pid} value={run.pid === null ? '—' : String(run.pid)}/><Meta label={t.exitCode} value={run.exit_code === null ? '—' : String(run.exit_code)}/><Meta label={t.started} value={new Date(run.started_at_ms).toLocaleString()}/><Meta label={t.finished} value={run.finished_at_ms === null ? t.liveLog : new Date(run.finished_at_ms).toLocaleString()}/><Meta label={t.gameDirectory} value={run.log_path}/></dl>}
-      {selected && runs.length === 0 && <p className="muted-copy">{t.noRuns}</p>}
+      {run && <dl className="run-metadata"><Meta label={t.gameVersion} value={run.version}/><Meta label={t.pid} value={run.pid === null ? '—' : String(run.pid)}/><Meta label={t.exitCode} value={run.exit_code === null ? '—' : String(run.exit_code)}/><Meta label={t.started} value={new Date(run.started_at_ms).toLocaleString()}/><Meta label={t.finished} value={run.finished_at_ms === null ? t.liveLog : new Date(run.finished_at_ms).toLocaleString()}/><Meta label={t.logFile} value={run.log_path}/></dl>}
+      {!logsPaused && selected && runs.length === 0 && <p className="muted-copy">{t.noRuns}</p>}
       {!logsPaused && <pre className="run-log" aria-label={t.logsTitle}>{runLog || (logLoading ? t.loading : t.noRuns)}</pre>}
     </section>
   </>
