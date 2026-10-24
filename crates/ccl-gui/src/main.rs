@@ -278,12 +278,15 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("CCL desktop initialization failed")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event
-                && app.state::<DesktopState>().tasks.active()
-            {
-                api.prevent_exit();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.close();
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app.state::<DesktopState>();
+                if ccl_gui::lifecycle::begin_exit(&state.operation_gate, &state.closing, &state.tasks)
+                    != ccl_gui::lifecycle::ExitDecision::Ready
+                {
+                    api.prevent_exit();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.close();
+                    }
                 }
             }
         });
