@@ -59,6 +59,8 @@ pub struct LaunchRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImportRequest {
+    #[serde(default)]
+    pub update_existing: bool,
     pub id: String,
     pub archive: PathBuf,
     pub include_optional: bool,
@@ -210,20 +212,23 @@ impl GuiOperations {
         } else {
             None
         };
-        let instance = import
-            .import_new(
-                &request.id,
-                &request.archive,
-                &ImportOptionsExt {
-                    include_optional: request.include_optional,
-                    replace_modified: request.replace_modified,
-                    curseforge_api_key: key,
-                    allowed_hosts: request.allowed_hosts,
-                },
-                Some(context),
-            )
-            .await
-            .map_err(import_format_error)?;
+        let options = ImportOptionsExt {
+            include_optional: request.include_optional,
+            replace_modified: request.replace_modified,
+            curseforge_api_key: key,
+            allowed_hosts: request.allowed_hosts,
+        };
+        let instance = if request.update_existing {
+            // Updating an existing pack is explicitly selected in the GUI.
+            import
+                .import(&request.id, &request.archive, &options, Some(context))
+                .await
+        } else {
+            import
+                .import_new(&request.id, &request.archive, &options, Some(context))
+                .await
+        }
+        .map_err(import_format_error)?;
         Ok(json!({"ok": true, "instance": instance, "pack_imported": true}))
     }
 

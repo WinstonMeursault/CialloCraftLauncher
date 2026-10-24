@@ -48,6 +48,14 @@ The desktop app asks you to confirm a game directory before it creates a missing
 
 One install, import, login, refresh, or launch task can run at a time. Work continues when you switch pages. Installation and import tasks can be cancelled; stopping a game asks for confirmation. The task view retains up to eight completed tasks and displays at most the latest 100 task log lines. Closing the app during active work asks whether to cancel the task or stop the game and exit. A second launch focuses the existing window.
 
+Drop one `.zip` or `.mrpack` onto the ready window to inspect it and open the import dialog. Choose or edit the instance name and import options, review the summary, then explicitly start the import. An existing instance ID is rejected; the app does not automatically replace it. You can also use the native archive picker. For content files, backup/export destinations, diagnostics, and a CLI installation, use the corresponding native picker so the app can grant access to that selected path.
+
+The Advanced page manages managed instances. Select an instance to install/update/remove its loader, inspect history and storage, preview or apply revision cleanup, restore or roll back a revision, manage content, create or restore a userdata backup, and inspect/export a Modrinth pack receipt. Shared vanilla entries are read-only on this page. In Discover, choose Modrinth or CurseForge, search, select a project and version, then inspect versions or resolve dependencies before installing. Mod installs target the selected managed instance; pack installs ask for confirmation because they can create or update the named instance. Optional pack files are excluded unless selected.
+
+Settings separates appearance and game-root choices from shared core settings. The Maintenance panel exposes ten core values: version-list source, file source, mirror root, proxy, parallel downloads, network-offline, Microsoft client ID, default Java path, default memory, and automatic Java installation. Save each field separately. If CLI or another process changes the config, reload before saving; stale edits are rejected. You can select a local JSON config unless `CCL_GUI_CONFIG_PATH` pins the config. CurseForge keys are entered in a password field and stored in the OS credential vault. `CCL_CURSEFORGE_API_KEY` overrides the saved value; status reveals only whether a saved key or override exists.
+
+Health checks make network or temporary-write probes only when their checkboxes are selected. Diagnostic export is local. Raw log preview is an explicit option and may contain private data despite best-effort redaction; review the file before sharing. The maintenance updater operates on the standalone CLI in the folder you select, using stable (`main`) or dev (`dev`) channel controls. It does not update the GUI application package; GUI package updating is assigned to G3.
+
 <a id="installation"></a>
 
 ## Installation and prerequisites

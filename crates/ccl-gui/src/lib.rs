@@ -2,11 +2,15 @@
 //! A terminal or WebView is not required by this library.
 pub mod account_service;
 pub mod browser;
+pub mod instance_service;
 mod library;
 pub mod lifecycle;
+pub mod maintenance;
+pub mod online_service;
 pub mod operations;
 mod preferences;
 mod tasks;
+pub mod update_service;
 
 pub use library::{Bootstrap, LibraryEntry, bootstrap, initialize_root};
 pub use preferences::{Preferences, PreferencesStore, Theme};

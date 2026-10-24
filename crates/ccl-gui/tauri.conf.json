@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CCL G1 Preview",
+  "productName": "CCL G2 Preview",
   "version": "0.2.0-alpha.1",
   "identifier": "io.github.winstonmeursault.ccl.preview",
   "build": {"frontendDist": "../../apps/ccl-gui/dist"},
   "app": {
-    "windows": [{"label": "main", "title": "CialloCraftLauncher · G1", "width": 1180, "height": 780, "minWidth": 960, "minHeight": 640}],
+    "windows": [{"label": "main", "title": "CialloCraftLauncher · G2", "width": 1180, "height": 780, "minWidth": 960, "minHeight": 640}],
     "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'"}
   },
   "bundle": {"active": false}

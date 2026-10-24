@@ -87,12 +87,27 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `launch_game`、`log_runs`、`read_run_log` | 启动所选项目，读取实时或已保存的运行日志。 |
 | `account_list`、`account_select`、`account_logout`、`account_login`、`account_refresh`、`account_check_storage`、`open_login_browser` | 列出/管理已保存账户，运行实验性的设备码登录和刷新，检查系统凭据库，或打开经过校验的验证 URI。 |
 | `cancel_task`、`task_snapshot`、`task_history`、`set_visibility` | 取消活动任务、读取当前/历史快照，或在窗口隐藏时控制事件通知。 |
+| `instance_query`、`instance_mutate`、`online_query`、`online_mutate` | 高级页面的实例/内容管理及来源发现/变更请求。 |
+| `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`select_config` | 原生路径选择/导入检查、设置/来源/诊断及所选 CLI 维护。 |
 
 长时间操作会返回 `TaskSnapshot`，字段包括 `id`、单调递增的 `revision`、`state`、`kind`、`phase`、进度、可选 PID、有界 `logs`、安全的 `error`/`error_code`、可选结果和可选 `authorization`。授权信息仅包含 `user_code`、`verification_uri` 和 `expires_in`；设备码和账户令牌留在 Rust 内。`gui-task` 事件会发送任务快照。接收方应忽略比已处理 `(id, revision)` 更旧的快照。一次只运行一个任务；切换页面不会取消任务。最多保留八个已完成快照。后端最多保存 1,000 行任务日志，每行最多 512 个字符；任务页面显示最近 100 行。非生命周期进度/日志通知最多每秒 10 次。安装/导入取消采用协作方式；停止游戏是单独确认的操作。生产任务页面显示已接入的工作，不包含合成探针。
 
 GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI 共用的核心 `downloads.offline` 设置。GUI 偏好设置使用独立 `gui.json`；账户元数据保存在核心配置旁，令牌使用操作系统凭据库。参阅[桌面 alpha 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-preview)。
 
-已保存日志每次最多读取末尾 1 MiB，保留最多 1,000 行，每行最多 8,192 字符，并返回 `truncated`。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例／导入在实例锁内拒绝已有 ID；共享原版安装可校验和修复已有版本。
+已保存日志每次最多读取末尾 1 MiB，保留最多 1,000 行，每行最多 8,192 字符，并返回 `truncated`。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例与默认导入在实例锁内拒绝已有 ID；显式更新已有整合包实例时保留核心冲突检查；共享原版安装可校验和修复已有版本。
+
+高级页面提供托管实例的加载器安装/更新/卸载、重命名/复制/删除、历史记录/还原/回滚、磁盘用量及清理预览/执行、整合包检查/收据/导出、本地内容列出/添加/移除/启用/禁用，以及用户数据备份/还原。共享原版条目在此页面为只读。`InstanceRequest` 是带 `operation` 标签的 JSON 枚举，操作值包括 `list`、`show`、`install`、`update`、`uninstall_loader`、`rename`、`copy`、`delete`、`history`、`restore`、`rollback`、`disk_usage`、`clean`、`pack_inspect`、`pack_show`、`pack_export`、`content_list`、`content_add`、`content_remove`、`content_enable`、`content_disable`、`content_backup` 和 `content_restore`；未知字段会被拒绝。变更在任务中运行。重命名、复制、删除、还原、清理和本地内容编辑等同步文件系统操作使用核心实例锁和任务准入控制，开始后不可取消；实例回滚同样如此。加载器变更、在线安装、导入和启动会收到任务取消及核心清理上下文。快照包含 `cancellable`；不可取消事务的取消请求会被拒绝，关闭需等待事务完成。
+
+在就绪窗口中拖入一个 `.zip` 或 `.mrpack` 会检查归档并打开导入对话框。用户可编辑实例名称和导入选项，必须明确执行导入；不会自动覆盖已有实例。默认拒绝已有 ID。明确设置 `update_existing: true` 并单独确认后，可进入核心整合包更新路径；`replace_modified` 仍需单独授权。适配器只接受与对应用途匹配的原生选择器授权路径（archive、export、backup、content file/directory、diagnostic、installation 或 drop）；拖入归档在检查前也会核验 drop 授权。
+
+`OnlineQuery` 操作值为 `search`、`versions`、`resolve`、`updates`、`analyze`；`OnlineMutation` 为 `install`、`pack_install`。来源序列化为 `modrinth` 或 `curseforge`。搜索字段为 `provider`、`query`、可选 `minecraft`、字符串数组 `loader`、`kind`（默认 `mod`）和 `limit`（默认 `20`）。安装请求包含 `id`、`provider`、`project` 和可选 `version`；整合包安装另接受默认 `false` 的 `include_optional`。适配器创建核心 `OnlineInstallRequest { root, instance_id, provider, project_id, version_id }` 并调用带上下文的安装路径，以验证目标实例身份及加载器兼容性，并将任务上下文传递到下载和暂存变更。CurseForge 凭据来自所选配置对应的系统凭据库，除非设置了 `CCL_CURSEFORGE_API_KEY`；状态只返回 `saved` 和 `environment_override`，不返回密钥。
+
+维护请求包括 `settings`、`set { key, value, expected }`、`reset { key?, expected }`、`provider_status`、`provider_set { key }`、`provider_remove`、`doctor { network_probe, write_probe }`、`diagnose { key?, run? }`、`export_diagnostics { key?, run?, output, include_log_preview }` 和 `about`。十项可编辑设置为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel`、`downloads.offline`、`auth.microsoft_client_id`、`launch.java`、`launch.max_memory_mb` 和 `launch.auto_install_java`。每项单独保存；核心配置锁内会比较 `expected`，外部 CLI/GUI 修改会导致陈旧设置错误，不会覆盖外部改动；重新加载后再保存。重置可针对单项或全部设置，也可修复损坏配置。选择其他配置会先验证并选中该文件，然后清除已缓存的路径授权和拖入归档选择。`CCL_GUI_CONFIG_PATH` 固定配置并禁用选择器。来源密钥通过密码输入框录入，仅写入系统凭据库；环境变量状态只报告存在/不存在，且变量优先。
+
+诊断导出保存在本地，并要求通过保存路径授权。原始日志预览默认关闭，只有明确启用才会包含，且受核心大小限制；尽力脱敏不保证移除所有秘密。分享前请人工检查导出文件。GUI 更新请求使用 `UpdateRequest` 的 `status`、`check`、`apply`、`rollback`、`recover` 操作，每项携带 `installation_root`；`check` 和 `apply` 还携带 `channel: "stable" | "dev"`。原生选择器选取包含独立 CLI 可执行文件的目录。这些请求只更新所选 CLI 安装；GUI 应用包更新属于独立的 G3 功能。源码见 [`instance_service.rs`](../crates/ccl-gui/src/instance_service.rs)、[`online_service.rs`](../crates/ccl-gui/src/online_service.rs)、[`maintenance.rs`](../crates/ccl-gui/src/maintenance.rs)、[`update_service.rs`](../crates/ccl-gui/src/update_service.rs) 和 [`advanced_commands.rs`](../crates/ccl-gui/src/advanced_commands.rs)。
+
+
+解析请求还接受可选 `version` 和可为空的 `loader`。选定版本会解析它自身固定的依赖图；安装复用同一解析路径。版本或目标筛选改变时，GUI 清除旧计划，并要求先生成计划再安装内容。
 
 <a id="core"></a>
 

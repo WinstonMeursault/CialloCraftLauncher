@@ -104,3 +104,20 @@ fn explicit_initialization_creates_root_and_preserves_launch_defaults() {
     assert!(initialized.launch_defaults.auto_install_java);
     assert_eq!(fs::read(&config).unwrap(), before);
 }
+
+#[test]
+fn selected_configuration_persists_separately_from_theme_and_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = ccl_gui::PreferencesStore::new(temp.path().join("gui"));
+    let config = temp.path().join("alternate.json");
+    std::fs::write(&config, "{}").unwrap();
+    store.select_config(config.clone()).unwrap();
+    let preferences = ccl_gui::Preferences {
+        theme: ccl_gui::Theme::Dark,
+        language: "en".into(),
+    };
+    store.save(preferences.clone()).unwrap();
+    assert_eq!(store.config_path().unwrap(), Some(config));
+    assert_eq!(store.load().unwrap(), preferences);
+    assert!(store.select_config("relative.json".into()).is_err());
+}

@@ -1,8 +1,10 @@
 use super::*;
+use crate::task::CancellationToken;
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     path::Path,
+    sync::Arc,
     thread,
 };
 
@@ -49,6 +51,14 @@ impl Fixture {
         Self { root, game }
     }
     fn apply(&self, versions: &[VersionHit], bodies: &[&[u8]]) -> Result<(), OnlineError> {
+        self.apply_with_context(versions, bodies, None)
+    }
+    fn apply_with_context(
+        &self,
+        versions: &[VersionHit],
+        bodies: &[&[u8]],
+        context: Option<&TaskContext>,
+    ) -> Result<(), OnlineError> {
         let mut records = Vec::new();
         let mut downloads = Vec::new();
         for (v, body) in versions.iter().zip(bodies) {
@@ -72,6 +82,7 @@ impl Fixture {
             "test",
             records,
             &downloads,
+            context,
         )
     }
 }
@@ -134,6 +145,92 @@ fn modified_owned_files_or_unmanaged_collisions_abort_without_partial_changes() 
         .is_err()
     );
     assert_eq!(fs::read(f.game.join("mods/local.jar")).unwrap(), b"private");
+}
+
+#[test]
+fn cancellation_during_staged_online_apply_preserves_active_files_and_receipt() {
+    let f = Fixture::new();
+    let previous = version("a", "a1", "a.jar", b"previous-content");
+    f.apply(&[previous], &[b"previous-content"]).unwrap();
+    let receipt_path = f.game.join(ONLINE_RECEIPT);
+    let previous_receipt = fs::read(&receipt_path).unwrap();
+    let token = CancellationToken::default();
+    let cancel_on_apply = token.clone();
+    let context = TaskContext::new(
+        token.clone(),
+        Arc::new(move |event| {
+            if matches!(event, TaskEvent::Progress { task, .. } if task == "online_content_apply") {
+                cancel_on_apply.cancel();
+            }
+        }),
+    );
+
+    let result = f.apply_with_context(
+        &[version("a", "a2", "a2.jar", b"new-content")],
+        &[b"new-content"],
+        Some(&context),
+    );
+
+    assert!(matches!(
+        result,
+        Err(OnlineError::Download(DownloadError::Cancelled))
+    ));
+    assert_eq!(
+        fs::read(f.game.join("mods/a.jar")).unwrap(),
+        b"previous-content"
+    );
+    assert!(!f.game.join("mods/a2.jar").exists());
+    assert_eq!(fs::read(receipt_path).unwrap(), previous_receipt);
+}
+
+#[tokio::test]
+async fn cancellation_on_download_progress_stops_transfer_and_keeps_existing_destination() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = [0; 1024];
+        let _ = socket.read(&mut request);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\na")
+            .unwrap();
+        thread::sleep(std::time::Duration::from_millis(300));
+    });
+    let temporary = std::env::temp_dir().join(format!(
+        "ccl-online-cancel-download-{}-{}",
+        std::process::id(),
+        TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&temporary).unwrap();
+    let destination = temporary.join("content.jar");
+    fs::write(&destination, b"keep-existing").unwrap();
+    let token = CancellationToken::default();
+    let cancellation = token.clone();
+    let observed_progress = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = observed_progress.clone();
+    let context = TaskContext::new(
+        token,
+        Arc::new(move |event| {
+            if matches!(event, TaskEvent::Progress { .. }) {
+                observed.store(true, Ordering::Release);
+                cancellation.cancel();
+            }
+        }),
+    );
+    let manager = DownloadManager::new(&DownloadConfig::default()).unwrap();
+    let result = manager
+        .download(
+            DownloadRequest::new(vec![format!("http://{address}/content.jar")], &destination)
+                .with_size(100)
+                .with_task_context(context),
+        )
+        .await;
+
+    assert!(matches!(result, Err(DownloadError::Cancelled)));
+    assert!(observed_progress.load(Ordering::Acquire));
+    assert_eq!(fs::read(&destination).unwrap(), b"keep-existing");
+    server.join().unwrap();
+    fs::remove_dir_all(temporary).unwrap();
 }
 #[test]
 fn dependency_types_pins_and_incompatible_versions_are_not_flattened() {

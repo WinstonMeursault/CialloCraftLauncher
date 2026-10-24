@@ -3,7 +3,7 @@
 //! Provider credentials are supplied by the caller. This module never reads or stores secrets.
 
 use crate::{
-    TaskContext,
+    TaskContext, TaskEvent,
     config::DownloadConfig,
     download::{DownloadError, DownloadManager, DownloadRequest},
     import_formats::{ImportFormatError, ImportFormatService, ImportOptionsExt},
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use std::{
     fs,
+    future::Future,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -24,6 +25,41 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const ONLINE_RECEIPT: &str = ".ccl/online-content.json";
+
+async fn wait_for_cancellation(context: &TaskContext) {
+    while !context.cancellation.is_cancelled() {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+}
+
+async fn await_or_cancel<T>(
+    operation: impl Future<Output = Result<T, OnlineError>>,
+    context: Option<&TaskContext>,
+) -> Result<T, OnlineError> {
+    if let Some(context) = context {
+        if context.cancellation.is_cancelled() {
+            return Err(DownloadError::Cancelled.into());
+        }
+        tokio::select! {
+            result = operation => result,
+            _ = wait_for_cancellation(context) => Err(DownloadError::Cancelled.into()),
+        }
+    } else {
+        operation.await
+    }
+}
+
+fn check_context(context: &Option<TaskContext>) -> Result<(), OnlineError> {
+    check_context_ref(context.as_ref())
+}
+
+fn check_context_ref(context: Option<&TaskContext>) -> Result<(), OnlineError> {
+    if context.is_some_and(|context| context.cancellation.is_cancelled()) {
+        Err(DownloadError::Cancelled.into())
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct OnlineConfig {
@@ -164,6 +200,16 @@ pub struct VersionFile {
     pub primary: bool,
 }
 
+/// Parameters for resolving and installing an online project into a managed instance.
+#[derive(Clone, Debug)]
+pub struct OnlineInstallRequest {
+    pub root: PathBuf,
+    pub instance_id: String,
+    pub provider: Provider,
+    pub project_id: String,
+    pub version_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContentConflict {
     pub path: String,
@@ -249,11 +295,25 @@ impl OnlineContentService {
         instance_id: &str,
         version: &VersionHit,
     ) -> Result<(), OnlineError> {
-        self.install_versions(
+        self.install_version_with_context(root, download_config, instance_id, version, None)
+            .await
+    }
+
+    /// Context-aware variant of [`Self::install_version`]. Downloads report progress and observe cancellation.
+    pub async fn install_version_with_context(
+        &self,
+        root: PathBuf,
+        download_config: &DownloadConfig,
+        instance_id: &str,
+        version: &VersionHit,
+        context: Option<TaskContext>,
+    ) -> Result<(), OnlineError> {
+        self.install_versions_with_context(
             root,
             download_config,
             instance_id,
             std::slice::from_ref(version),
+            context,
         )
         .await
     }
@@ -267,7 +327,21 @@ impl OnlineContentService {
         instance_id: &str,
         versions: &[VersionHit],
     ) -> Result<(), OnlineError> {
+        self.install_versions_with_context(root, config, instance_id, versions, None)
+            .await
+    }
+
+    /// Context-aware variant of [`Self::install_versions`].
+    pub async fn install_versions_with_context(
+        &self,
+        root: PathBuf,
+        config: &DownloadConfig,
+        instance_id: &str,
+        versions: &[VersionHit],
+        context: Option<TaskContext>,
+    ) -> Result<(), OnlineError> {
         self.online()?;
+        check_context(&context)?;
         let conflicts = Self::analyze_conflicts(versions);
         if !conflicts.is_empty() {
             return Err(OnlineError::Conflicts(conflicts));
@@ -284,6 +358,7 @@ impl OnlineContentService {
             let mut records = Vec::new();
             let mut total = 0u64;
             for version in versions {
+                check_context(&context)?;
                 let primary = version
                     .files
                     .iter()
@@ -344,7 +419,11 @@ impl OnlineContentService {
                             .ok_or(OnlineError::MissingCurseForgeKey)?;
                         request = request.with_api_key(key, curseforge_download_hosts())?;
                     }
+                    if let Some(ctx) = context.clone() {
+                        request = request.with_task_context(ctx);
+                    }
                     manager.download(request).await?;
+                    check_context(&context)?;
                     let hash = file_sha512(&destination)?;
                     owned.insert(file.filename.clone(), hash.clone());
                     downloads.push((file.filename.clone(), destination, hash));
@@ -358,7 +437,15 @@ impl OnlineContentService {
                     metadata: Some(version.clone()),
                 });
             }
-            apply_downloads(root, config, instance_id, records, &downloads)
+            check_context(&context)?;
+            apply_downloads(
+                root,
+                config,
+                instance_id,
+                records,
+                &downloads,
+                context.as_ref(),
+            )
         }
         .await;
         let _ = fs::remove_dir_all(&staging);
@@ -375,9 +462,38 @@ impl OnlineContentService {
         project_id: &str,
         version_id: Option<&str>,
     ) -> Result<Vec<VersionHit>, OnlineError> {
+        self.install_project_with_context(
+            config,
+            OnlineInstallRequest {
+                root,
+                instance_id: instance_id.into(),
+                provider,
+                project_id: project_id.into(),
+                version_id: version_id.map(str::to_owned),
+            },
+            None,
+        )
+        .await
+    }
+
+    /// Resolve and install online content while forwarding task progress and cancellation to downloads.
+    pub async fn install_project_with_context(
+        &self,
+        config: &DownloadConfig,
+        request: OnlineInstallRequest,
+        context: Option<TaskContext>,
+    ) -> Result<Vec<VersionHit>, OnlineError> {
+        let OnlineInstallRequest {
+            root,
+            instance_id,
+            provider,
+            project_id,
+            version_id,
+        } = request;
         self.online()?;
+        check_context(&context)?;
         let instances = InstanceService::new(root.clone(), config.clone())?;
-        let metadata = instances.metadata(instance_id)?;
+        let metadata = instances.metadata(&instance_id)?;
         let loader = metadata.loader.map(|kind| match kind {
             crate::loaders::LoaderKind::Fabric => "fabric",
             crate::loaders::LoaderKind::Quilt => "quilt",
@@ -386,31 +502,17 @@ impl OnlineContentService {
             crate::loaders::LoaderKind::Forge => "forge",
             crate::loaders::LoaderKind::NeoForge => "neoforge",
         });
-        let root_version = self
-            .versions(provider, project_id, Some(&metadata.minecraft), loader)
-            .await?
-            .into_iter()
-            .find(|v| version_id.is_none_or(|id| v.id == id))
-            .ok_or_else(|| {
-                OnlineError::Invalid("no compatible requested provider version was found".into())
-            })?;
-        if loader.is_none() && !root_version.loaders.is_empty() {
-            return Err(OnlineError::Invalid(
-                "the target instance has no mod loader, but the selected project requires one"
-                    .into(),
-            ));
-        }
-        let graph = match provider {
-            Provider::Modrinth => {
-                self.resolve_graph_from(root_version, &metadata.minecraft, loader.unwrap_or(""))
-                    .await?
-            }
-            Provider::CurseForge => {
-                self.resolve_curseforge_graph_from(root_version, &metadata.minecraft, loader)
-                    .await?
-            }
-        };
-        self.install_versions(root, config, instance_id, &graph)
+        let graph = self
+            .resolve_project_version_with_context(
+                provider,
+                &project_id,
+                version_id.as_deref(),
+                &metadata.minecraft,
+                loader,
+                context.as_ref(),
+            )
+            .await?;
+        self.install_versions_with_context(root, config, &instance_id, &graph, context)
             .await?;
         Ok(graph)
     }
@@ -505,16 +607,18 @@ impl OnlineContentService {
         result
     }
 
-    async fn resolve_graph_from(
+    async fn resolve_graph_from_context(
         &self,
         root: VersionHit,
         game_version: &str,
         loader: &str,
+        context: Option<&TaskContext>,
     ) -> Result<Vec<VersionHit>, OnlineError> {
         let mut todo = vec![root];
         let mut seen = std::collections::BTreeSet::new();
         let mut resolved = Vec::new();
         while let Some(version) = todo.pop() {
+            check_context_ref(context)?;
             if !seen.insert((version.project_id.clone(), version.id.clone())) {
                 continue;
             }
@@ -526,7 +630,7 @@ impl OnlineContentService {
                 let (project, pin) = if let Some(project) = &dep.project_id {
                     (project.clone(), dep.version_id.clone())
                 } else if let Some(id) = &dep.version_id {
-                    let exact = self.modrinth_version_by_id(id).await?;
+                    let exact = await_or_cancel(self.modrinth_version_by_id(id), context).await?;
                     (exact.project_id, Some(id.clone()))
                 } else {
                     continue;
@@ -540,7 +644,7 @@ impl OnlineContentService {
                     continue;
                 }
                 let selected = if let Some(id) = pin {
-                    let exact = self.modrinth_version_by_id(&id).await?;
+                    let exact = await_or_cancel(self.modrinth_version_by_id(&id), context).await?;
                     if exact.project_id != project
                         || !exact.game_versions.iter().any(|x| x == game_version)
                         || !exact.loaders.iter().any(|x| x == loader)
@@ -551,11 +655,14 @@ impl OnlineContentService {
                     }
                     exact
                 } else {
-                    self.versions(
-                        Provider::Modrinth,
-                        &project,
-                        Some(game_version),
-                        Some(loader),
+                    await_or_cancel(
+                        self.versions(
+                            Provider::Modrinth,
+                            &project,
+                            Some(game_version),
+                            Some(loader),
+                        ),
+                        context,
                     )
                     .await?
                     .into_iter()
@@ -573,16 +680,18 @@ impl OnlineContentService {
         Ok(resolved)
     }
 
-    async fn resolve_curseforge_graph_from(
+    async fn resolve_curseforge_graph_from_context(
         &self,
         root: VersionHit,
         game_version: &str,
         loader: Option<&str>,
+        context: Option<&TaskContext>,
     ) -> Result<Vec<VersionHit>, OnlineError> {
         let mut todo = vec![root];
         let mut seen = std::collections::BTreeSet::new();
         let mut resolved = Vec::new();
         while let Some(version) = todo.pop() {
+            check_context_ref(context)?;
             if !seen.insert((version.project_id.clone(), version.id.clone())) {
                 continue;
             }
@@ -590,16 +699,18 @@ impl OnlineContentService {
                 if seen.iter().any(|(p, _)| p == dep) {
                     continue;
                 }
-                let selected = self
-                    .versions(Provider::CurseForge, dep, Some(game_version), loader)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        OnlineError::Invalid(format!(
-                            "no compatible CurseForge dependency version found for project {dep}"
-                        ))
-                    })?;
+                let selected = await_or_cancel(
+                    self.versions(Provider::CurseForge, dep, Some(game_version), loader),
+                    context,
+                )
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    OnlineError::Invalid(format!(
+                        "no compatible CurseForge dependency version found for project {dep}"
+                    ))
+                })?;
                 todo.push(selected)
             }
             resolved.push(version)
@@ -824,6 +935,65 @@ impl OnlineContentService {
             resolved.push(version);
         }
         Ok(resolved)
+    }
+
+    /// Resolve the required dependency graph for a selected compatible provider version.
+    /// When `version_id` is absent, the newest compatible result is selected just as in install.
+    pub async fn resolve_project_version(
+        &self,
+        provider: Provider,
+        project_id: &str,
+        version_id: Option<&str>,
+        game_version: &str,
+        loader: Option<&str>,
+    ) -> Result<Vec<VersionHit>, OnlineError> {
+        self.resolve_project_version_with_context(
+            provider,
+            project_id,
+            version_id,
+            game_version,
+            loader,
+            None,
+        )
+        .await
+    }
+
+    async fn resolve_project_version_with_context(
+        &self,
+        provider: Provider,
+        project_id: &str,
+        version_id: Option<&str>,
+        game_version: &str,
+        loader: Option<&str>,
+        context: Option<&TaskContext>,
+    ) -> Result<Vec<VersionHit>, OnlineError> {
+        check_context_ref(context)?;
+        let root = await_or_cancel(
+            self.versions(provider, project_id, Some(game_version), loader),
+            context,
+        )
+        .await?
+        .into_iter()
+        .find(|version| version_id.is_none_or(|id| version.id == id))
+        .ok_or_else(|| {
+            OnlineError::Invalid("no compatible requested provider version was found".into())
+        })?;
+        if loader.is_none() && !root.loaders.is_empty() {
+            return Err(OnlineError::Invalid(
+                "the target instance has no mod loader, but the selected project requires one"
+                    .into(),
+            ));
+        }
+        match provider {
+            Provider::Modrinth => {
+                self.resolve_graph_from_context(root, game_version, loader.unwrap_or(""), context)
+                    .await
+            }
+            Provider::CurseForge => {
+                self.resolve_curseforge_graph_from_context(root, game_version, loader, context)
+                    .await
+            }
+        }
     }
 
     async fn modrinth_version_by_id(&self, version_id: &str) -> Result<VersionHit, OnlineError> {
@@ -1231,9 +1401,11 @@ fn apply_downloads(
     id: &str,
     records: Vec<OnlineInstalledVersion>,
     downloads: &[(String, PathBuf, String)],
+    context: Option<&TaskContext>,
 ) -> Result<(), OnlineError> {
     let instances = InstanceService::new(root, config.clone())?;
     instances.edit_content(id, |game| -> Result<(), OnlineError> {
+        check_context_ref(context)?;
         let receipt_path = game.join(ONLINE_RECEIPT);
         let old = match fs::read(&receipt_path) {
             Ok(bytes) => serde_json::from_slice::<OnlineReceipt>(&bytes)?,
@@ -1299,6 +1471,7 @@ fn apply_downloads(
             }
         }
         for (name, hash) in &old.owned_files {
+            check_context_ref(context)?;
             if desired.get(name) == Some(hash) {
                 continue;
             }
@@ -1311,7 +1484,18 @@ fn apply_downloads(
             }
             fs::remove_file(&target).map_err(|e| OnlineError::Io(e.to_string()))?;
         }
+        if let Some(context) = context {
+            context
+                .emit(TaskEvent::Progress {
+                    task: "online_content_apply".into(),
+                    completed: 1,
+                    total: Some(1),
+                })
+                .map_err(|_| OnlineError::Download(DownloadError::Cancelled))?;
+        }
+        check_context_ref(context)?;
         for (name, source, hash) in downloads {
+            check_context_ref(context)?;
             let target = mods.join(name);
             if target.exists() {
                 if file_sha512(&target)? != *hash {
@@ -1334,10 +1518,12 @@ fn apply_downloads(
             versions: retained,
             owned_files: desired,
         };
+        check_context_ref(context)?;
         fs::create_dir_all(receipt_path.parent().unwrap())
             .map_err(|e| OnlineError::Io(e.to_string()))?;
         fs::write(receipt_path, serde_json::to_vec_pretty(&receipt)?)
             .map_err(|e| OnlineError::Io(e.to_string()))?;
+        check_context_ref(context)?;
         Ok(())
     })
 }

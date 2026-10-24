@@ -47,6 +47,8 @@ struct Document {
     schema: u32,
     preferences: Preferences,
     root: Option<PathBuf>,
+    #[serde(default)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -99,7 +101,10 @@ impl PreferencesStore {
                 "Invalid GUI preferences; the file was not overwritten",
             )
         })?;
-        if document.schema != 1 || document.root.as_ref().is_some_and(|p| !p.is_absolute()) {
+        if document.schema != 1
+            || document.root.as_ref().is_some_and(|p| !p.is_absolute())
+            || document.config.as_ref().is_some_and(|p| !p.is_absolute())
+        {
             return Err(GuiError::new(
                 "invalid_preferences",
                 "Unsupported GUI preferences schema or root",
@@ -110,6 +115,18 @@ impl PreferencesStore {
     }
     pub fn load(&self) -> GuiResult<Preferences> {
         Ok(self.read()?.preferences)
+    }
+    pub fn config_path(&self) -> GuiResult<Option<PathBuf>> {
+        Ok(self.read()?.config)
+    }
+    pub fn select_config(&self, config: PathBuf) -> GuiResult<()> {
+        if !config.is_absolute() || !config.is_file() {
+            return Err(GuiError::new(
+                "invalid_config_path",
+                "Choose an existing configuration file",
+            ));
+        }
+        self.update(|d| d.config = Some(config))
     }
     pub fn root(&self) -> GuiResult<Option<PathBuf>> {
         Ok(self.read()?.root)
