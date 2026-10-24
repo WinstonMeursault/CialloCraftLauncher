@@ -496,6 +496,8 @@ impl DownloadManager {
                         }
                         DownloadError::Cancelled
                     })?;
+                // Event consumers may cancel synchronously while handling progress.
+                check_cancelled_partial(request, &partial, resumable)?;
             }
         }
         file.sync_all().map_err(|e| io_error(&partial.path, e))?;
