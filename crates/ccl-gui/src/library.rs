@@ -16,9 +16,18 @@ pub struct LibraryEntry {
     pub game_directory: PathBuf,
 }
 #[derive(Serialize)]
+pub struct LaunchDefaults {
+    pub java: Option<PathBuf>,
+    pub max_memory_mb: u32,
+    pub auto_install_java: bool,
+    pub network_offline: bool,
+}
+#[derive(Serialize)]
 pub struct Bootstrap {
     pub root: PathBuf,
     pub root_exists: bool,
+    pub setup_required: bool,
+    pub launch_defaults: LaunchDefaults,
     pub config_path: PathBuf,
     pub preferences: Preferences,
     pub entries: Vec<LibraryEntry>,
@@ -32,6 +41,7 @@ pub fn bootstrap(
 ) -> GuiResult<Bootstrap> {
     let preferences = store.load()?;
     let selected = explicit.or(store.root()?);
+    let confirmed = selected.is_some();
     let mut inputs = DirectoryInputs::from_environment(selected)
         .map_err(|e| GuiError::new("directory_error", e.to_string()))?;
     // Desktop cwd can be a bundle or an arbitrary installation directory.
@@ -52,6 +62,13 @@ pub fn bootstrap(
     let mut result = Bootstrap {
         root,
         root_exists: resolution.exists,
+        setup_required: !confirmed || !resolution.exists,
+        launch_defaults: LaunchDefaults {
+            java: None,
+            max_memory_mb: 2048,
+            auto_install_java: false,
+            network_offline: false,
+        },
         config_path: config_path.into(),
         preferences,
         entries: vec![],
@@ -65,6 +82,15 @@ pub fn bootstrap(
     }
     let config = LauncherConfig::read_or_default(config_path)
         .map_err(|e| GuiError::new("configuration_error", e.to_string()))?;
+    result.launch_defaults = LaunchDefaults {
+        java: config.launch.java.clone(),
+        max_memory_mb: config.launch.max_memory_mb,
+        auto_install_java: config.launch.auto_install_java,
+        network_offline: config.downloads.offline,
+    };
+    if !result.root_exists {
+        return Ok(result);
+    }
     match list_installed_versions(&result.root) {
         Ok(versions) => result
             .entries
@@ -96,4 +122,23 @@ pub fn bootstrap(
         ),
     }
     Ok(result)
+}
+
+/// Explicit user confirmation is required before creating the proposed game root.
+pub fn initialize_root(
+    store: &PreferencesStore,
+    config_path: &Path,
+    explicit: Option<PathBuf>,
+) -> GuiResult<Bootstrap> {
+    let data = bootstrap(store, config_path, explicit.clone())?;
+    if !data.warnings.is_empty() {
+        return Err(GuiError::new(
+            "library_unavailable",
+            data.warnings.join("\n"),
+        ));
+    }
+    std::fs::create_dir_all(&data.root)
+        .map_err(|_| GuiError::new("directory_error", "Cannot create game directory"))?;
+    store.select_root(data.root)?;
+    bootstrap(store, config_path, explicit)
 }

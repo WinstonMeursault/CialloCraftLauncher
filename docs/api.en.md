@@ -4,6 +4,7 @@
 
 - [CLI commands](#cli)
 - [JSON output](#output)
+- [Desktop adapter (alpha)](#desktop)
 - [Core service index](#core)
 - [Events, cancellation and errors](#tasks)
 - [Online content contracts](#online-contract)
@@ -71,6 +72,28 @@ Commands return an object with `ok`. Successful payload fields depend on the com
 
 The `launch` record includes `run_id`, `version`, `pid`, `exit_code`, `cancelled`, `log_path`, `started_at_ms`, and `finished_at_ms`. `logs` returns text in `log`. See the [user guide](user-guide.en.md) for workflows and configuration.
 
+<a id="desktop"></a>
+
+## Desktop adapter (alpha)
+
+The optional Tauri desktop adapter is `ccl-gui` `0.2.0-alpha.1`; it is not included in the CLI release archives. Its validation is in progress and this section describes the current source interface, not a completed cross-platform release. Invoke commands through Tauri's `invoke` API. Commands return typed data or a serialized `{ "code": "...", "message": "..." }` error.
+
+| Command | Purpose |
+| --- | --- |
+| `bootstrap`, `initialize_root`, `select_root` | Resolve the proposed/selected root, explicitly create and confirm a root, or select an existing one with the native directory picker. A missing directory is created only by `initialize_root`. |
+| `save_preferences`, `set_network_offline` | Save GUI appearance preferences, or persist `downloads.offline` in the shared core config. |
+| `list_versions`, `list_loaders`, `install_instance` | Discover versions/loaders and start vanilla/shared or managed-loader installation. |
+| `inspect_import`, `import_instance` | Pick and inspect a supported local archive, then import it as a managed instance. |
+| `launch_game`, `log_runs`, `read_run_log` | Launch a selected entry and read live or saved run logs. |
+| `account_list`, `account_select`, `account_logout`, `account_login`, `account_refresh`, `account_check_storage`, `open_login_browser` | List/manage saved accounts, run experimental device-code login and refresh, check the OS vault, or open the validated verification URI. |
+| `cancel_task`, `task_snapshot`, `task_history`, `set_visibility` | Cancel active work, retrieve current/history snapshots, or control update notifications when the window is hidden. |
+
+Long-running work returns a `TaskSnapshot` with `id`, monotonically increasing `revision`, `state`, `kind`, `phase`, progress, optional PID, bounded `logs`, safe `error`/`error_code`, optional result, and optional `authorization`. Authorization contains only `user_code`, `verification_uri`, and `expires_in`; the device code and account tokens remain in Rust. The `gui-task` event carries snapshots. Consumers should ignore a snapshot whose `(id, revision)` is older than the one already applied. One task runs at a time; switching pages does not cancel it. Eight completed snapshots are retained. The backend stores at most 1,000 log lines of at most 512 characters; the task page displays the latest 100. Non-lifecycle progress/log notifications are limited to 10 per second. Install/import cancellation is cooperative; stopping a game is a separate confirmed action. The production task page contains connected work, not a synthetic probe.
+
+`--offline`-style identity selection in the GUI is separate from the persisted network-offline setting. The latter is the same core `downloads.offline` setting used by CLI. GUI preferences use a separate `gui.json`; account metadata is stored beside the core configuration, and tokens use the OS credential vault. See the [desktop alpha guide](user-guide.en.md#desktop-alpha) and [development notes](development.en.md#gui-preview).
+
+Saved-log requests read at most the last 1 MiB, retain at most 1,000 lines of 8,192 characters, and report `truncated`. The Logs page uses task snapshots for the active launch; saved-run reads resume after launch ends. Creating managed instances/imports rejects existing IDs under the instance lock; shared vanilla installation can verify and repair an existing version.
+
 <a id="core"></a>
 
 ## Core service index
@@ -86,12 +109,12 @@ cargo doc -p ccl-core --no-deps --open
 | `config::ConfigStore` | `get / set / reset / update` | Validated, lock-serialized settings |
 | `install::InstallService` | `list_versions / list_versions_for / install` | Manifest lookup, per-root offline cache and vanilla installation |
 | `loaders::LoaderService` | `versions / install` | Loader metadata and installation |
-| `instances::InstanceService` | `list / metadata / install / acquire_launch / rollback / uninstall_loader` | Managed instances and launch guards |
+| `instances::InstanceService` | `list / metadata / install / install_vanilla / install_new_loader / acquire_launch / rollback / uninstall_loader` | Managed instances and launch guards |
 | `instances::InstanceService` | `rename / duplicate / delete / history / restore_revision / disk_usage / cleanup` | Lifecycle, retained revisions and cleanup |
 | `launch::LaunchService` | `prepare / launch` | Java selection, verified preparation and process orchestration |
 | `launch` | `list_installed_versions / read_logs` | Installed vanilla versions and recorded logs |
-| `modpacks::ModpackService` | `inspect / show / import / export` | Modrinth archives and ownership receipts |
-| `import_formats::ImportFormatService` | `inspect / import` | CurseForge and MultiMC/Prism conversion |
+| `modpacks::ModpackService` | `inspect / show / import / import_new / export` | Modrinth archives and ownership receipts |
+| `import_formats::ImportFormatService` | `inspect / import / import_new` | CurseForge and MultiMC/Prism conversion |
 | `content::ContentService` | `list / add / remove / set_enabled / backup / restore` | Local content and portable userdata backups |
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | Provider content, dependency resolution and transactions |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | Device authorization and launch identity |

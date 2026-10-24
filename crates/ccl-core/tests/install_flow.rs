@@ -12,6 +12,7 @@ use std::{
 use ccl_core::{
     config::DownloadConfig,
     install::{InstallError, InstallOptions, InstallService},
+    instances::{InstanceError, InstanceService},
     task::{CancellationToken, TaskContext},
 };
 use serde_json::json;
@@ -19,6 +20,15 @@ use sha1::{Digest, Sha1};
 
 fn sha1(bytes: &[u8]) -> String {
     format!("{:x}", Sha1::digest(bytes))
+}
+
+fn instance_service(root: PathBuf, fixture: &Fixture) -> InstanceService {
+    let installer = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(fixture.url("/manifest.json"));
+    InstanceService::new(root, DownloadConfig::default())
+        .unwrap()
+        .with_install_service(installer)
 }
 
 struct Fixture {
@@ -170,10 +180,9 @@ fn install_fixture_routes() -> (HashMap<String, Vec<u8>>, Vec<u8>) {
     let client = b"restartable client jar";
     let library = b"fixture library jar";
     let object = b"fixture asset object".to_vec();
-    let index = serde_json::to_vec(
-        &json!({"objects":{"icons/test.png":{"hash":sha1(&object),"size":object.len()}}}),
-    )
-    .unwrap();
+    // Keep this helper self-contained: asset objects normally use global Mojang
+    // endpoints, while this fixture only serves its own loopback routes.
+    let index = serde_json::to_vec(&json!({"objects":{}})).unwrap();
     let metadata = serde_json::to_vec(&json!({
         "id":"fixture-1",
         "downloads":{"client":{"url":"http://fixture.invalid/client.jar","sha1":sha1(client),"size":client.len()}},
@@ -458,4 +467,129 @@ async fn warmed_install_works_with_network_offline_and_corrupt_files_fail_withou
     ));
     assert_eq!(fs::read(&client).unwrap(), b"corrupt");
     fs::remove_dir_all(game).unwrap();
+}
+
+#[tokio::test]
+async fn instance_vanilla_install_commits_fixture_and_refuses_existing_data() {
+    let (routes, _) = install_fixture_routes();
+    let fixture = Fixture::new(routes);
+    let root = temp_dir("instance-vanilla");
+    let instances = instance_service(root.clone(), &fixture);
+
+    let metadata = instances
+        .install_vanilla("clean", "fixture-1", None)
+        .await
+        .unwrap();
+    assert_eq!(metadata.minecraft, "fixture-1");
+    assert!(metadata.loader.is_none());
+    assert!(metadata.loader_version.is_none());
+    let game = root.join(".ccl/instances/clean/game");
+    assert_eq!(
+        fs::read(game.join("versions/fixture-1/fixture-1.jar")).unwrap(),
+        b"restartable client jar"
+    );
+    assert_eq!(instances.metadata("clean").unwrap(), metadata);
+
+    let existing = root.join(".ccl/instances/keep/game/saves/world");
+    fs::create_dir_all(&existing).unwrap();
+    fs::write(existing.join("marker"), "save").unwrap();
+    assert!(matches!(
+        instances.install_vanilla("keep", "fixture-1", None).await,
+        Err(InstanceError::Conflict(_))
+    ));
+    assert_eq!(fs::read_to_string(existing.join("marker")).unwrap(), "save");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_or_cancelled_vanilla_install_never_activates_a_generation() {
+    let root = temp_dir("instance-vanilla-failure");
+    let failed_fixture = Fixture::new(HashMap::new());
+    let failed = instance_service(root.clone(), &failed_fixture);
+    assert!(
+        failed
+            .install_vanilla("failed", "fixture-1", None)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        failed.metadata("failed"),
+        Err(InstanceError::NotFound(_))
+    ));
+    assert!(!root.join(".ccl/instances/failed").exists());
+
+    let (routes, _) = install_fixture_routes();
+    let fixture = Fixture::held(routes, "/client.jar");
+    let service = instance_service(root.clone(), &fixture);
+    let token = CancellationToken::default();
+    let context = TaskContext::new(token.clone(), Arc::new(|_| {}));
+    let worker_service = service.clone();
+    let worker = tokio::spawn(async move {
+        worker_service
+            .install_vanilla("cancelled", "fixture-1", Some(context))
+            .await
+    });
+    fixture.wait_until_held();
+    assert!(matches!(
+        service.acquire_launch("cancelled"),
+        Err(InstanceError::Conflict(_))
+    ));
+    token.cancel();
+    fixture.release();
+    let error = worker.await.unwrap().unwrap_err();
+    assert!(error.is_cancelled());
+    assert!(matches!(
+        service.metadata("cancelled"),
+        Err(InstanceError::NotFound(_))
+    ));
+    assert!(!root.join(".ccl/instances/cancelled").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn vanilla_install_validates_ids_before_touching_storage() {
+    let (routes, _) = install_fixture_routes();
+    let fixture = Fixture::new(routes);
+    let root = temp_dir("instance-vanilla-lock");
+    let instances = instance_service(root.clone(), &fixture);
+    assert!(matches!(
+        instances
+            .install_vanilla("../escape", "fixture-1", None)
+            .await,
+        Err(InstanceError::InvalidId(_))
+    ));
+    assert!(matches!(
+        instances.install_vanilla("safe", "../escape", None).await,
+        Err(InstanceError::InvalidId(_))
+    ));
+
+    assert!(!root.join(".ccl/instances").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn create_only_loader_install_rejects_existing_instance_before_network_access() {
+    let root = temp_dir("instance-loader-create-only");
+    let instance = root.join(".ccl/instances/existing");
+    fs::create_dir_all(instance.join("game/saves/world")).unwrap();
+    fs::write(instance.join("game/saves/world/marker"), "save").unwrap();
+    let service = InstanceService::new(root.clone(), DownloadConfig::default()).unwrap();
+    let error = service
+        .install_new_loader(
+            "existing",
+            &ccl_core::loaders::LoaderRequest {
+                kind: ccl_core::loaders::LoaderKind::Fabric,
+                minecraft: "fixture-1".into(),
+                version: "0.1.0".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, InstanceError::Conflict(_)));
+    assert_eq!(
+        fs::read_to_string(instance.join("game/saves/world/marker")).unwrap(),
+        "save"
+    );
+    fs::remove_dir_all(root).unwrap();
 }

@@ -3,6 +3,7 @@
 [API reference](api.en.md) · [Development guide](development.en.md) · [简体中文](user-guide.zh-CN.md)
 
 - [Quick start](#quickstart)
+- [Desktop alpha](#desktop-alpha)
 - [Installation and prerequisites](#installation)
 - [Game directory](#directories)
 - [Settings and configuration](#configuration)
@@ -37,6 +38,16 @@ Java matching the version and host architecture is detected or installed automat
 
 `versions`, `loaders`, and `online search` return up to 20 entries by default. For `versions` and `loaders`, `--limit 0` returns all available entries; online search is capped by the provider. `logs` shows the latest 100 lines by default.
 
+<a id="desktop-alpha"></a>
+
+## Desktop alpha
+
+The release archives described here contain the CLI. A separate desktop adapter is available in the source tree as `ccl-gui` `0.2.0-alpha.1`; it is experimental, is not included in those archives, and its platform validation is still in progress. See the [development guide](development.en.md#gui-preview) for build instructions and the current scope.
+
+The desktop app asks you to confirm a game directory before it creates a missing one. It can install vanilla versions, create managed loader instances, import supported local archives, launch with an offline player name or saved Microsoft account, and inspect live or saved game logs. Microsoft sign-in remains experimental and requires the OS credential vault. Enter a public Microsoft application client ID in Accounts, or configure `auth.microsoft_client_id` in the shared core config. The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
+
+One install, import, login, refresh, or launch task can run at a time. Work continues when you switch pages. Installation and import tasks can be cancelled; stopping a game asks for confirmation. The task view retains up to eight completed tasks and displays at most the latest 100 task log lines. Closing the app during active work asks whether to cancel the task or stop the game and exit. A second launch focuses the existing window.
+
 <a id="installation"></a>
 
 ## Installation and prerequisites
@@ -60,7 +71,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
 
-Extract the whole archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, `THIRD-PARTY.en.md`, `THIRD-PARTY.zh-CN.md`, and `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the updater stores its transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CCL is a command-line program; it does not include a graphical launcher or an installer wizard. See [launcher updates](#maintenance) for update integrity limits.
+Extract the whole archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, `THIRD-PARTY.en.md`, `THIRD-PARTY.zh-CN.md`, and `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the updater stores its transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. These release archives contain the CLI, not the experimental desktop alpha. See [launcher updates](#maintenance) for update integrity limits.
 
 You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
 
@@ -247,7 +258,7 @@ Commits retain the immediate previous revision for `rollback`; older previous re
 
 ## Packs, local content and backups
 
-CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). A GUI is not provided.
+CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). The desktop alpha can inspect supported local archives through its file picker; see [Desktop alpha](#desktop-alpha).
 
 The validated sample uses Minecraft `1.21.1`, Fabric Loader `0.20.1`, and Fabric API `0.116.17+1.21.1`. It reached the main menu on macOS arm64 and on Linux x86_64 using CPU rendering. An exported and re-imported macOS instance also reached the menu with matching mod hashes and override files. This does not certify other packs or third-party mod combinations. Windows is checked through compilation and automated tests.
 
