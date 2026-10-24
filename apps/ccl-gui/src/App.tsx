@@ -565,7 +565,7 @@ function CreateModal({ t, versions, versionsLoading, versionId, setVersionId, ve
 }) {
   const kinds = [...new Set(versions.map(version => version.kind))]
   const visibleVersions = versionKind === 'all' ? versions : versions.filter(version => version.kind === versionKind)
-  return <ModalFrame title={t.newInstance} close={close}>
+  return <ModalFrame closeLabel={t.close} title={t.newInstance} close={close}>
     <form className="modal-form" onSubmit={submit}>
       <label className="field"><span>{t.name}</span><input required value={instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
       <label className="field"><span>{t.version}</span><select required value={versionId} disabled={versionsLoading || !versions.length} onChange={event => { setVersionId(event.target.value); if (loader) changeLoader(loader, event.target.value) }}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</select></label>
@@ -593,7 +593,7 @@ function ImportModal({ t, preview, inspect, id, setId, includeOptional, setInclu
     return value ? [{ key, value }] : []
   })
   const rawSummary = JSON.stringify(preview?.summary, null, 2) ?? 'null'
-  return <ModalFrame title={t.importPack} close={close}>
+  return <ModalFrame closeLabel={t.close} title={t.importPack} close={close}>
     <form className="modal-form" onSubmit={submit}>
       {!preview ? <div className="picker-state"><p>{t.inspectPack}</p><button type="button" className="button secondary" onClick={inspect}>{t.inspectPack}</button></div> : <>
         <div className="path-box"><span>{t.archive}</span><code title={preview.path}>{preview.path}</code></div>
@@ -681,11 +681,28 @@ function SettingsPage({ t, theme, language, setTheme, setLanguage, savePreferenc
 
 function ConfirmDialog({ t, task, working, cancel, confirm }: { t: ReturnType<typeof getMessages>; task: TaskSnapshot; working: boolean; cancel: () => void; confirm: () => void }) {
   const isLaunch = task.kind === 'launch'
-  return <div className="modal-backdrop" role="presentation"><section className="modal-card confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-copy"><h2 id="confirm-title">{isLaunch ? t.stopGameTitle : t.cancelTaskTitle}</h2><p id="confirm-copy">{isLaunch ? t.stopGameCopy : t.cancelTaskCopy}</p><div className="modal-actions"><button className="button secondary" onClick={cancel} disabled={working}>{t.keepRunning}</button><button className="button danger" onClick={confirm} disabled={working}>{working ? t.starting : t.confirmCancel}</button></div></section></div>
+  return <ModalFrame title={isLaunch ? t.stopGameTitle : t.cancelTaskTitle} close={cancel} closeLabel={t.close} role="alertdialog" descriptionId="confirm-copy"><p id="confirm-copy">{isLaunch ? t.stopGameCopy : t.cancelTaskCopy}</p><div className="modal-actions"><button type="button" className="button secondary" onClick={cancel} disabled={working}>{t.keepRunning}</button><button type="button" className="button danger" onClick={confirm} disabled={working}>{working ? t.starting : t.confirmCancel}</button></div></ModalFrame>
 }
 
-function ModalFrame({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
-  return <div className="modal-backdrop" role="presentation"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><h2 id="modal-title">{title}</h2><button className="icon-button" onClick={close} aria-label="Close dialog">×</button></header>{children}</section></div>
+function ModalFrame({ title, close, closeLabel, children, role = 'dialog', descriptionId }: { title: string; close: () => void; closeLabel: string; children: ReactNode; role?: 'dialog' | 'alertdialog'; descriptionId?: string }) {
+  const panel = useRef<HTMLElement>(null)
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const element = panel.current
+    const first = element?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])') ?? element?.querySelector<HTMLElement>('button:not([disabled])')
+    first?.focus()
+    return () => { if (previous?.isConnected) previous.focus() }
+  }, [])
+  return <div className="modal-backdrop" role="presentation"><section ref={panel} className="modal-card" role={role} aria-modal="true" aria-labelledby="modal-title" aria-describedby={descriptionId} onKeyDown={event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
+    if (event.key !== 'Tab') return
+    const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]') ?? [])].filter(element => element.offsetParent !== null)
+    const first = focusable[0], last = focusable.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+  }}><header><h2 id="modal-title">{title}</h2><button type="button" className="icon-button" onClick={close} aria-label={closeLabel}>×</button></header>{children}</section></div>
 }
 
 function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <div className="page-heading"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div> }

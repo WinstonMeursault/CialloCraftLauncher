@@ -275,13 +275,17 @@ impl TaskRegistry {
                 Ok(value) => {
                     if value.pointer("/launch/cancelled").and_then(Value::as_bool) == Some(true) {
                         s.state = TaskState::Cancelled;
-                    } else if let Some(code) =
-                        value.pointer("/launch/exit_code").and_then(Value::as_i64)
-                        && code != 0
+                    } else if value.get("launch").is_some()
+                        && value.pointer("/launch/exit_code").and_then(Value::as_i64) != Some(0)
                     {
                         s.state = TaskState::Failed;
                         s.error_code = Some("game_exit".into());
-                        s.error = Some(format!("Game exited with status code {code}."));
+                        s.error = Some(
+                            match value.pointer("/launch/exit_code").and_then(Value::as_i64) {
+                                Some(code) => format!("Game exited with status code {code}."),
+                                None => "Game terminated without a normal exit status.".into(),
+                            },
+                        );
                     } else {
                         s.state = TaskState::Succeeded;
                     }

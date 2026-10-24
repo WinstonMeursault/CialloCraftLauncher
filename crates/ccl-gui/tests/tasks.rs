@@ -96,6 +96,12 @@ fn launch_exit_status_is_a_safe_failure_and_cancellation_takes_precedence() {
         })
         .unwrap();
     assert_eq!(wait_terminal(&registry).state, TaskState::Cancelled);
+    registry
+        .start("launch", |_| async {
+            Ok(json!({"launch":{"exit_code": null, "cancelled": false}}))
+        })
+        .unwrap();
+    assert_eq!(wait_terminal(&registry).state, TaskState::Failed);
 }
 
 #[test]
