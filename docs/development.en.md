@@ -4,6 +4,7 @@
 
 - [Environment](#environment)
 - [Build and run](#build)
+- [GUI G0 preview](#gui-preview)
 - [Architecture and workspace](#architecture)
 - [Code boundaries](#boundaries)
 - [Configuration and data directories](#data)
@@ -42,13 +43,43 @@ cargo run -p ccl-cli -- --help
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
+<a id="gui-preview"></a>
+
+## GUI G0 preview
+
+The current GUI work is the G0 prototype on branch `codex/gui-g0`; validation is still in progress as of 2026-10-24. The commands here describe the intended local checks, not a passing result. The `ccl-gui` crate is version `0.2.0-alpha.1`; this alpha adapter version does not change `ccl-core` or `ccl-cli` from `0.1.0`, and it does not mean the 0.2 product feature set is complete.
+
+`crates/ccl-gui` is a Rust adapter/library with `default = []`. Its optional `desktop` feature enables Tauri 2 and the desktop binary. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The CLI and default Rust builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
+
+G0 reads shared vanilla versions and managed instances through `ccl-core`, and lets the user select an existing game root with the native directory picker. It saves only GUI preferences (`theme`, `language`, and selected root) to its separate `gui.json`; the available themes are system, light, and dark, and the languages are English and Simplified Chinese. A missing game root is resolved for display but is not created. Saving preferences or choosing a root creates/updates GUI preference files. When a selected root already has managed instances, core instance listing may acquire locks or recover an interrupted transaction, so startup is not guaranteed to be read-only on an existing game directory.
+
+The task page is a synthetic `TaskContext` probe only. It exercises progress, logs, single-task busy handling, cancellation, and bounded history (up to 1,000 stored lines, each capped at 512 characters); it does not connect game launch, downloads, accounts, or updater operations to the GUI. Discover, Accounts, Logs, and Launch remain unavailable in this prototype.
+
+Use `CCL_GUI_DATA_DIR` and `CCL_GUI_CONFIG_PATH` to point tests at disposable GUI-data and configuration paths. `CCL_GUI_GAME_DIR` pins the game root; while it is set, the GUI rejects requests to change the root. Unset it when testing the native root picker. The normal startup path does not create a missing game directory.
+
+### Build and check the desktop prototype
+
+From the repository root, with Node 24, pnpm 11.25.0, Rust, and the target's native dependencies installed:
+
+```sh
+cd apps/ccl-gui
+pnpm install --frozen-lockfile
+pnpm build
+node --test tests/task-snapshot.test.ts
+cd ../..
+cargo test -p ccl-gui --locked
+cargo run -p ccl-gui --features desktop --release --locked
+```
+
+The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.yml` runs this Node test before building the frontend. The workflow also runs workspace formatting, the default-feature adapter tests, desktop Clippy, and an optimized desktop build on Windows x64, macOS arm64, and Linux x86_64. Its Linux job installs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, and `patchelf`. Tauri uses the system WebView2 on Windows, WKWebView on macOS, and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/). These upstream prerequisites do not establish CCL's minimum supported OS versions, which have not yet been validated.
+
 <a id="architecture"></a>
 
 ## Architecture and workspace
 
 ### Goals
 
-CialloCraftLauncher starts with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and a future graphical interface call the same core services. The core does not depend on a terminal or graphical interface, so adding a GUI later will not require moving business logic into the interface layer.
+CialloCraftLauncher started with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and the current G0 desktop prototype call the same core services. The core does not depend on either interface, so the prototype can grow without moving business logic into the UI layer.
 
 Initial target platforms:
 
@@ -60,6 +91,7 @@ Initial target platforms:
 
 - `crates/ccl-core`: shared services, configuration, errors, HTTP transport, task events, installation, Java discovery, and launch orchestration.
 - `crates/ccl-cli`: command-line arguments, text or JSON output, exit codes, and calls into the core.
+- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and G0 React/TypeScript/Vite frontend; see [GUI G0 preview](#gui-preview) for current scope and checks.
 - `docs`: public documentation for users and contributors.
 
 The core reports progress through task contexts and provides a cooperative cancellation handle. An interface displays events and collects input; the core performs work, validates configuration, and returns structured errors. The core must not depend on an interface.
