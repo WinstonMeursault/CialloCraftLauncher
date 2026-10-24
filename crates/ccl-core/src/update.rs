@@ -439,7 +439,9 @@ impl UpdateService {
             Channel::Stable => format!("v{}", manifest.version),
             Channel::Dev => format!("dev-{}", manifest.commit),
         };
-        manifest.validate(manifest.channel, &BuildIdentity::current().target, &tag)?;
+        // A GUI or other frontend may update a separately selected CLI install.
+        // Bind the manifest to that executable's target, not the frontend build.
+        manifest.validate(manifest.channel, &install.identity()?.target, &tag)?;
         let prefix = format!("{}/repos/{REPOSITORY}", self.api_root);
         let head: serde_json::Value = self
             .json(
@@ -694,6 +696,10 @@ impl Installation {
         }
         serde_json::from_slice(&read_bounded(&path, 128)?)
             .map_err(|_| invalid("invalid saved update channel"))
+    }
+    /// Read and validate the build identity reported by this installation's executable.
+    pub fn identity(&self) -> Result<BuildIdentity> {
+        executable_identity(&self.target)
     }
     pub fn set_channel(&self, channel: Channel) -> Result<()> {
         let _lock = self.lock()?;
