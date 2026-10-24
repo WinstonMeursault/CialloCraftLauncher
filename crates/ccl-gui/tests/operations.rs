@@ -247,6 +247,7 @@ async fn import_new_conflicts_under_instance_lock_and_preserves_existing_save() 
     let error = operations
         .import(
             ccl_gui::operations::ImportRequest {
+                update_existing: false,
                 id: "existing".into(),
                 archive,
                 include_optional: false,
@@ -513,4 +514,177 @@ async fn managed_vanilla_install_uses_verified_downloads_on_every_platform() {
         "instance_conflict"
     );
     assert_eq!(fs::read(client).unwrap(), b"GUI operations fixture client");
+}
+
+#[tokio::test]
+async fn advanced_instance_content_lifecycle_uses_actual_locked_core_transactions() {
+    use ccl_core::{content::ContentKind, instances::InstanceService};
+    use ccl_gui::instance_service::{InstanceOperations, InstanceRequest as R};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    let fixture = Fixture::new();
+    let installer = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(&fixture.url);
+    GuiOperations::new(root.clone(), temp.path().join("config.json"))
+        .unwrap()
+        .with_install_service(installer)
+        .install(
+            InstallRequest {
+                id: "world".into(),
+                minecraft: "fixture-1".into(),
+                loader: None,
+                loader_version: None,
+                shared: false,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+    let service = InstanceOperations::new(root.clone(), DownloadConfig::default());
+    let core = InstanceService::new(root.clone(), DownloadConfig::default()).unwrap();
+    let source = temp.path().join("test.jar");
+    fs::write(&source, b"local fixture mod").unwrap();
+    service
+        .execute(
+            R::ContentAdd {
+                id: "world".into(),
+                kind: ContentKind::Mod,
+                source,
+                name: None,
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    let game = core.game_directory("world").unwrap();
+    assert!(game.join("mods/test.jar").is_file());
+    service
+        .execute(
+            R::ContentDisable {
+                id: "world".into(),
+                name: "test.jar".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    assert!(game.join("mods/test.jar.disabled").is_file());
+    service
+        .execute(
+            R::ContentEnable {
+                id: "world".into(),
+                name: "test.jar.disabled".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    let backup = temp.path().join("userdata.zip");
+    service
+        .execute(
+            R::ContentBackup {
+                id: "world".into(),
+                output: backup.clone(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    service
+        .execute(
+            R::ContentRemove {
+                id: "world".into(),
+                kind: ContentKind::Mod,
+                name: "test.jar".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    assert!(!game.join("mods/test.jar").exists());
+    service
+        .execute(
+            R::ContentRestore {
+                id: "world".into(),
+                archive: backup,
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    assert!(game.join("mods/test.jar").is_file());
+    let guard = core.acquire_launch("world").unwrap();
+    assert!(
+        service
+            .execute(R::Delete { id: "world".into() }, Some(context()))
+            .await
+            .is_err()
+    );
+    drop(guard);
+    let history = service
+        .execute(R::History { id: "world".into() }, None)
+        .await
+        .unwrap();
+    assert!(!history["history"].as_array().unwrap().is_empty());
+    let before = fs::read(game.join("mods/test.jar")).unwrap();
+    service
+        .execute(
+            R::Clean {
+                id: "world".into(),
+                keep: 0,
+                include_previous: true,
+                apply: false,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(fs::read(game.join("mods/test.jar")).unwrap(), before);
+    service
+        .execute(
+            R::Copy {
+                id: "world".into(),
+                destination: "copy".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    let copy_game = core.game_directory("copy").unwrap();
+    fs::write(copy_game.join("mods/test.jar"), b"independent").unwrap();
+    assert_eq!(fs::read(game.join("mods/test.jar")).unwrap(), before);
+    service
+        .execute(
+            R::Rename {
+                id: "copy".into(),
+                destination: "renamed".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    assert!(core.metadata("copy").is_err());
+    assert!(core.metadata("renamed").is_ok());
+    service
+        .execute(
+            R::Delete {
+                id: "renamed".into(),
+            },
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    assert!(core.metadata("renamed").is_err());
+    let token = CancellationToken::default();
+    token.cancel();
+    let err = service
+        .execute(
+            R::Delete { id: "world".into() },
+            Some(TaskContext::new(token, Arc::new(|_| {}))),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "cancelled");
+    assert!(core.metadata("world").is_ok());
 }

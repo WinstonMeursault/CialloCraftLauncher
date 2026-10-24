@@ -29,6 +29,7 @@ pub struct TaskSnapshot {
     pub revision: u64,
     pub state: TaskState,
     pub kind: String,
+    pub cancellable: bool,
     pub phase: String,
     pub completed: u64,
     pub total: Option<u64>,
@@ -163,6 +164,12 @@ impl TaskRegistry {
                 .as_mut()
                 .filter(|r| r.snapshot.id == id)
                 .ok_or_else(|| GuiError::new("task_not_found", "Task no longer exists"))?;
+            if r.snapshot.state == TaskState::Running && !r.snapshot.cancellable {
+                return Err(GuiError::new(
+                    "task_not_cancellable",
+                    "This filesystem transaction must finish before closing",
+                ));
+            }
             if r.snapshot.state == TaskState::Running {
                 r.snapshot.state = TaskState::Cancelling;
                 r.snapshot.revision += 1;
@@ -177,6 +184,18 @@ impl TaskRegistry {
     }
     /// The owned worker survives view changes; only explicit cancellation stops it.
     pub fn start<F, Fut>(&self, kind: &str, work: F) -> GuiResult<TaskSnapshot>
+    where
+        F: FnOnce(TaskHandle) -> Fut + Send + 'static,
+        Fut: Future<Output = GuiResult<Value>> + Send + 'static,
+    {
+        self.start_with_cancellation(kind, true, work)
+    }
+    pub fn start_with_cancellation<F, Fut>(
+        &self,
+        kind: &str,
+        cancellable: bool,
+        work: F,
+    ) -> GuiResult<TaskSnapshot>
     where
         F: FnOnce(TaskHandle) -> Fut + Send + 'static,
         Fut: Future<Output = GuiResult<Value>> + Send + 'static,
@@ -196,6 +215,7 @@ impl TaskRegistry {
                 revision: 1,
                 state: TaskState::Running,
                 kind: kind.into(),
+                cancellable,
                 phase: kind.into(),
                 completed: 0,
                 total: None,

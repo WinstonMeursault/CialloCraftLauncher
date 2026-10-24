@@ -207,3 +207,28 @@ fn single_log_is_delivered_while_producer_becomes_idle() {
     registry.cancel(task.id).unwrap();
     assert_eq!(wait_terminal(&registry).state, TaskState::Cancelled);
 }
+
+#[test]
+fn noncancellable_transaction_rejects_cancel_and_reports_real_completion() {
+    let registry = TaskRegistry::new(Arc::new(|_| {}));
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker = release.clone();
+    let started = registry
+        .start_with_cancellation("filesystem", false, move |_| async move {
+            while !worker.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok(json!({"committed":true}))
+        })
+        .unwrap();
+    assert!(!started.cancellable);
+    assert_eq!(
+        registry.cancel(started.id).unwrap_err().code,
+        "task_not_cancellable"
+    );
+    assert_eq!(registry.snapshot().unwrap().state, TaskState::Running);
+    release.store(true, std::sync::atomic::Ordering::Release);
+    let finished = wait_terminal(&registry);
+    assert_eq!(finished.state, TaskState::Succeeded);
+    assert_eq!(finished.result.unwrap()["committed"], true);
+}
