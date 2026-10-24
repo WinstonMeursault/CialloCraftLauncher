@@ -2,6 +2,7 @@
 //! A terminal or WebView is not required by this library.
 pub mod account_service;
 pub mod browser;
+pub mod maintenance;
 pub mod online_service;
 pub mod instance_service;
 mod library;
