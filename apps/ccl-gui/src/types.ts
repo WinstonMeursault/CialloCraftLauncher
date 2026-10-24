@@ -23,6 +23,7 @@ export interface TaskSnapshot {
   id: number
   revision: number
   kind: string
+  cancellable?: boolean
   phase: string
   state: 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled'
   completed: number
@@ -62,7 +63,7 @@ export interface LogText { text: string }
 export interface ImportPreview { path: string; summary: unknown }
 
 export interface InstanceRequest { id: string; minecraft: string; loader: string | null; loader_version: string | null; shared: boolean }
-export interface ImportRequest { id: string; archive: string; include_optional: boolean; replace_modified: boolean; allowed_hosts: string[] }
+export interface ImportRequest { update_existing: boolean; id: string; archive: string; include_optional: boolean; replace_modified: boolean; allowed_hosts: string[] }
 export interface LaunchIdentity { kind: 'offline' | 'microsoft'; username: string | null; account_id: string | null }
 export interface LaunchRequest {
   key: string

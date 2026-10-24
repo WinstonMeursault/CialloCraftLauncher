@@ -7,8 +7,10 @@ import type {
 } from './types'
 import { acceptTaskSnapshot, formatGuiError, newestHistory, redactSensitive, retainBusyManagedEntries, taskIsActive, taskProgress } from './types'
 import { getMessages } from './i18n'
+import { InstanceDetails, Discover } from './Advanced'
+import { MaintenancePanel } from './Maintenance'
 
-type Page = 'library' | 'accounts' | 'tasks' | 'logs' | 'settings'
+type Page = 'library' | 'discover' | 'accounts' | 'tasks' | 'logs' | 'settings'
 type Filter = 'all' | 'managed' | 'vanilla'
 type Modal = 'create' | 'import' | null
 type LaunchIdentityKind = 'offline' | 'microsoft'
@@ -93,6 +95,7 @@ export default function App() {
   const [importId, setImportId] = useState('')
   const [includeOptional, setIncludeOptional] = useState(false)
   const [replaceModified, setReplaceModified] = useState(false)
+  const [updateExisting, setUpdateExisting] = useState(false)
   const [allowedHosts, setAllowedHosts] = useState<string[]>([])
   const [manualHosts, setManualHosts] = useState('')
   const [launchForm, setLaunchForm] = useState<LaunchForm>({ identity: 'offline', username: '', accountId: '', java: '', memory: '', autoInstallJava: true, dryRun: false })
@@ -207,6 +210,34 @@ export default function App() {
     return () => { disposed = true; unlisten?.(); document.removeEventListener('visibilitychange', onVisibility) }
   }, [desktop, loadBootstrap, applyTask, captureError])
 
+
+  const dropState = useRef({working, activeTask, bootstrap})
+  dropState.current = {working, activeTask, bootstrap}
+  useEffect(() => {
+    if (!desktop) return
+    let disposed=false
+    const stops: (()=>void)[]=[]
+    void (async()=>{
+      const drop=await listen<string>('ccl-archive-drop', event=>{
+        const state=dropState.current
+        if (state.working || state.activeTask || !state.bootstrap || state.bootstrap.setup_required) {
+          captureError(languageRef.current==='zh-CN'?'请先完成目录设置并等待当前任务结束，再拖入整合包。':'Finish setup and wait for the current task before dropping a pack.')
+          return
+        }
+        setWorking(true);setError(null);setModal('import');setImportPreview(null)
+        setIncludeOptional(false);setReplaceModified(false);setUpdateExisting(false);setAllowedHosts([]);setManualHosts('')
+        void invoke<ImportPreview>('inspect_dropped',{archive:event.payload}).then(preview=>{
+          if(disposed)return
+          setImportPreview(preview);setImportId(importIdFromPath(preview.path))
+        }).catch(captureError).finally(()=>{if(!disposed)setWorking(false)})
+      })
+      if(disposed){drop();return}stops.push(drop)
+      const error=await listen<string>('ccl-drop-error',()=>captureError(languageRef.current==='zh-CN'?'每次请拖入一个 .zip 或 .mrpack 整合包。':'Drop one .zip or .mrpack archive at a time.'))
+      if(disposed){error();return}stops.push(error)
+    })().catch(captureError)
+    return()=>{disposed=true;stops.forEach(stop=>stop())}
+  },[desktop,captureError])
+
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const update = () => document.documentElement.dataset.theme = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme
@@ -219,7 +250,7 @@ export default function App() {
     const haystack = `${entry.id} ${entry.minecraft} ${entry.loader ?? ''} ${entry.game_directory}`.toLocaleLowerCase()
     return matchesFilter && haystack.includes(query.toLocaleLowerCase().trim())
   })
-  const selected = entries.find(entry => entry.key === selectedKey) ?? entries[0] ?? null
+  const selected = (bootstrap?.entries ?? []).find(entry => entry.key === selectedKey) ?? entries[0] ?? null
   const selectedHistory = history.find(item => item.id === selectedHistoryId) ?? null
 
   const startTask = async (operation: () => Promise<TaskSnapshot>) => {
@@ -309,7 +340,8 @@ export default function App() {
     event.preventDefault()
     if (!importPreview || !importId.trim() || working || activeTask) return
     const requestedHosts = [...new Set([...allowedHosts, ...manualHosts.split(/[\n,]/).map(host => host.trim()).filter(Boolean)])]
-    const request: ImportRequest = { id: importId.trim(), archive: importPreview.path, include_optional: includeOptional, replace_modified: replaceModified, allowed_hosts: requestedHosts }
+    if (updateExisting && !window.confirm(language==='zh-CN' ? `更新实例 ${importId.trim()}？已有整合包文件可能被替换。` : `Update instance ${importId.trim()}? Existing pack files may be replaced.`)) return
+    const request: ImportRequest = { update_existing: updateExisting, id: importId.trim(), archive: importPreview.path, include_optional: includeOptional, replace_modified: replaceModified, allowed_hosts: requestedHosts }
     const result = await startTask(() => invoke<TaskSnapshot>('import_instance', { request }))
     if (result) { setModal(null); setImportPreview(null) }
   }
@@ -468,11 +500,11 @@ export default function App() {
 
   useEffect(() => {
     if (!task || !isTerminal(task)) return
-    if (task.kind.includes('install') || task.kind.includes('import')) void refreshBootstrap()
+    if (['instance','online'].includes(task.kind) || task.kind.includes('install') || task.kind.includes('import')) void refreshBootstrap()
     if (['login', 'refresh'].includes(task.kind)) void loadAccounts()
   }, [task?.id, task?.revision, task?.kind, task?.state, refreshBootstrap, loadAccounts])
 
-  const activePageLabel = page === 'library' ? t.library : page === 'accounts' ? t.accounts : page === 'tasks' ? t.tasks : page === 'logs' ? t.logs : t.settings
+  const activePageLabel = page === 'library' ? t.library : page === 'discover' ? t.discover : page === 'accounts' ? t.accounts : page === 'tasks' ? t.tasks : page === 'logs' ? t.logs : t.settings
   if (!desktop) return <div className="connection-card"><div className="connection-symbol">!</div><h1>{t.notConnected}</h1><p>{t.notConnectedCopy}</p></div>
 
   return <div className="shell">
@@ -480,7 +512,7 @@ export default function App() {
       <div className="brand"><div className="brand-mark" aria-hidden="true">✧</div><div><strong>CCL</strong><small>{t.brand}</small></div></div>
       <nav aria-label={t.brand}>
         <NavItem icon="library" label={t.library} active={page === 'library'} onClick={() => enterPage('library')} />
-        <NavItem icon="compass" label={t.discover} disabled unavailableLabel={t.unavailable} />
+        <NavItem icon="compass" label={t.discover} active={page === 'discover'} disabled={!!bootstrap?.setup_required} onClick={() => enterPage('discover')} />
         <NavItem icon="user" label={t.accounts} active={page === 'accounts'} disabled={!!bootstrap?.setup_required} unavailableLabel={t.setupTitle} onClick={() => enterPage('accounts')} />
         <NavItem icon="tasks" label={t.tasks} active={page === 'tasks'} onClick={() => enterPage('tasks')} />
         <NavItem icon="logs" label={t.logs} active={page === 'logs'} onClick={() => enterPage('logs')} />
@@ -492,19 +524,22 @@ export default function App() {
       <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span><div className="top-actions"><span className="prototype-badge">{t.prototype}</span><button className="locale-switch" onClick={() => setLanguage(language === 'en' ? 'zh-CN' : 'en')}>{language === 'en' ? '简体中文' : 'English'}</button></div></header>
       {error && <div className="alert" role="alert"><strong>{t.error}</strong><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError(null)}>×</button></div>}
       {pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label="Dismiss" onClick={() => setPageNotice(null)}>×</button></div>}
-      {loading || !bootstrap ? <div className="loading" role="status">{t.loading}</div> : bootstrap.setup_required
+      {loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
         ? <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot} />
         : <>
-          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} filter={filter} query={query} setFilter={setFilter} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} loadAccounts={() => void loadAccounts()} />}
+          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} filter={filter} query={query} setFilter={setFilter} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false);setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} loadAccounts={() => void loadAccounts()} />}
+          {page === 'library' && <InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setPage('tasks') }} onChanged={() => void refreshBootstrap()} />}
+          {page === 'discover' && <Discover entries={bootstrap.entries} onSelectEntry={setSelectedKey} language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setPage('tasks') }} onChanged={() => void refreshBootstrap()} />}
           {page === 'accounts' && <AccountsPage t={t} listing={accountListing} storage={accountStorage} working={working} clientId={accountClientId} setClientId={setAccountClientId} openBrowser={openBrowser} setOpenBrowser={setOpenBrowser} refresh={loadAccounts} select={accountSelect} logout={accountLogout} refreshAccount={accountRefresh} checkStorage={checkStorage} signIn={login} activeTask={!!activeTask} task={task} openVerification={openVerification} />}
           {page === 'tasks' && <TasksPage t={t} task={task} history={history} selectedHistory={selectedHistory} selectHistory={setSelectedHistoryId} working={working} requestCancel={setPendingCancel} openVerification={openVerification} />}
           {page === 'logs' && <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={setSelectedKey} runs={runs} selectedRunId={selectedRunId} selectRun={(runId) => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.id ?? null} />}
           {page === 'settings' && <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={!!savedPreferences && !hasUnsavedPreferences} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={bootstrap.launch_defaults.network_offline} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root={bootstrap.root} chooseRoot={chooseRoot} />}
+          {page === 'settings' && <MaintenancePanel language={language} busy={working || !!activeTask} entry={selected} onChanged={() => void loadBootstrap()} onTask={incoming => { applyTask(incoming); setPage('tasks') }} />}
         </>}
     </main>
 
     {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={chooseVersion} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} shared={shared} setShared={setShared} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
-    {modal === 'import' && <ImportModal t={t} preview={importPreview} inspect={inspectImport} id={importId} setId={setImportId} includeOptional={includeOptional} setIncludeOptional={setIncludeOptional} replaceModified={replaceModified} setReplaceModified={setReplaceModified} allowedHosts={allowedHosts} setAllowedHosts={setAllowedHosts} manualHosts={manualHosts} setManualHosts={setManualHosts} working={working || !!activeTask} close={() => setModal(null)} submit={importInstance} />}
+    {modal === 'import' && <ImportModal language={language} updateExisting={updateExisting} setUpdateExisting={setUpdateExisting} t={t} preview={importPreview} inspect={inspectImport} id={importId} setId={setImportId} includeOptional={includeOptional} setIncludeOptional={setIncludeOptional} replaceModified={replaceModified} setReplaceModified={setReplaceModified} allowedHosts={allowedHosts} setAllowedHosts={setAllowedHosts} manualHosts={manualHosts} setManualHosts={setManualHosts} working={working || !!activeTask} close={() => setModal(null)} submit={importInstance} />}
     {pendingCancel && <ConfirmDialog t={t} task={pendingCancel} working={working} cancel={() => setPendingCancel(null)} confirm={confirmCancel} />}
   </div>
 }
@@ -586,8 +621,8 @@ function CreateModal({ t, versions, versionsLoading, versionId, setVersionId, ve
   </ModalFrame>
 }
 
-function ImportModal({ t, preview, inspect, id, setId, includeOptional, setIncludeOptional, replaceModified, setReplaceModified, allowedHosts, setAllowedHosts, manualHosts, setManualHosts, working, close, submit }: {
-  t: ReturnType<typeof getMessages>; preview: ImportPreview | null; inspect: () => void; id: string; setId: (value: string) => void; includeOptional: boolean; setIncludeOptional: (value: boolean) => void; replaceModified: boolean; setReplaceModified: (value: boolean) => void; allowedHosts: string[]; setAllowedHosts: (value: string[]) => void; manualHosts: string; setManualHosts: (value: string) => void; working: boolean; close: () => void; submit: (event: FormEvent) => void
+function ImportModal({ language, updateExisting, setUpdateExisting, t, preview, inspect, id, setId, includeOptional, setIncludeOptional, replaceModified, setReplaceModified, allowedHosts, setAllowedHosts, manualHosts, setManualHosts, working, close, submit }: {
+  language: Language; updateExisting: boolean; setUpdateExisting:(value:boolean)=>void; t: ReturnType<typeof getMessages>; preview: ImportPreview | null; inspect: () => void; id: string; setId: (value: string) => void; includeOptional: boolean; setIncludeOptional: (value: boolean) => void; replaceModified: boolean; setReplaceModified: (value: boolean) => void; allowedHosts: string[]; setAllowedHosts: (value: string[]) => void; manualHosts: string; setManualHosts: (value: string) => void; working: boolean; close: () => void; submit: (event: FormEvent) => void
 }) {
   const wrapper = asRecord(preview?.summary)
   const summary = asRecord(wrapper?.manifest) ?? wrapper
@@ -607,6 +642,7 @@ function ImportModal({ t, preview, inspect, id, setId, includeOptional, setInclu
         <label className="field"><span>{t.name}</span><input required value={id} onChange={event => setId(event.target.value)}/></label>
         <section className="summary-box"><strong>{t.packSummary}</strong>{shortSummary.map(item => <Meta key={item.key} label={item.key} value={item.value}/>)}<details><summary>{t.rawSummary}</summary><pre>{rawSummary.slice(0, 8000)}</pre></details></section>
         <label className="check-row"><input type="checkbox" checked={includeOptional} onChange={event => setIncludeOptional(event.target.checked)}/>{t.includeOptional}</label>
+        <label className="check-row"><input type="checkbox" checked={updateExisting} onChange={event => setUpdateExisting(event.target.checked)}/>{language==='zh-CN'?'更新已有实例（默认新建；更新前会确认）':'Update an existing instance (creates new by default; confirmation required)'}</label>
         <label className="check-row"><input type="checkbox" checked={replaceModified} onChange={event => setReplaceModified(event.target.checked)}/>{t.replaceModified}</label>
         {hosts.length > 0 && <fieldset className="host-list"><legend>{t.allowedHosts}</legend>{[...new Set(hosts)].map(host => <label className="check-row" key={host}><input type="checkbox" checked={allowedHosts.includes(host)} onChange={event => setAllowedHosts(event.target.checked ? [...allowedHosts, host] : allowedHosts.filter(item => item !== host))}/>{host}</label>)}</fieldset>}
         <label className="field"><span>{t.manualHosts}</span><textarea rows={2} value={manualHosts} onChange={event => setManualHosts(event.target.value)} placeholder="cdn.example.org"/></label>
@@ -642,8 +678,8 @@ function TasksPage({ t, task, history, selectedHistory, selectHistory, working, 
   return <>
     <PageHeading eyebrow={t.tasks} title={t.taskIntro} description={t.noTaskCopy}/>
     <section className="task-panel">
-      <div className="task-panel-head"><div className="task-glyph"><Icon name="tasks"/></div><div className="task-title"><strong>{focus ? `${focus.kind} · ${t.state[focus.state]}` : t.noTask}</strong><span>{focus ? `#${focus.id} · ${focus.phase}` : t.noTaskCopy}</span></div>{active && task && <button className="button danger" onClick={() => requestCancel(task)} disabled={working || task.state === 'cancelling'}>{task.kind === 'launch' ? t.stopGameTitle : t.cancel}</button>}</div>
-      {focus && <div className="task-progress"><div className="progress-label"><span>{t.progress}: {progress === null ? t.totalUnknown : `${Math.round(progress)}%`}</span><span>{focus.total === null ? t.totalUnknown : `${focus.completed.toLocaleString()} / ${focus.total.toLocaleString()}`}</span></div>{progress !== null && <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }}/></div>}{focus.error && <p className="task-error">{focus.error_code ? `${focus.error_code}: ` : ''}{focus.error}</p>}{focus.pid !== null && <p className="task-meta">{t.pid}: {focus.pid}</p>}{focus.authorization && <div className="authorization-inline"><strong>{t.userCode}: {focus.authorization.user_code}</strong><span>{t.verification}: {focus.authorization.verification_uri} · {focus.authorization.expires_in}s</span><button className="button secondary" onClick={() => openVerification(focus.id)} disabled={working || focus.kind !== 'login' || focus.state !== 'running'}>{t.openVerification}</button></div>}</div>}
+      <div className="task-panel-head"><div className="task-glyph"><Icon name="tasks"/></div><div className="task-title"><strong>{focus ? `${focus.kind} · ${t.state[focus.state]}` : t.noTask}</strong><span>{focus ? `#${focus.id} · ${focus.phase}` : t.noTaskCopy}</span></div>{active && task && <button className="button danger" onClick={() => requestCancel(task)} disabled={working || task.state === 'cancelling' || task.cancellable === false}>{task.kind === 'launch' ? t.stopGameTitle : t.cancel}</button>}</div>
+      {focus && <div className="task-progress"><div className="progress-label"><span>{t.progress}: {progress === null ? t.totalUnknown : `${Math.round(progress)}%`}</span><span>{focus.total === null ? t.totalUnknown : `${focus.completed.toLocaleString()} / ${focus.total.toLocaleString()}`}</span></div>{progress !== null && <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }}/></div>}{focus.error && <p className="task-error">{focus.error_code ? `${focus.error_code}: ` : ''}{focus.error}</p>}{focus.pid !== null && <p className="task-meta">{t.pid}: {focus.pid}</p>}{focus.authorization && <div className="authorization-inline"><strong>{t.userCode}: {focus.authorization.user_code}</strong><button className="button secondary" onClick={() => { void navigator.clipboard.writeText(focus.authorization?.user_code ?? '').catch(() => window.alert(t.userCode + ': ' + (focus.authorization?.user_code ?? ''))) }}>{t.userCode} ⧉</button><span>{t.verification}: {focus.authorization.verification_uri} · {focus.authorization.expires_in}s</span><button className="button secondary" onClick={() => openVerification(focus.id)} disabled={working || focus.kind !== 'login' || focus.state !== 'running'}>{t.openVerification}</button></div>}</div>}
       {prepared && <section className="prepared-plan"><strong>{t.dryRun}</strong><pre>{JSON.stringify(redactSensitive(prepared), null, 2)}</pre></section>}
       {focus && focus.result !== null && !prepared && <details className="task-result"><summary>{t.result}</summary><pre>{JSON.stringify(redactSensitive(focus.result), null, 2)}</pre></details>}
       {focus && <div className="log-wrap"><div className="log-heading"><strong>{t.logHeading}</strong><span>{logs.length} / 100</span></div><pre className="log-view">{logs.length ? logs.join('\n') : t.noLogs}</pre></div>}
