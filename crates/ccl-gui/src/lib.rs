@@ -1,11 +1,14 @@
 //! Toolkit-independent desktop adapter. No terminal, WebView, or credential access.
+pub mod account_service;
+pub mod browser;
 mod library;
+pub mod operations;
 mod preferences;
 mod tasks;
 
-pub use library::{Bootstrap, LibraryEntry, bootstrap};
+pub use library::{Bootstrap, LibraryEntry, bootstrap, initialize_root};
 pub use preferences::{Preferences, PreferencesStore, Theme};
-pub use tasks::{TaskRegistry, TaskSnapshot, TaskState};
+pub use tasks::{TaskHandle, TaskRegistry, TaskSnapshot, TaskState};
 
 use serde::Serialize;
 

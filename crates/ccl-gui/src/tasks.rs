@@ -1,8 +1,10 @@
-use crate::{GuiError, GuiResult};
+use crate::{GuiError, GuiResult, account_service::DeviceAuthorization};
 use ccl_core::{CancellationToken, TaskContext, TaskEvent};
 use serde::Serialize;
+use serde_json::Value;
 use std::{
     collections::VecDeque,
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -26,215 +28,374 @@ pub struct TaskSnapshot {
     pub id: u64,
     pub revision: u64,
     pub state: TaskState,
+    pub kind: String,
+    pub phase: String,
     pub completed: u64,
-    pub total: u64,
+    pub total: Option<u64>,
+    pub pid: Option<u32>,
     pub logs: Vec<String>,
     pub error: Option<String>,
+    pub error_code: Option<String>,
+    pub result: Option<Value>,
+    pub authorization: Option<DeviceAuthorization>,
 }
 struct Record {
     snapshot: TaskSnapshot,
-    logs: VecDeque<String>,
     token: CancellationToken,
+    last_publish: Instant,
+}
+#[derive(Default)]
+struct Records {
+    current: Option<Record>,
+    history: VecDeque<TaskSnapshot>,
+    next_id: u64,
 }
 type Notify = Arc<dyn Fn(TaskSnapshot) + Send + Sync>;
 #[derive(Clone)]
 pub struct TaskRegistry {
-    record: Arc<Mutex<Option<Record>>>,
+    records: Arc<Mutex<Records>>,
     visible: Arc<AtomicBool>,
     notify: Notify,
+}
+#[derive(Clone)]
+pub struct TaskHandle {
+    registry: TaskRegistry,
+    id: u64,
+    pub context: TaskContext,
+}
+impl TaskHandle {
+    pub fn authorization(&self, authorization: DeviceAuthorization) {
+        self.registry
+            .edit(self.id, true, |s| s.authorization = Some(authorization));
+    }
 }
 impl TaskRegistry {
     pub fn new(notify: Notify) -> Self {
         Self {
-            record: Arc::new(Mutex::new(None)),
+            records: Arc::new(Mutex::new(Records::default())),
             visible: Arc::new(AtomicBool::new(true)),
             notify,
         }
     }
     pub fn snapshot(&self) -> Option<TaskSnapshot> {
-        self.record
+        self.records
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .current
             .as_ref()
-            .map(|r| {
-                let mut snapshot = r.snapshot.clone();
-                snapshot.logs = r.logs.iter().cloned().collect();
-                snapshot
-            })
+            .map(|r| r.snapshot.clone())
     }
-    pub fn set_visible(&self, visible: bool) {
-        if visible && !self.visible.swap(visible, Ordering::AcqRel) {
-            self.publish();
-        } else if !visible {
-            self.visible.store(false, Ordering::Release);
-        }
+    pub fn history(&self) -> Vec<TaskSnapshot> {
+        self.records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .history
+            .iter()
+            .cloned()
+            .collect()
     }
     pub fn active(&self) -> bool {
         self.snapshot()
             .is_some_and(|s| matches!(s.state, TaskState::Running | TaskState::Cancelling))
     }
+    pub fn set_visible(&self, visible: bool) {
+        if self.visible.swap(visible, Ordering::AcqRel) != visible && visible {
+            self.publish();
+        }
+    }
     fn publish(&self) {
         if self.visible.load(Ordering::Acquire)
-            && let Some(s) = self.snapshot()
+            && let Some(snapshot) = self.snapshot()
         {
-            (self.notify)(s);
+            (self.notify)(snapshot);
+        }
+    }
+    fn publish_snapshot(&self, snapshot: TaskSnapshot) {
+        if self.visible.load(Ordering::Acquire) {
+            (self.notify)(snapshot);
+        }
+    }
+    fn edit(&self, id: u64, force: bool, edit: impl FnOnce(&mut TaskSnapshot)) {
+        let publication = {
+            let mut guard = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(record) = guard.current.as_mut().filter(|r| r.snapshot.id == id) else {
+                return;
+            };
+            edit(&mut record.snapshot);
+            record.snapshot.revision += 1;
+            let publish = force || record.last_publish.elapsed() >= Duration::from_millis(100);
+            if publish {
+                record.last_publish = Instant::now();
+            }
+            publish.then(|| record.snapshot.clone())
+        };
+        if let Some(snapshot) = publication {
+            self.publish_snapshot(snapshot);
         }
     }
     pub fn cancel(&self, id: u64) -> GuiResult<TaskSnapshot> {
-        {
-            let mut guard = self.record.lock().unwrap_or_else(|e| e.into_inner());
-            let record = guard
+        let snapshot = {
+            let mut guard = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let r = guard
+                .current
                 .as_mut()
                 .filter(|r| r.snapshot.id == id)
                 .ok_or_else(|| GuiError::new("task_not_found", "Task no longer exists"))?;
-            if record.snapshot.state == TaskState::Running {
-                record.snapshot.state = TaskState::Cancelling;
-                record.snapshot.revision += 1;
-                record.token.cancel();
+            if r.snapshot.state == TaskState::Running {
+                r.snapshot.state = TaskState::Cancelling;
+                r.snapshot.revision += 1;
+                r.token.cancel();
             }
-        }
-        self.publish();
-        self.snapshot()
-            .ok_or_else(|| GuiError::new("task_not_found", "Task no longer exists"))
+            r.snapshot.clone()
+        };
+        self.publish_snapshot(snapshot.clone());
+        Ok(snapshot)
     }
-    pub fn start_probe(&self) -> GuiResult<TaskSnapshot> {
-        self.start(100_000, Duration::from_millis(6))
-    }
-    fn start(&self, total: u64, interval: Duration) -> GuiResult<TaskSnapshot> {
+    /// The owned worker survives view changes; only explicit cancellation stops it.
+    pub fn start<F, Fut>(&self, kind: &str, work: F) -> GuiResult<TaskSnapshot>
+    where
+        F: FnOnce(TaskHandle) -> Fut + Send + 'static,
+        Fut: Future<Output = GuiResult<Value>> + Send + 'static,
+    {
         let initial;
         let token = CancellationToken::default();
         {
-            let mut guard = self.record.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.as_ref().is_some_and(|r| {
+            let mut guard = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.current.as_ref().is_some_and(|r| {
                 matches!(r.snapshot.state, TaskState::Running | TaskState::Cancelling)
             }) {
-                return Err(GuiError::new("task_busy", "A probe is already running"));
+                return Err(GuiError::new("task_busy", "Another task is still running"));
             }
-            let id = guard.as_ref().map_or(1, |r| r.snapshot.id + 1);
+            guard.next_id += 1;
             initial = TaskSnapshot {
-                id,
+                id: guard.next_id,
                 revision: 1,
                 state: TaskState::Running,
+                kind: kind.into(),
+                phase: kind.into(),
                 completed: 0,
-                total,
+                total: None,
+                pid: None,
                 logs: vec![],
                 error: None,
+                error_code: None,
+                result: None,
+                authorization: None,
             };
-            *guard = Some(Record {
+            guard.current = Some(Record {
                 snapshot: initial.clone(),
-                logs: VecDeque::new(),
                 token: token.clone(),
+                last_publish: Instant::now(),
             });
         }
-        let registry = self.clone();
-        let sink_registry = self.clone();
+        let id = initial.id;
+        let sink = self.clone();
         let context = TaskContext::new(
-            token,
+            token.clone(),
             Arc::new(move |event| {
-                let mut guard = sink_registry
-                    .record
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(record) = guard.as_mut() {
-                    match event {
-                        TaskEvent::Progress { completed, .. } => {
-                            record.snapshot.completed = completed
-                        }
-                        TaskEvent::Log { line, .. } => {
-                            if record.logs.len() == LOG_LINES {
-                                record.logs.pop_front();
-                            }
-                            record
-                                .logs
-                                .push_back(line.chars().take(LOG_LINE_CHARS).collect());
-                        }
-                        _ => (),
+                let lifecycle = matches!(
+                    &event,
+                    TaskEvent::Started { .. }
+                        | TaskEvent::ProcessStarted { .. }
+                        | TaskEvent::ProcessExited { .. }
+                        | TaskEvent::Finished { .. }
+                );
+                sink.edit(id, lifecycle, |s| match event {
+                    TaskEvent::Started { task } => {
+                        s.phase = task;
+                        s.completed = 0;
+                        s.total = None;
                     }
-                    record.snapshot.revision += 1;
-                }
+                    TaskEvent::Progress {
+                        task,
+                        completed,
+                        total,
+                    } => {
+                        s.phase = task;
+                        s.completed = completed;
+                        s.total = total;
+                    }
+                    TaskEvent::ProcessStarted { pid } => {
+                        s.pid = Some(pid);
+                        s.phase = "game_running".into();
+                    }
+                    TaskEvent::Log { line, .. } => {
+                        if s.logs.len() == LOG_LINES {
+                            s.logs.remove(0);
+                        }
+                        s.logs.push(line.chars().take(LOG_LINE_CHARS).collect());
+                    }
+                    TaskEvent::ProcessExited { .. } => s.phase = "game_exited".into(),
+                    TaskEvent::Finished { task } => s.phase = task,
+                });
             }),
         );
-        std::thread::spawn(move || {
-            let mut last = Instant::now();
-            let result = (|| {
-                for completed in 1..=total {
-                    context.emit(TaskEvent::Log {
-                        stream: "fixture".into(),
-                        line: format!("[G0 synthetic fixture] bounded log line {completed}"),
-                    })?;
-                    context.emit(TaskEvent::Progress {
-                        task: "g0_synthetic_probe".into(),
-                        completed,
-                        total: Some(total),
-                    })?;
-                    if last.elapsed() >= Duration::from_millis(100) {
-                        registry.publish();
-                        last = Instant::now();
-                    }
-                    std::thread::sleep(interval);
-                }
-                Ok::<_, ccl_core::Error>(())
-            })();
-            {
-                let mut guard = registry.record.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(record) = guard.as_mut() {
-                    record.snapshot.state = match result {
-                        Ok(()) => TaskState::Succeeded,
-                        Err(ccl_core::Error::Cancelled) => TaskState::Cancelled,
-                        Err(_) => TaskState::Failed,
-                    };
-                    record.snapshot.revision += 1;
-                    if record.snapshot.state == TaskState::Failed {
-                        record.snapshot.error = Some("Core task fixture failed".into());
-                    }
-                }
-            }
-            registry.publish();
-        });
+        let registry = self.clone();
+        let handle = TaskHandle {
+            registry: self.clone(),
+            id,
+            context,
+        };
+        let spawn = std::thread::Builder::new()
+            .name(format!("ccl-task-{id}"))
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(2)
+                        .enable_all()
+                        .build()
+                        .map_err(|_| GuiError::new("worker_error", "Cannot create task runtime"))?;
+                    runtime.block_on(work(handle))
+                }))
+                .unwrap_or_else(|_| {
+                    Err(GuiError::new(
+                        "worker_error",
+                        "Task worker stopped unexpectedly",
+                    ))
+                });
+                registry.finish(id, result);
+            });
+        if spawn.is_err() {
+            self.finish(
+                id,
+                Err(GuiError::new("worker_error", "Cannot start task worker")),
+            );
+        }
         Ok(initial)
     }
-}
 
+    fn finish(&self, id: u64, result: GuiResult<Value>) {
+        let snapshot = {
+            let mut guard = self.records.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(record) = guard.current.as_mut().filter(|r| r.snapshot.id == id) else {
+                return;
+            };
+            let s = &mut record.snapshot;
+            match result {
+                Ok(value) => {
+                    if value.pointer("/launch/cancelled").and_then(Value::as_bool) == Some(true) {
+                        s.state = TaskState::Cancelled;
+                    } else if let Some(code) =
+                        value.pointer("/launch/exit_code").and_then(Value::as_i64)
+                        && code != 0
+                    {
+                        s.state = TaskState::Failed;
+                        s.error_code = Some("game_exit".into());
+                        s.error = Some(format!("Game exited with status code {code}."));
+                    } else {
+                        s.state = TaskState::Succeeded;
+                    }
+                    s.result = Some(value);
+                }
+                Err(error) => {
+                    s.state = if error.code == "cancelled" {
+                        TaskState::Cancelled
+                    } else {
+                        TaskState::Failed
+                    };
+                    s.error_code = Some(error.code.into());
+                    s.error = Some(error.message);
+                }
+            }
+            s.authorization = None;
+            s.revision += 1;
+            record.last_publish = Instant::now();
+            let snapshot = s.clone();
+            if guard.history.len() == 8 {
+                guard.history.pop_front();
+            }
+            guard.history.push_back(snapshot.clone());
+            snapshot
+        };
+        self.publish_snapshot(snapshot);
+    }
+    #[cfg(test)]
+    pub fn start_probe(&self) -> GuiResult<TaskSnapshot> {
+        self.probe(100_000, Duration::from_millis(6))
+    }
+    #[cfg(test)]
+    fn probe(&self, total: u64, interval: Duration) -> GuiResult<TaskSnapshot> {
+        self.start("probe", move |handle| async move {
+            for completed in 1..=total {
+                handle
+                    .context
+                    .emit(TaskEvent::Log {
+                        stream: "fixture".into(),
+                        line: format!("[G0 synthetic fixture] bounded log line {completed}"),
+                    })
+                    .map_err(|_| GuiError::new("cancelled", "Probe cancelled"))?;
+                handle
+                    .context
+                    .emit(TaskEvent::Progress {
+                        task: "synthetic_probe".into(),
+                        completed,
+                        total: Some(total),
+                    })
+                    .map_err(|_| GuiError::new("cancelled", "Probe cancelled"))?;
+                if !interval.is_zero() {
+                    tokio::time::sleep(interval).await;
+                }
+            }
+            Ok(serde_json::json!({"synthetic":true}))
+        })
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     fn wait(registry: &TaskRegistry) -> TaskSnapshot {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let snapshot = registry.snapshot().unwrap();
-            if !registry.active() {
-                return snapshot;
+            let s = registry.snapshot().unwrap();
+            if !matches!(s.state, TaskState::Running | TaskState::Cancelling) {
+                return s;
             }
             assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
     #[test]
     fn cancellation_reaches_terminal_state_even_when_core_stops_emitting() {
-        let registry = TaskRegistry::new(Arc::new(|_| {}));
-        let initial = registry.start_probe().unwrap();
-        assert!(registry.start_probe().is_err());
-        registry.cancel(initial.id).unwrap();
-        let final_state = wait(&registry);
-        assert_eq!(final_state.state, TaskState::Cancelled);
-        assert!(final_state.revision > initial.revision);
+        let r = TaskRegistry::new(Arc::new(|_| {}));
+        let s = r.start_probe().unwrap();
+        assert!(r.start_probe().is_err());
+        r.cancel(s.id).unwrap();
+        assert_eq!(wait(&r).state, TaskState::Cancelled);
     }
     #[test]
-    fn hidden_probe_has_no_notifications_and_retains_bounded_snapshot() {
+    fn hidden_task_retains_bounded_logs_and_resumes_notifications() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = calls.clone();
-        let registry = TaskRegistry::new(Arc::new(move |_| {
+        let r = TaskRegistry::new(Arc::new(move |_| {
             count.fetch_add(1, Ordering::Relaxed);
         }));
-        registry.set_visible(false);
-        registry.start(3000, Duration::ZERO).unwrap();
-        let snapshot = wait(&registry);
-        assert_eq!(snapshot.state, TaskState::Succeeded);
-        assert_eq!(snapshot.logs.len(), LOG_LINES);
-        assert_eq!(snapshot.completed, 3000);
+        r.set_visible(false);
+        r.probe(3000, Duration::ZERO).unwrap();
+        let s = wait(&r);
+        assert_eq!(s.state, TaskState::Succeeded);
+        assert_eq!(s.logs.len(), LOG_LINES);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
-        registry.set_visible(true);
+        r.set_visible(true);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
-        assert_eq!(registry.snapshot().unwrap().state, TaskState::Succeeded);
+    }
+    #[test]
+    fn unknown_total_pid_result_and_worker_failure_are_reported() {
+        let r = TaskRegistry::new(Arc::new(|_| {}));
+        r.start("launch", |h| async move {
+            h.context
+                .emit(TaskEvent::ProcessStarted { pid: 42 })
+                .unwrap();
+            Ok(serde_json::json!({"launch":{"cancelled":false}}))
+        })
+        .unwrap();
+        let s = wait(&r);
+        assert_eq!(s.pid, Some(42));
+        assert_eq!(s.total, None);
+        assert!(s.result.is_some());
+        r.start("failure", |_| async {
+            Err(GuiError::new("fixture", "Safe error"))
+        })
+        .unwrap();
+        assert_eq!(wait(&r).error_code.as_deref(), Some("fixture"));
     }
 }

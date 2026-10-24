@@ -4,6 +4,7 @@
 
 - [CLI 命令](#cli)
 - [JSON 输出](#output)
+- [桌面适配器（alpha）](#desktop)
 - [核心服务索引](#core)
 - [事件、取消与错误](#tasks)
 - [在线内容契约](#online-contract)
@@ -71,6 +72,28 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 `launch` 记录包含 `run_id`、`version`、`pid`、`exit_code`、`cancelled`、`log_path`、`started_at_ms`、`finished_at_ms`。`logs` 通过 `log` 返回文本。操作流程及配置见[使用指南](user-guide.zh-CN.md)。
 
+<a id="desktop"></a>
+
+## 桌面适配器（alpha）
+
+可选 Tauri 桌面适配器为 `ccl-gui` `0.2.0-alpha.1`，不包含在 CLI 发行归档中。它仍在进行验证；本节说明当前源码接口，不代表已完成跨平台发行。通过 Tauri 的 `invoke` API 调用命令。命令返回类型化数据，错误序列化为 `{ "code": "...", "message": "..." }`。
+
+| 命令 | 用途 |
+| --- | --- |
+| `bootstrap`、`initialize_root`、`select_root` | 解析建议/已选根目录、明确确认并创建根目录，或通过系统目录选择器选取已有目录。只有 `initialize_root` 会创建缺失目录。 |
+| `save_preferences`、`set_network_offline` | 保存 GUI 外观偏好，或在共享核心配置中持久化 `downloads.offline`。 |
+| `list_versions`、`list_loaders`、`install_instance` | 查询版本/加载器，并启动原版/共享安装或托管加载器实例安装。 |
+| `inspect_import`、`import_instance` | 选择并检查受支持的本地归档，再将其导入为托管实例。 |
+| `launch_game`、`log_runs`、`read_run_log` | 启动所选项目，读取实时或已保存的运行日志。 |
+| `account_list`、`account_select`、`account_logout`、`account_login`、`account_refresh`、`account_check_storage`、`open_login_browser` | 列出/管理已保存账户，运行实验性的设备码登录和刷新，检查系统凭据库，或打开经过校验的验证 URI。 |
+| `cancel_task`、`task_snapshot`、`task_history`、`set_visibility` | 取消活动任务、读取当前/历史快照，或在窗口隐藏时控制事件通知。 |
+
+长时间操作会返回 `TaskSnapshot`，字段包括 `id`、单调递增的 `revision`、`state`、`kind`、`phase`、进度、可选 PID、有界 `logs`、安全的 `error`/`error_code`、可选结果和可选 `authorization`。授权信息仅包含 `user_code`、`verification_uri` 和 `expires_in`；设备码和账户令牌留在 Rust 内。`gui-task` 事件会发送任务快照。接收方应忽略比已处理 `(id, revision)` 更旧的快照。一次只运行一个任务；切换页面不会取消任务。最多保留八个已完成快照。后端最多保存 1,000 行任务日志，每行最多 512 个字符；任务页面显示最近 100 行。非生命周期进度/日志通知最多每秒 10 次。安装/导入取消采用协作方式；停止游戏是单独确认的操作。生产任务页面显示已接入的工作，不包含合成探针。
+
+GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI 共用的核心 `downloads.offline` 设置。GUI 偏好设置使用独立 `gui.json`；账户元数据保存在核心配置旁，令牌使用操作系统凭据库。参阅[桌面 alpha 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-preview)。
+
+已保存日志每次最多读取末尾 1 MiB，保留最多 1,000 行，每行最多 8,192 字符，并返回 `truncated`。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例／导入在实例锁内拒绝已有 ID；共享原版安装可校验和修复已有版本。
+
 <a id="core"></a>
 
 ## 核心服务索引
@@ -86,12 +109,12 @@ cargo doc -p ccl-core --no-deps --open
 | `config::ConfigStore` | `get / set / reset / update` | 校验并在跨进程锁内更新设置 |
 | `install::InstallService` | `list_versions / list_versions_for / install` | 版本清单、按根目录的离线缓存、原版安装 |
 | `loaders::LoaderService` | `versions / install` | 加载器元数据及安装 |
-| `instances::InstanceService` | `list / metadata / install / acquire_launch / rollback / uninstall_loader` | 托管实例及启动锁守卫 |
+| `instances::InstanceService` | `list / metadata / install / install_vanilla / install_new_loader / acquire_launch / rollback / uninstall_loader` | 托管实例及启动锁守卫 |
 | `instances::InstanceService` | `rename / duplicate / delete / history / restore_revision / disk_usage / cleanup` | 生命周期、保留修订版及清理 |
 | `launch::LaunchService` | `prepare / launch` | Java 选择、校验准备及进程编排 |
 | `launch` | `list_installed_versions / read_logs` | 已安装原版版本及日志 |
-| `modpacks::ModpackService` | `inspect / show / import / export` | Modrinth 归档及所有权收据 |
-| `import_formats::ImportFormatService` | `inspect / import` | CurseForge、MultiMC/Prism 转换 |
+| `modpacks::ModpackService` | `inspect / show / import / import_new / export` | Modrinth 归档及所有权收据 |
+| `import_formats::ImportFormatService` | `inspect / import / import_new` | CurseForge、MultiMC/Prism 转换 |
 | `content::ContentService` | `list / add / remove / set_enabled / backup / restore` | 本地内容及可移植用户数据备份 |
 | `online_content::OnlineContentService` | `search / versions / install_project / install_versions / updates_for_instance / analyze_instance / download_and_import_pack` | 平台内容、依赖解析及事务 |
 | `auth::MicrosoftAuth` | `begin_device_login / complete_device_login / refresh / launch_identity` | 设备授权及启动身份 |

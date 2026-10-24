@@ -549,13 +549,17 @@ version = "0.2.0-alpha.1"
 dependencies = [
  "ccl-core",
  "fs2",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tempfile",
+ "tokio",
+ "zip",
 ]
 
 [[package]]

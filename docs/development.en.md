@@ -4,7 +4,7 @@
 
 - [Environment](#environment)
 - [Build and run](#build)
-- [GUI G0 preview](#gui-preview)
+- [GUI alpha preview](#gui-preview)
 - [Architecture and workspace](#architecture)
 - [Code boundaries](#boundaries)
 - [Configuration and data directories](#data)
@@ -45,19 +45,19 @@ User workflows are in the [user guide](user-guide.en.md); commands, output and c
 
 <a id="gui-preview"></a>
 
-## GUI G0 preview
+## GUI alpha preview
 
-The current GUI work is the G0 prototype on branch `codex/gui-g0`; validation is still in progress as of 2026-10-24. The commands here describe the intended local checks, not a passing result. The `ccl-gui` crate is version `0.2.0-alpha.1`; this alpha adapter version does not change `ccl-core` or `ccl-cli` from `0.1.0`, and it does not mean the 0.2 product feature set is complete.
+The desktop adapter is `ccl-gui` version `0.2.0-alpha.1`; `ccl-core` and `ccl-cli` remain `0.1.0`. This is an alpha adapter, not completion of the 0.2 product scope. Validation is in progress as of 2026-10-24. The desktop app is not included in the CLI release archives, and the three platform targets describe build intent rather than completed validation.
 
-`crates/ccl-gui` is a Rust adapter/library with `default = []`. Its optional `desktop` feature enables Tauri 2 and the desktop binary. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The CLI and default Rust builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
+`crates/ccl-gui` is a Rust adapter/library with `default = []`; its optional `desktop` feature enables Tauri 2. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The CLI and default Rust builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
 
-G0 reads shared vanilla versions and managed instances through `ccl-core`, and lets the user select an existing game root with the native directory picker. It saves only GUI preferences (`theme`, `language`, and selected root) to its separate `gui.json`; the available themes are system, light, and dark, and the languages are English and Simplified Chinese. A missing game root is resolved for display but is not created. Saving preferences or choosing a root creates/updates GUI preference files. When a selected root already has managed instances, core instance listing may acquire locks or recover an interrupted transaction, so startup is not guaranteed to be read-only on an existing game directory.
+The app requires a confirmed game root before opening the library. The setup screen can choose a directory with the native picker or confirm the proposed directory; only confirmation creates a missing directory. Existing roots and managed instances are reused. Vanilla and managed instances can be created, including shared vanilla installs and managed instances with supported loaders. A native file picker inspects supported Modrinth, CurseForge, and MultiMC/Prism archives before import. Launch accepts an offline profile or a saved Microsoft account, with Java path, memory, managed Java installation, and dry-run controls.
 
-The task page is a synthetic `TaskContext` probe only. It exercises progress, logs, single-task busy handling, cancellation, and bounded history (up to 1,000 stored lines, each capped at 512 characters); it does not connect game launch, downloads, accounts, or updater operations to the GUI. Discover, Accounts, Logs, and Launch remain unavailable in this prototype.
+Microsoft account login is experimental. The adapter requests the OS credential vault check before login and stores tokens only through the OS vault; account metadata is kept in `accounts.json` beside the core config. Linux needs an unlocked Secret Service available through the session D-Bus. The GUI never returns device or access tokens to the frontend. The task page shows at most one active task and the eight most recent completed snapshots. Backend task logs are capped at 1,000 lines of 512 characters; the task view shows the latest 100. Progress and log notifications are throttled to 10 per second, with lifecycle updates sent immediately. Install/import work can be cancelled cooperatively; stopping a game is a separate confirmed action. The task registry continues running if the user changes pages. The app asks before closing during active work and on a second launch raises the existing window. Live and saved game logs are available on the Logs page. Production tasks come from connected operations; the synthetic task probe is test-only.
 
-Use `CCL_GUI_DATA_DIR` and `CCL_GUI_CONFIG_PATH` to point tests at disposable GUI-data and configuration paths. `CCL_GUI_GAME_DIR` pins the game root; while it is set, the GUI rejects requests to change the root. Unset it when testing the native root picker. The normal startup path does not create a missing game directory.
+GUI appearance preferences (`theme`, `language`, and selected root) live in a separate `gui.json`. The network-offline switch is different: it updates and persists the core `downloads.offline` setting in the shared launcher config, so CLI and GUI observe the same value. Offline player identity is a launch choice and does not disable networking. `CCL_GUI_DATA_DIR` selects GUI preference data, `CCL_GUI_CONFIG_PATH` selects the shared core config, and `CCL_GUI_GAME_DIR` pins the game root and disables root changes. Use distinct temporary values for tests. Reading an existing library may acquire instance locks or recover an interrupted instance transaction.
 
-### Build and check the desktop prototype
+### Build and check the desktop alpha
 
 From the repository root, with Node 24, pnpm 11.25.0, Rust, and the target's native dependencies installed:
 
@@ -71,7 +71,7 @@ cargo test -p ccl-gui --locked
 cargo run -p ccl-gui --features desktop --release --locked
 ```
 
-The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.yml` runs this Node test before building the frontend. The workflow also runs workspace formatting, the default-feature adapter tests, desktop Clippy, and an optimized desktop build on Windows x64, macOS arm64, and Linux x86_64. Its Linux job installs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, and `patchelf`. Tauri uses the system WebView2 on Windows, WKWebView on macOS, and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/). These upstream prerequisites do not establish CCL's minimum supported OS versions, which have not yet been validated.
+The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs workspace formatting, adapter tests, desktop Clippy, and an optimized desktop build on Windows x64, macOS arm64, and Linux x86_64. These jobs are validation work in progress, not a claim that all desktop targets or game launches have passed. The Linux job installs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, and `patchelf`. Tauri uses WebView2 on Windows, WKWebView on macOS, and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/). CCL's minimum supported OS versions and full platform behavior are not yet validated.
 
 <a id="architecture"></a>
 
@@ -79,7 +79,7 @@ The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.ym
 
 ### Goals
 
-CialloCraftLauncher started with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and the current G0 desktop prototype call the same core services. The core does not depend on either interface, so the prototype can grow without moving business logic into the UI layer.
+CialloCraftLauncher started with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and the current desktop alpha call the same core services. The core does not depend on either interface, so desktop features can grow without moving business logic into the UI layer.
 
 Initial target platforms:
 
@@ -91,7 +91,7 @@ Initial target platforms:
 
 - `crates/ccl-core`: shared services, configuration, errors, HTTP transport, task events, installation, Java discovery, and launch orchestration.
 - `crates/ccl-cli`: command-line arguments, text or JSON output, exit codes, and calls into the core.
-- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and G0 React/TypeScript/Vite frontend; see [GUI G0 preview](#gui-preview) for current scope and checks.
+- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and React/TypeScript/Vite frontend; see [GUI alpha preview](#gui-preview) for current scope and checks.
 - `docs`: public documentation for users and contributors.
 
 The core reports progress through task contexts and provides a cooperative cancellation handle. An interface displays events and collects input; the core performs work, validates configuration, and returns structured errors. The core must not depend on an interface.
@@ -100,7 +100,7 @@ The core reports progress through task contexts and provides a cooperative cance
 
 ## Code boundaries
 
-`loaders`, `instance`, and `launch --instance` reuse the same core services as a future GUI. `modpack_format` owns Modrinth archive parsing, validation, and writing; `import_formats` detects CurseForge and MultiMC/Prism archives and converts supported inputs through the transactional pack pipeline; `modpacks` coordinates import/export and ownership receipts; `content` manages local files and userdata backups. Online provider integrations live in `online_content`. Pack imports and content edits use the same staged instance transaction and cross-process lock as instance changes. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout. NeoForge SHA-512 fallback verifies installer bytes before the install pipeline derives its SHA-1 value.
+`loaders`, `instance`, and `launch --instance` reuse the same core services in the CLI and desktop alpha. `modpack_format` owns Modrinth archive parsing, validation, and writing; `import_formats` detects CurseForge and MultiMC/Prism archives and converts supported inputs through the transactional pack pipeline; `modpacks` coordinates import/export and ownership receipts; `content` manages local files and userdata backups. Online provider integrations live in `online_content`. Pack imports and content edits use the same staged instance transaction and cross-process lock as instance changes. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout. NeoForge SHA-512 fallback verifies installer bytes before the install pipeline derives its SHA-1 value.
 
 - Put reusable domain logic in `crates/ccl-core`.
 - `crates/ccl-core` must not depend on terminal or graphical-interface libraries.

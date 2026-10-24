@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     config::DownloadConfig,
-    install::InstallOptions,
+    install::{InstallOptions, InstallService},
     loaders::{LoaderKind, LoaderRequest, LoaderService},
     task::TaskContext,
 };
@@ -102,6 +102,7 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 pub struct InstanceService {
     root: PathBuf,
     config: DownloadConfig,
+    vanilla_installer: Option<InstallService>,
 }
 
 impl InstanceService {
@@ -137,6 +138,7 @@ impl InstanceService {
         &self,
         id: &str,
         fingerprint: &str,
+        create_only: bool,
         operation: F,
     ) -> Result<T, E>
     where
@@ -146,6 +148,9 @@ impl InstanceService {
     {
         let path = self.instance_path(id)?;
         let _lock = self.lock_instance(id)?;
+        if create_only && path.exists() {
+            return Err(InstanceError::Conflict(format!("instance already exists: {id}")).into());
+        }
         fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
         recover_instance(&path)?;
         let metadata_path = path.join("instance.json");
@@ -192,7 +197,71 @@ impl InstanceService {
 
     pub fn new(root: PathBuf, config: DownloadConfig) -> InstanceResult<Self> {
         let root = absolute_path(root)?;
-        Ok(Self { root, config })
+        Ok(Self {
+            root,
+            config,
+            vanilla_installer: None,
+        })
+    }
+
+    /// Use a configured vanilla installer, for example one pointed at a private metadata mirror.
+    pub fn with_install_service(mut self, installer: InstallService) -> Self {
+        self.vanilla_installer = Some(installer);
+        self
+    }
+
+    /// Create and activate a new vanilla instance transactionally.
+    /// Existing instance paths are conflicts; this API never replaces user data.
+    pub async fn install_vanilla(
+        &self,
+        id: &str,
+        minecraft: &str,
+        context: Option<TaskContext>,
+    ) -> InstanceResult<InstanceMetadata> {
+        validate_id(id)?;
+        validate_segment(minecraft)?;
+        check_cancelled(&context)?;
+
+        let path = self.instance_path(id)?;
+        let _lock = self.lock_instance(id)?;
+        if path.exists() {
+            return Err(InstanceError::Conflict(format!(
+                "instance already exists: {id}"
+            )));
+        }
+        fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
+        let game = path.join("game");
+        let stage = path.join(".stage");
+        let previous = path.join("previous");
+        let installer = match &self.vanilla_installer {
+            Some(installer) => installer.clone(),
+            None => InstallService::new(self.config.clone())?,
+        };
+        if let Err(error) = installer
+            .install(
+                minecraft,
+                &InstallOptions::for_current_platform(&stage),
+                context.clone(),
+            )
+            .await
+        {
+            fs::remove_dir_all(&path).map_err(|cleanup| io(&path, cleanup))?;
+            return Err(error.into());
+        }
+        if let Err(error) = check_cancelled(&context) {
+            fs::remove_dir_all(&path).map_err(|cleanup| io(&path, cleanup))?;
+            return Err(error);
+        }
+
+        let metadata = InstanceMetadata {
+            id: id.into(),
+            minecraft: minecraft.into(),
+            loader: None,
+            loader_version: None,
+            game_directory: game.clone(),
+        };
+        commit_generation(&path, &stage, &game, &previous, &metadata)?;
+        Ok(metadata)
     }
 
     pub fn list(&self) -> InstanceResult<Vec<InstanceMetadata>> {
@@ -270,12 +339,37 @@ impl InstanceService {
         request: &LoaderRequest,
         context: Option<TaskContext>,
     ) -> InstanceResult<InstanceMetadata> {
+        self.install_inner(id, request, context, false).await
+    }
+
+    /// Install a loader for a new managed instance. Existing instance paths conflict.
+    pub async fn install_new_loader(
+        &self,
+        id: &str,
+        request: &LoaderRequest,
+        context: Option<TaskContext>,
+    ) -> InstanceResult<InstanceMetadata> {
+        self.install_inner(id, request, context, true).await
+    }
+
+    async fn install_inner(
+        &self,
+        id: &str,
+        request: &LoaderRequest,
+        context: Option<TaskContext>,
+        create_only: bool,
+    ) -> InstanceResult<InstanceMetadata> {
         validate_id(id)?;
         validate_segment(&request.minecraft)?;
         validate_segment(&request.version)?;
         check_cancelled(&context)?;
         let path = self.instance_path(id)?;
         let _lock = self.lock_instance(id)?;
+        if create_only && path.exists() {
+            return Err(InstanceError::Conflict(format!(
+                "instance already exists: {id}"
+            )));
+        }
         fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
         recover_instance(&path)?;
         let game = path.join("game");
@@ -318,7 +412,12 @@ impl InstanceService {
         .await;
         let loader_version = match operation {
             Ok(version) => version,
-            Err(error) => return Err(error),
+            Err(error) => {
+                if create_only {
+                    fs::remove_dir_all(&path).map_err(|cleanup| io(&path, cleanup))?;
+                }
+                return Err(error);
+            }
         };
         if game.exists() {
             replace_user_data(&game, &stage)?;

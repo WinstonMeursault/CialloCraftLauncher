@@ -3,6 +3,7 @@
 [API 文档](api.zh-CN.md) · [开发指南](development.zh-CN.md) · [English](user-guide.en.md)
 
 - [快速开始](#quickstart)
+- [桌面 alpha](#desktop-alpha)
 - [安装与前置条件](#installation)
 - [游戏目录](#directories)
 - [设置与配置](#configuration)
@@ -37,6 +38,16 @@ ccl logs --lines 100
 
 `versions`、`loaders` 和 `online search` 默认最多返回 20 项。`versions` 和 `loaders` 使用 `--limit 0` 可返回全部结果；在线搜索数量受平台上限限制。`logs` 默认显示最新 100 行。
 
+<a id="desktop-alpha"></a>
+
+## 桌面 alpha
+
+本指南介绍的发行归档包含 CLI。源码中另有版本为 `0.2.0-alpha.1` 的桌面适配器 `ccl-gui`；它仍属实验功能，不包含在这些归档中，平台验证仍在进行。构建说明和当前范围见[开发指南](development.zh-CN.md#gui-preview)。
+
+桌面程序会先让你确认游戏目录，再创建缺失的目录。它可以安装原版、创建托管加载器实例、导入受支持的本地归档、使用离线玩家名或已保存的 Microsoft 账户启动游戏，并查看实时或已保存的游戏日志。Microsoft 登录仍是实验功能，需要操作系统凭据库。请在“账户”页输入公开的 Microsoft 应用客户端 ID，或在共享核心配置中设置 `auth.microsoft_client_id`。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
+
+同一时间只能运行一个安装、导入、登录、刷新或启动任务。切换页面时任务会继续运行。安装和导入任务可以取消；停止游戏前会请求确认。任务视图最多保留八个已完成任务，并显示最近 100 行任务日志。活动任务期间关闭程序时，会询问是否取消任务，或停止游戏并退出。再次启动时会聚焦已有窗口。
+
 <a id="installation"></a>
 
 ## 安装与前置条件
@@ -60,7 +71,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个归档文件夹，并将可执行文件、README 文件、`docs/` 目录、`LICENSE`、`THIRD-PARTY.en.md`、`THIRD-PARTY.zh-CN.md` 和 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CCL 是命令行程序，不包含图形启动器或安装向导。发行归档未签名；完整性验证的限制见[启动器更新](#maintenance)。
+解压整个归档文件夹，并将可执行文件、README 文件、`docs/` 目录、`LICENSE`、`THIRD-PARTY.en.md`、`THIRD-PARTY.zh-CN.md` 和 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。这些发行归档仅包含 CLI，不含实验性的桌面 alpha。发行归档未签名；完整性验证的限制见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
@@ -247,7 +258,7 @@ ccl instance delete renamed --yes
 
 ## 整合包、本地内容与备份
 
-CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。目前不提供 GUI。
+CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。桌面 alpha 可通过文件选择器检查受支持的本地归档，详见[桌面 alpha](#desktop-alpha)。
 
 已验证样本使用 Minecraft `1.21.1`、Fabric Loader `0.20.1`、Fabric API `0.116.17+1.21.1`，在 macOS arm64 及使用 CPU 渲染的 Linux x86_64 到达主菜单。macOS 上导出后重新导入的实例也到达主菜单，模组哈希与覆盖文件均匹配。这不代表其他整合包或第三方模组组合已认证。Windows 通过编译和自动化测试检查。
 

@@ -142,20 +142,60 @@ impl ImportFormatService {
         options: &ImportOptionsExt,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ImportFormatError> {
+        self.import_inner(id, archive, options, context, false)
+            .await
+    }
+
+    /// Import into a new instance, rejecting existing IDs inside the pack transaction lock.
+    pub async fn import_new(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptionsExt,
+        context: Option<TaskContext>,
+    ) -> Result<InstanceMetadata, ImportFormatError> {
+        self.import_inner(id, archive, options, context, true).await
+    }
+
+    async fn import_inner(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptionsExt,
+        context: Option<TaskContext>,
+        create_only: bool,
+    ) -> Result<InstanceMetadata, ImportFormatError> {
         check_cancelled(context.as_ref())?;
         if Self::is_modrinth(archive)? {
-            return Ok(ModpackService::new(self.root.clone(), self.config.clone())?
-                .import(
-                    id,
-                    archive,
-                    &ImportOptions {
-                        include_optional: options.include_optional,
-                        replace_modified: options.replace_modified,
-                        allowed_hosts: options.allowed_hosts.clone(),
-                    },
-                    context,
-                )
-                .await?);
+            let service = ModpackService::new(self.root.clone(), self.config.clone())?;
+            let imported = if create_only {
+                service
+                    .import_new(
+                        id,
+                        archive,
+                        &ImportOptions {
+                            include_optional: options.include_optional,
+                            replace_modified: options.replace_modified,
+                            allowed_hosts: options.allowed_hosts.clone(),
+                        },
+                        context,
+                    )
+                    .await?
+            } else {
+                service
+                    .import(
+                        id,
+                        archive,
+                        &ImportOptions {
+                            include_optional: options.include_optional,
+                            replace_modified: options.replace_modified,
+                            allowed_hosts: options.allowed_hosts.clone(),
+                        },
+                        context,
+                    )
+                    .await?
+            };
+            return Ok(imported);
         }
         let temp = std::env::temp_dir().join(format!(
             "ccl-convert-{}-{}.mrpack",
@@ -186,19 +226,22 @@ impl ImportFormatService {
             };
             #[cfg(not(test))]
             let service = ModpackService::new(self.root.clone(), self.config.clone())?;
-            service
-                .import(
-                    id,
-                    &temp,
-                    &ImportOptions {
-                        include_optional: options.include_optional,
-                        replace_modified: options.replace_modified,
-                        allowed_hosts: options.allowed_hosts.clone(),
-                    },
-                    context,
-                )
-                .await
-                .map_err(ImportFormatError::from)
+            let import_options = ImportOptions {
+                include_optional: options.include_optional,
+                replace_modified: options.replace_modified,
+                allowed_hosts: options.allowed_hosts.clone(),
+            };
+            if create_only {
+                service
+                    .import_new(id, &temp, &import_options, context)
+                    .await
+                    .map_err(ImportFormatError::from)
+            } else {
+                service
+                    .import(id, &temp, &import_options, context)
+                    .await
+                    .map_err(ImportFormatError::from)
+            }
         }
         .await;
         let _ = fs::remove_file(temp);

@@ -1,6 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use ccl_core::{accounts::OsSecretStore, config::LauncherConfig, loaders::LoaderKind};
+use ccl_gui::account_service::{AccountListing, AccountService};
+use ccl_gui::operations::{GuiOperations, ImportRequest, InstallRequest, LaunchRequest};
 use ccl_gui::{Bootstrap, GuiError, Preferences, PreferencesStore, TaskRegistry, TaskSnapshot};
+use serde_json::{Value, json};
+use std::sync::Mutex;
 use std::{
     path::PathBuf,
     sync::{
@@ -16,7 +21,9 @@ struct DesktopState {
     config: PathBuf,
     explicit_root: Option<PathBuf>,
     tasks: TaskRegistry,
-    closing: AtomicBool,
+    closing: Arc<AtomicBool>,
+    operation_gate: Arc<Mutex<()>>,
+    selected_archive: Mutex<Option<PathBuf>>,
 }
 
 #[tauri::command]
@@ -33,16 +40,23 @@ async fn save_preferences(
     state: State<'_, DesktopState>,
     preferences: Preferences,
 ) -> Result<Preferences, GuiError> {
+    ensure_idle(&state)?;
     let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || store.save(preferences))
-        .await
-        .map_err(|_| GuiError::new("worker_error", "Preferences worker stopped"))?
+    let gate = state.operation_gate.clone();
+    let closing = state.closing.clone();
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_idle_gate(&gate, &closing, &tasks, || store.save(preferences))
+    })
+    .await
+    .map_err(|_| GuiError::new("worker_error", "Preferences worker stopped"))?
 }
 #[tauri::command]
 async fn select_root(
     app: tauri::AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<Option<Bootstrap>, GuiError> {
+    ensure_idle(&state)?;
     if state.explicit_root.is_some() {
         return Err(GuiError::new(
             "root_pinned",
@@ -51,6 +65,9 @@ async fn select_root(
     }
     let store = state.store.clone();
     let config = state.config.clone();
+    let gate = state.operation_gate.clone();
+    let closing = state.closing.clone();
+    let tasks = state.tasks.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let selected = app.dialog().file().blocking_pick_folder();
         let Some(selected) = selected else {
@@ -59,15 +76,13 @@ async fn select_root(
         let root = selected.into_path().map_err(|_| {
             GuiError::new("invalid_root", "Selected location is not a local directory")
         })?;
-        store.select_root(root)?;
-        ccl_gui::bootstrap(&store, &config, None).map(Some)
+        with_idle_gate(&gate, &closing, &tasks, || {
+            store.select_root(root)?;
+            ccl_gui::bootstrap(&store, &config, None).map(Some)
+        })
     })
     .await
     .map_err(|_| GuiError::new("worker_error", "Directory worker stopped"))?
-}
-#[tauri::command]
-fn start_probe(state: State<'_, DesktopState>) -> Result<TaskSnapshot, GuiError> {
-    state.tasks.start_probe()
 }
 #[tauri::command]
 fn cancel_task(state: State<'_, DesktopState>, id: u64) -> Result<TaskSnapshot, GuiError> {
@@ -81,6 +96,8 @@ fn task_snapshot(state: State<'_, DesktopState>) -> Option<TaskSnapshot> {
 fn set_visibility(state: State<'_, DesktopState>, visible: bool) {
     state.tasks.set_visible(visible);
 }
+
+include!("commands.rs");
 
 fn main() {
     tauri::Builder::default()
@@ -125,7 +142,9 @@ fn main() {
                 config,
                 explicit_root: std::env::var_os("CCL_GUI_GAME_DIR").map(PathBuf::from),
                 tasks,
-                closing: AtomicBool::new(false),
+                closing: Arc::new(AtomicBool::new(false)),
+                operation_gate: Arc::new(Mutex::new(())),
+                selected_archive: Mutex::new(None),
             });
             Ok(())
         })
@@ -133,10 +152,27 @@ fn main() {
             bootstrap,
             save_preferences,
             select_root,
-            start_probe,
             cancel_task,
             task_snapshot,
-            set_visibility
+            set_visibility,
+            initialize_root,
+            list_versions,
+            list_loaders,
+            install_instance,
+            inspect_import,
+            import_instance,
+            launch_game,
+            task_history,
+            account_list,
+            account_select,
+            account_logout,
+            account_login,
+            account_refresh,
+            account_check_storage,
+            open_login_browser,
+            log_runs,
+            read_run_log,
+            set_network_offline
         ])
         .on_window_event(|window, event| {
             if matches!(
@@ -150,16 +186,50 @@ fn main() {
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<DesktopState>();
-                if !state.tasks.active() {
-                    return;
-                }
+                let _gate = match state.operation_gate.try_lock() {
+                    Ok(guard) => guard,
+                    Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        api.prevent_close();
+                        let zh = state.store.load().map_or(true, |p| p.language == "zh-CN");
+                        let message = if zh {
+                            "账户或设置操作仍在完成，请稍后重试关闭窗口。"
+                        } else {
+                            "An account/settings operation is still finishing; retry close shortly."
+                        };
+                        window
+                            .dialog()
+                            .message(message)
+                            .title("CCL")
+                            .kind(MessageDialogKind::Info)
+                            .buttons(MessageDialogButtons::Ok)
+                            .show(|_| {});
+                        return;
+                    }
+                };
+                let (prompted_task, game) = {
+                    if state.closing.swap(true, Ordering::AcqRel) {
+                        api.prevent_close();
+                        return;
+                    }
+                    let snapshot = state.tasks.snapshot().filter(|s| {
+                        matches!(s.state, ccl_gui::TaskState::Running | ccl_gui::TaskState::Cancelling)
+                    });
+                    let Some(snapshot) = snapshot else {
+                        // Block new IPC work after this close request has been accepted.
+                        return;
+                    };
+                    (snapshot.clone(), snapshot.kind == "launch" && snapshot.pid.is_some())
+                };
+                drop(_gate);
                 api.prevent_close();
-                if state.closing.swap(true, Ordering::AcqRel) {
-                    return;
-                }
                 let zh = state.store.load().map_or(true, |p| p.language == "zh-CN");
                 let app = window.app_handle().clone();
-                let message = if zh {
+                let message = if game && zh {
+                    "游戏仍在运行。是否停止游戏并退出启动器？选择“否”继续保留窗口和游戏。"
+                } else if game {
+                    "A game is running. Stop the game and quit the launcher? Choose No to keep both running."
+                } else if zh {
                     "任务仍在运行。是否取消任务并退出？选择“否”继续保留窗口。"
                 } else {
                     "A task is running. Cancel it and quit? Choose No to keep the window open."
@@ -167,19 +237,25 @@ fn main() {
                 window
                     .dialog()
                     .message(message)
-                    .title("CCL G0")
+                    .title("CCL")
                     .kind(MessageDialogKind::Warning)
                     .buttons(MessageDialogButtons::YesNo)
                     .show(move |yes| {
                         if !yes {
-                            app.state::<DesktopState>()
-                                .closing
-                                .store(false, Ordering::Release);
+                            let state = app.state::<DesktopState>();
+                            state.closing.store(false, Ordering::Release);
                             return;
                         }
                         let tasks = app.state::<DesktopState>().tasks.clone();
-                        if let Some(snapshot) = tasks.snapshot() {
-                            let _ = tasks.cancel(snapshot.id);
+                        if tasks.snapshot().is_some_and(|snapshot| {
+                            snapshot.id == prompted_task.id
+                                && matches!(snapshot.state, ccl_gui::TaskState::Running | ccl_gui::TaskState::Cancelling)
+                        }) {
+                            let _ = tasks.cancel(prompted_task.id);
+                        } else if tasks.active() {
+                            let state = app.state::<DesktopState>();
+                            state.closing.store(false, Ordering::Release);
+                            return;
                         }
                         std::thread::spawn(move || {
                             let deadline =
@@ -190,9 +266,8 @@ fn main() {
                             if !tasks.active() {
                                 app.exit(0);
                             } else {
-                                app.state::<DesktopState>()
-                                    .closing
-                                    .store(false, Ordering::Release);
+                                let state = app.state::<DesktopState>();
+                                state.closing.store(false, Ordering::Release);
                             }
                         });
                     });

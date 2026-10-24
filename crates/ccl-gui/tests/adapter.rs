@@ -83,3 +83,24 @@ fn incompatible_core_config_blocks_discovery_without_rewriting() {
     assert_eq!(fs::read(config).unwrap(), original);
     assert!(!root.exists());
 }
+
+#[test]
+fn explicit_initialization_creates_root_and_preserves_launch_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("new-game");
+    let config = temp.path().join("config.json");
+    fs::write(&config, r#"{"downloads":{"offline":true},"launch":{"max_memory_mb":4096,"auto_install_java":true}}"#).unwrap();
+    let before = fs::read(&config).unwrap();
+    let store = PreferencesStore::new(temp.path().join("gui"));
+    let proposal = bootstrap(&store, &config, Some(root.clone())).unwrap();
+    assert!(proposal.setup_required);
+    assert!(!root.exists());
+    let initialized = ccl_gui::initialize_root(&store, &config, Some(root.clone())).unwrap();
+    assert!(initialized.root_exists);
+    assert!(!initialized.setup_required);
+    assert_eq!(store.root().unwrap(), Some(root));
+    assert_eq!(initialized.launch_defaults.max_memory_mb, 4096);
+    assert!(initialized.launch_defaults.network_offline);
+    assert!(initialized.launch_defaults.auto_install_java);
+    assert_eq!(fs::read(&config).unwrap(), before);
+}
