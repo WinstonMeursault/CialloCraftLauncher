@@ -50,6 +50,21 @@ where
     state.tasks.start(kind, work)
 }
 
+fn start_task_policy<F, Fut>(
+    state: &DesktopState,
+    kind: &str,
+    cancellable: bool,
+    work: F,
+) -> Result<TaskSnapshot, GuiError>
+where
+    F: FnOnce(ccl_gui::TaskHandle) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<Value, GuiError>> + Send + 'static,
+{
+    let _gate = try_operation_gate(&state.operation_gate)?;
+    check_idle(state.closing.as_ref(), &state.tasks)?;
+    state.tasks.start_with_cancellation(kind, cancellable, work)
+}
+
 fn resolved_root(
     store: &PreferencesStore,
     config: &std::path::Path,
@@ -96,7 +111,7 @@ fn operations_for(
 }
 async fn operations_blocking(state: &DesktopState) -> Result<GuiOperations, GuiError> {
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let explicit = state.explicit_root.clone();
     tauri::async_runtime::spawn_blocking(move || operations_for(&store, &config, explicit))
         .await
@@ -117,7 +132,7 @@ fn account_service(config: &std::path::Path) -> Result<AccountService<OsSecretSt
 async fn initialize_root(state: State<'_, DesktopState>) -> Result<Bootstrap, GuiError> {
     ensure_idle(&state)?;
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let explicit = state.explicit_root.clone();
     let gate = state.operation_gate.clone();
     let closing = state.closing.clone();
@@ -177,7 +192,7 @@ async fn inspect_import(
         .into_path()
         .map_err(|_| GuiError::new("invalid_archive", "Select a local archive"))?;
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let explicit = state.explicit_root.clone();
     let summary_path = path.clone();
     let summary = tauri::async_runtime::spawn_blocking(move || {
@@ -237,7 +252,7 @@ fn task_history(state: State<'_, DesktopState>) -> Vec<TaskSnapshot> {
 }
 #[tauri::command]
 async fn account_list(state: State<'_, DesktopState>) -> Result<AccountListing, GuiError> {
-    let config = state.config.clone();
+    let config = state.config_path();
     tauri::async_runtime::spawn_blocking(move || account_service(&config)?.list())
         .await
         .map_err(|_| GuiError::new("worker_error", "Account worker stopped"))?
@@ -248,7 +263,7 @@ async fn account_select(
     id: String,
 ) -> Result<AccountListing, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     let gate = state.operation_gate.clone();
     let closing = state.closing.clone();
     let tasks = state.tasks.clone();
@@ -268,7 +283,7 @@ async fn account_logout(
     id: String,
 ) -> Result<AccountListing, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     let gate = state.operation_gate.clone();
     let closing = state.closing.clone();
     let tasks = state.tasks.clone();
@@ -285,7 +300,7 @@ async fn account_logout(
 #[tauri::command]
 async fn account_check_storage(state: State<'_, DesktopState>) -> Result<Value, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     let gate = state.operation_gate.clone();
     let closing = state.closing.clone();
     let tasks = state.tasks.clone();
@@ -305,7 +320,7 @@ fn account_login(
     open_browser: bool,
 ) -> Result<TaskSnapshot, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     start_task(&state, "login", move |h| async move {
         ccl_gui::account_service::check_storage(&config)?;
         let service = account_service(&config)?;
@@ -334,7 +349,7 @@ fn account_login(
 #[tauri::command]
 fn account_refresh(state: State<'_, DesktopState>, id: String) -> Result<TaskSnapshot, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     start_task(&state, "refresh", move |h| async move {
         let account = account_service(&config)?
             .refresh(&id, &h.context.cancellation)
@@ -359,7 +374,7 @@ async fn open_login_browser(state: State<'_, DesktopState>, task_id: u64) -> Res
 #[tauri::command]
 async fn log_runs(state: State<'_, DesktopState>, key: String) -> Result<Value, GuiError> {
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let explicit = state.explicit_root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         operations_for(&store, &config, explicit)?.log_runs(&key)
@@ -375,7 +390,7 @@ async fn read_run_log(
     lines: usize,
 ) -> Result<Value, GuiError> {
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let explicit = state.explicit_root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         operations_for(&store, &config, explicit)?.read_run_log(
@@ -393,7 +408,7 @@ async fn set_network_offline(
     offline: bool,
 ) -> Result<Bootstrap, GuiError> {
     ensure_idle(&state)?;
-    let config = state.config.clone();
+    let config = state.config_path();
     let store = state.store.clone();
     let root = state.explicit_root.clone();
     let gate = state.operation_gate.clone();

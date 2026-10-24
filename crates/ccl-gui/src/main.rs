@@ -18,18 +18,29 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 struct DesktopState {
     store: PreferencesStore,
-    config: PathBuf,
+    config: Arc<Mutex<PathBuf>>,
+    config_pinned: bool,
     explicit_root: Option<PathBuf>,
     tasks: TaskRegistry,
     closing: Arc<AtomicBool>,
     operation_gate: Arc<Mutex<()>>,
-    selected_archive: Mutex<Option<PathBuf>>,
+    selected_archive: Arc<Mutex<Option<PathBuf>>>,
+    path_grants: Arc<Mutex<std::collections::BTreeMap<String, PathBuf>>>,
+}
+
+impl DesktopState {
+    fn config_path(&self) -> PathBuf {
+        self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 #[tauri::command]
 async fn bootstrap(state: State<'_, DesktopState>) -> Result<Bootstrap, GuiError> {
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let root = state.explicit_root.clone();
     tauri::async_runtime::spawn_blocking(move || ccl_gui::bootstrap(&store, &config, root))
         .await
@@ -64,7 +75,7 @@ async fn select_root(
         ));
     }
     let store = state.store.clone();
-    let config = state.config.clone();
+    let config = state.config_path();
     let gate = state.operation_gate.clone();
     let closing = state.closing.clone();
     let tasks = state.tasks.clone();
@@ -98,6 +109,7 @@ fn set_visibility(state: State<'_, DesktopState>, visible: bool) {
 }
 
 include!("commands.rs");
+include!("advanced_commands.rs");
 
 fn main() {
     tauri::Builder::default()
@@ -137,14 +149,17 @@ fn main() {
             let tasks = TaskRegistry::new(Arc::new(move |snapshot| {
                 let _ = handle.emit("gui-task", snapshot);
             }));
+            let selected_config = if std::env::var_os("CCL_GUI_CONFIG_PATH").is_some() { config } else { store.config_path()?.unwrap_or(config) };
             app.manage(DesktopState {
                 store,
-                config,
+                config: Arc::new(Mutex::new(selected_config)),
+                config_pinned: std::env::var_os("CCL_GUI_CONFIG_PATH").is_some(),
                 explicit_root: std::env::var_os("CCL_GUI_GAME_DIR").map(PathBuf::from),
                 tasks,
                 closing: Arc::new(AtomicBool::new(false)),
                 operation_gate: Arc::new(Mutex::new(())),
-                selected_archive: Mutex::new(None),
+                selected_archive: Arc::new(Mutex::new(None)),
+                path_grants: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             });
             Ok(())
         })
@@ -172,9 +187,21 @@ fn main() {
             open_login_browser,
             log_runs,
             read_run_log,
-            set_network_offline
+            set_network_offline,
+            choose_path, instance_query, instance_mutate, online_query, online_mutate, maintenance, inspect_dropped, update_installation, select_config
         ])
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+                && let Some(state)=window.try_state::<DesktopState>() {
+                    if paths.len()==1 {
+                        let path=&paths[0];
+                        if path.extension().and_then(|e|e.to_str()).is_some_and(|e|e.eq_ignore_ascii_case("zip")||e.eq_ignore_ascii_case("mrpack")) {
+                            state.path_grants.lock().unwrap_or_else(|e|e.into_inner()).insert("drop".into(),path.clone());
+                            let _=window.emit("ccl-archive-drop",path);
+                        } else { let _=window.emit("ccl-drop-error","Unsupported archive. Drop one .zip or .mrpack file."); }
+                    } else { let _=window.emit("ccl-drop-error","Drop one archive at a time."); }
+            }
+
             if matches!(
                 event,
                 tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)
@@ -226,6 +253,11 @@ fn main() {
                 api.prevent_close();
                 let zh = state.store.load().map_or(true, |p| p.language == "zh-CN");
                 let app = window.app_handle().clone();
+                if !prompted_task.cancellable {
+                    state.closing.store(false, Ordering::Release);
+                    window.dialog().message(if zh {"文件事务正在提交，不能安全中断。请等待完成后退出。"} else {"A filesystem transaction is committing and cannot be interrupted safely. Wait for it to finish before quitting."}).parent(window).title("CCL").kind(MessageDialogKind::Info).show(|_|{});
+                    return;
+                }
                 let message = if game && zh {
                     "游戏仍在运行。是否停止游戏并退出启动器？选择“否”继续保留窗口和游戏。"
                 } else if game {
