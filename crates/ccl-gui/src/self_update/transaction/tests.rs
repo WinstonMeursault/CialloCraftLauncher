@@ -201,6 +201,7 @@ fn transaction_fixture() -> (Temp, Installation, Journal, BTreeMap<String, Strin
         previous: previous.clone(),
         last_error: None,
         registry: BTreeMap::new(),
+        installed: BTreeMap::new(),
     };
     (temp, install, journal, previous)
 }
@@ -267,4 +268,40 @@ fn snapshot_enforces_tree_size_bound() {
     let file = tree.join("sparse.bin");
     File::create(&file).unwrap().set_len(MAX_TREE + 1).unwrap();
     assert!(snapshot(&tree).is_err());
+}
+
+#[test]
+fn updater_rejects_data_inside_or_containing_the_application() {
+    let (temp, install, _, _) = transaction_fixture();
+    assert!(
+        install
+            .protect_data_paths(&[install.target.join(".minecraft")])
+            .is_err()
+    );
+    assert!(
+        install
+            .protect_data_paths(&[install.target.join("config.json")])
+            .is_err()
+    );
+    assert!(install.protect_data_paths(std::slice::from_ref(&temp.0)).is_err());
+    assert!(
+        install
+            .protect_data_paths(&[
+                temp.0.join("separate-game"),
+                temp.0.join("separate-config.json")
+            ])
+            .is_ok()
+    );
+}
+
+#[test]
+fn gui_update_channel_survives_reopening_installation() {
+    let (_temp, install, _, _) = transaction_fixture();
+    install.set_channel(Channel::Stable).unwrap();
+    let reopened = Installation::at(install.target.clone(), install.state.clone()).unwrap();
+    assert_eq!(reopened.channel().unwrap(), Channel::Stable);
+    reopened.set_channel(Channel::Dev).unwrap();
+    assert_eq!(install.channel().unwrap(), Channel::Dev);
+    fs::write(install.state.join("channel.json"), b"invalid channel").unwrap();
+    assert!(install.channel().is_err());
 }

@@ -75,6 +75,12 @@ async fn gui_self_update(
         state.update_in_progress.store(true, Ordering::Release);
     }
     let result = async {
+        if mutates {
+            let install=ccl_gui::self_update::Installation::current(&state.store.directory().join("update"))?;
+            let mut protected=vec![config_path.clone()];
+            if let Ok(root)=resolved_root(&state.store,&config_path,state.explicit_root.clone()) {protected.push(root);}
+            install.protect_data_paths(&protected)?;
+        }
         if installs_new {
             let root = resolved_root(&state.store, &config_path, state.explicit_root.clone())?;
             let report = ccl_core::compatibility::inspect_compatibility(&config_path, &root);

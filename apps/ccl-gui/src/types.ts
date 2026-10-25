@@ -66,6 +66,7 @@ export interface GuiUpdateManifest {
   asset: { format: string; name: string; size: number; sha256: string; url: string }
 }
 export interface GuiSelfUpdateResponse {
+  selected_channel: UpdateChannel
   build: { version: string; commit: string; channel: UpdateChannel; target: string }
   supported: boolean; reason: string | null
   status: { phase: string; version: string; channel: UpdateChannel; has_backup: boolean; last_error: string | null } | null

@@ -107,6 +107,7 @@ pub struct Check {
 #[derive(Debug, Clone, Serialize)]
 pub struct Response {
     pub build: BuildIdentity,
+    pub selected_channel: Channel,
     pub supported: bool,
     pub reason: Option<String>,
     pub status: Option<TransactionStatus>,
@@ -336,6 +337,7 @@ impl Service {
             Ok(i) => i,
             Err(e) if matches!(request, Request::Status) => {
                 return Ok(Response {
+                    selected_channel: build.channel,
                     build,
                     supported: false,
                     reason: Some(e.message),
@@ -348,6 +350,7 @@ impl Service {
             Err(e) => return Err(e),
         };
         let mut response = Response {
+            selected_channel: install.channel()?,
             build,
             supported: true,
             reason: None,
@@ -359,9 +362,13 @@ impl Service {
         match request {
             Request::Status => {}
             Request::Check { channel } => {
+                install.set_channel(channel)?;
+                response.selected_channel = channel;
                 response.check = Some(self.check(channel, &cancel).await?)
             }
             Request::Apply { channel } => {
+                install.set_channel(channel)?;
+                response.selected_channel = channel;
                 let check = self.check(channel, &cancel).await?;
                 if !check.available {
                     return Err(error("No desktop update is available"));

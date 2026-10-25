@@ -40,6 +40,8 @@ struct Journal {
     last_error: Option<String>,
     #[serde(default)]
     registry: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    installed: BTreeMap<String, String>,
 }
 
 /// A packaged installation and private updater state; game data lives elsewhere.
@@ -92,6 +94,26 @@ impl Installation {
             ));
         }
         safe_directory(&state)?;
+        let state = state.canonicalize().map_err(io)?;
+        let target = if target.exists() {
+            target.canonicalize().map_err(io)?
+        } else {
+            target
+                .parent()
+                .ok_or_else(|| error("Installation has no parent"))?
+                .canonicalize()
+                .map_err(io)?
+                .join(
+                    target
+                        .file_name()
+                        .ok_or_else(|| error("Invalid installation path"))?,
+                )
+        };
+        if state.starts_with(&target) || target.starts_with(&state) {
+            return Err(error(
+                "Updater state must be outside the installed application",
+            ));
+        }
         Ok(Self { target, state })
     }
     /// Explicit installations are available only to the separate acceptance tool.
@@ -105,6 +127,58 @@ impl Installation {
             error("Another desktop instance or update helper holds this installation")
         })?;
         Ok(file)
+    }
+    pub fn channel(&self) -> GuiResult<Channel> {
+        let path = self.state.join("channel.json");
+        if !path.exists() {
+            return Ok(current_identity().channel);
+        }
+        serde_json::from_slice(&bounded_file(&path, 32)?)
+            .map_err(|_| error("Invalid saved GUI update channel"))
+    }
+    pub fn set_channel(&self, channel: Channel) -> GuiResult<()> {
+        let _lock = self.transaction_lock()?;
+        atomic_file(
+            &self.state.join("channel.json"),
+            &serde_json::to_vec(&channel).map_err(|_| error("Cannot save GUI update channel"))?,
+        )
+    }
+    /// Game data and configuration must remain outside the replaceable package.
+    pub fn protect_data_paths(&self, paths: &[PathBuf]) -> GuiResult<()> {
+        for path in paths {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                std::env::current_dir().map_err(io)?.join(path)
+            };
+            let mut ancestor = absolute.as_path();
+            let mut suffix = Vec::new();
+            while !ancestor.exists() {
+                suffix.push(
+                    ancestor
+                        .file_name()
+                        .ok_or_else(|| error("Invalid protected data path"))?
+                        .to_os_string(),
+                );
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| error("Protected data path has no existing parent"))?;
+            }
+            let mut resolved = ancestor.canonicalize().map_err(io)?;
+            for component in suffix.into_iter().rev() {
+                if component == ".." {
+                    resolved.pop();
+                } else if component != "." {
+                    resolved.push(component);
+                }
+            }
+            if resolved.starts_with(&self.target) || self.target.starts_with(&resolved) {
+                return Err(error(
+                    "Game data and configuration overlap the application package. Move them outside the installation before updating or rolling back",
+                ));
+            }
+        }
+        Ok(())
     }
     fn executable(&self) -> PathBuf {
         executable_at(&self.target)
@@ -252,6 +326,7 @@ impl Installation {
             registry: windows_registry::capture(&self.state, &token)?,
             #[cfg(not(target_os = "windows"))]
             registry: BTreeMap::new(),
+            installed: BTreeMap::new(),
         };
         atomic_file(&self.state.join("payload"), package)?;
         let helper = self.state.join(helper_name());
@@ -283,6 +358,11 @@ impl Installation {
             }
             if snapshot(&self.backup(&journal))? != journal.previous {
                 return Err(error("Rollback backup integrity check failed"));
+            }
+            if journal.installed.is_empty() || snapshot(&self.target)? != journal.installed {
+                return Err(error(
+                    "Application files changed after the update. Preserve those changes before rolling back",
+                ));
             }
             journal.phase = "rollback_pending".into();
             self.save(&journal)?;
@@ -392,6 +472,7 @@ impl Installation {
                 thread::sleep(Duration::from_millis(100));
             }
         }
+        journal.installed = snapshot(&self.target)?;
         journal.phase = "launching".into();
         self.save(journal)
     }

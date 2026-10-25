@@ -129,6 +129,23 @@ def run(args):
                 if tree(target) == before:
                     raise RuntimeError("Successful update did not replace the original package tree")
                 stop_ui(root)
+                extra=target / "user-added-after-update.txt" if target.is_dir() else None
+                size=target.stat().st_size if target.is_file() else None
+                if extra:
+                    extra.write_text("rollback must not discard later application-directory changes\n")
+                else:
+                    with target.open("ab") as file:
+                        file.write(b"later local modification\n")
+                rejected=subprocess.run([str(args.driver.resolve()), "rollback", str(target), str(state)], env=env, capture_output=True, timeout=30)
+                if rejected.returncode==0:
+                    raise RuntimeError("Rollback unexpectedly accepted a modified application")
+                if extra:
+                    if not extra.is_file():
+                        raise RuntimeError("Rejected rollback discarded added data")
+                    extra.unlink()
+                else:
+                    with target.open("r+b") as file:
+                        file.truncate(size)
                 subprocess.run([str(args.driver.resolve()), "rollback", str(target), str(state)], env=env, check=True, timeout=30)
                 final = wait(root, {"rolled_back"})
             elif name == "failure":
