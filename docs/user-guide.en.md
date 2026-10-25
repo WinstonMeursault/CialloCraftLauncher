@@ -3,7 +3,7 @@
 [API reference](api.en.md) · [Development guide](development.en.md) · [简体中文](user-guide.zh-CN.md)
 
 - [Quick start](#quickstart)
-- [Desktop GUI and self-update (G3)](#desktop-alpha)
+- [Desktop app and self-update](#desktop-alpha)
 - [Installation and prerequisites](#installation)
 - [Game directory](#directories)
 - [Settings and configuration](#configuration)
@@ -40,9 +40,9 @@ Java matching the version and host architecture is detected or installed automat
 
 <a id="desktop-alpha"></a>
 
-## Desktop GUI and self-update (G3)
+## Desktop app and self-update
 
-The CLI ZIPs below are separate from the G3 GUI packages. The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. Stable v0.2.0 publishing requires the owner’s explicit approval. See the [development guide](development.en.md#gui-g3) for platform targets and release gates.
+The stable v0.1.0 release contains the CLI and core. The desktop app and signed-manifest GUI updater are available in v0.2.0 developer prereleases; no stable v0.2.0 GUI release has been published. To try the desktop app, choose the latest dev prerelease (tagged `dev-<commit>`) on the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
 
 The desktop app asks you to confirm a game directory before it creates a missing one. It can install vanilla versions, create managed loader instances, import supported local archives, launch with an offline player name or saved Microsoft account, and inspect live or saved game logs. Microsoft sign-in remains experimental and requires the OS credential vault. Enter a public Microsoft application client ID in Accounts, or configure `auth.microsoft_client_id` in the shared core config. The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
 
@@ -60,7 +60,7 @@ Health checks make network or temporary-write probes only when their checkboxes 
 
 ## Installation and prerequisites
 
-Download the archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable and developer release archives use these names:
+Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable CLI/core is currently v0.1.0; developer releases are published separately. CLI archives use these names:
 
 | System | Archive |
 | --- | --- |
@@ -68,7 +68,7 @@ Download the archive for your system from the [GitHub Releases page](https://git
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
 
-G3 desktop packages use separate names and installers:
+Desktop packages use separate names and installers. The current stable v0.1.0 release contains the CLI and core only; choose a dev prerelease for the v0.2.0 desktop app:
 
 | System | Install package | In-app update package |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ G3 desktop packages use separate names and installers:
 
 GUI installer names and CLI ZIP names stay separate. The Windows self-updater supports the per-user installer, not a portable executable. macOS and Linux application-package updates need write access to the installed bundle or AppImage location. An installation in a protected or package-managed location should be updated by reinstalling through that installation method.
 
-Release assets include `.sha256` checksum files. A checksum can detect a damaged download, but the GUI's in-app updater provides publisher authentication by checking the detached signed manifest and its bound package digest. Directly installed GUI packages are not OS-signed; the public key signature is separate from Authenticode and macOS notarization.
+CLI ZIP release assets include `.sha256` checksum files. A checksum can detect a damaged download, but it does not authenticate the publisher. The GUI in-app updater verifies a detached signed manifest and its bound package digest. Directly installed GUI packages are not OS-signed; the public key signature is separate from Authenticode and macOS notarization.
 
 Download the adjacent `.sha256` checksum file too, then verify the archive before extracting it. In PowerShell, run these commands from the download directory:
 
@@ -91,11 +91,11 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
 
-Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. See [launcher updates](#maintenance) for update integrity limits.
+Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. Choose the dev prerelease for the current v0.2.0 desktop app. See [launcher updates](#maintenance) for update integrity limits.
 
 You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
 
-The targets above describe build and package coverage. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
+The targets above describe build and package coverage, not certification of each OS minimum. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
 
 ### First run
 
@@ -278,7 +278,7 @@ Commits retain the immediate previous revision for `rollback`; older previous re
 
 ## Packs, local content and backups
 
-CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). The desktop GUI can inspect supported local archives through its file picker; see [Desktop GUI and self-update](#desktop-alpha).
+CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). The desktop app can inspect supported local archives through its file picker; see [Desktop app and self-update](#desktop-alpha).
 
 The validated sample uses Minecraft `1.21.1`, Fabric Loader `0.20.1`, and Fabric API `0.116.17+1.21.1`. It reached the main menu on macOS arm64 and on Linux x86_64 using CPU rendering. An exported and re-imported macOS instance also reached the menu with matching mod hashes and override files. This does not certify other packs or third-party mod combinations. Windows is checked through compilation and automated tests.
 
@@ -442,9 +442,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## Launcher updates and diagnostics
 
-The first P7 installation is a one-time bootstrap step: pre-P7 CCL builds do not have an update command, so install a P7-enabled binary manually using the project's release or installation instructions. The `v0.1` CLI line also requires a manual update to the first signed-manifest release: its updater does not understand the new `product` field and detached signature asset. Download the matching CLI ZIP from GitHub Releases and verify its `.sha256` file before replacing the old binary. After this bootstrap, the updated CLI can verify signed manifests. P7 reuses existing settings, account metadata and credentials, and instances; sanitized files written by the older `2edbf0e` config and account writers are covered by compatibility checks.
+The published stable v0.1.0 release contains the CLI and core. The v0.2.0 desktop app and its signed-manifest updater are currently available through dev prereleases; select the dev channel to check for the GUI package. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
 
-CCL checks for its own updates only when you run an update command. Stable follows the `main` branch; developer builds follow `dev`. Stable releases use version tags such as `v0.1.0`. A developer release is published for a `dev` commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
+CCL checks for its own updates only when you run an update command. The stable channel follows main and currently provides v0.1.0 CLI/core; the dev channel follows dev and carries the v0.2.0 GUI prerelease. Stable releases use version tags such as v0.1.0. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
 
 ```sh
 ccl update check
@@ -482,7 +482,7 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 Run diagnosis uses the saved run record, a bounded game-log prefix and timestamp-correlated crash reports to recognize a small set of common failure patterns. It reports evidence and suggestions; an unknown failure is not forced into a category. Structured diagnostic export uses allowlisted fields and replaces local paths. It excludes account databases, credential stores, worlds and server lists. The optional raw preview includes up to 16 KiB of game output and applies best-effort redaction, but may still contain account names, tokens or other content written by the game or mods. Review the file before sharing it. CCL does not upload diagnostic reports.
 
-The P7 CLI maintenance acceptance covered its defined historical samples; that evidence does not cover every old data set. G3 adds signed GUI-package updates and hosted-runner smoke launches, with automated acceptance gates. Hosted Windows, macOS and Linux runs do not establish physical game-launch behavior on the oldest planned OS versions. See the [API reference](api.en.md#maintenance) for manifest details and the [development guide](development.en.md#maintenance) for release gates.
+Updater compatibility checks cover defined historical samples, not every old configuration, account database or instance. GUI packages use signed update manifests, while the application files themselves are not Authenticode-signed or notarized. Hosted-runner startup checks and package targets do not certify the planned minimum OS versions. Physical Windows Minecraft game-launch validation is not available in the current evidence. See the API reference for manifest details and the development guide for release requirements.
 
 <a id="accounts"></a>
 

@@ -4,7 +4,7 @@ A libre, open-source Minecraft: Java Edition launcher written in Rust for Window
 
 ## Project status
 
-CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI. G3 adds separate desktop packages and a GUI package updater; stable v0.2.0 publishing requires the owner’s explicit approval. Developer releases are prereleases and do not imply stable-release acceptance.
+CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. The current stable release, v0.1.0, contains the CLI and core; the GUI and signed-manifest update protocol are available in v0.2.0 developer prereleases. Stable v0.2.0 publishing requires the owner’s explicit approval.
 
 | Area | Available functionality |
 | --- | --- |
@@ -21,7 +21,7 @@ Support follows the samples and boundaries in the guides, rather than every Mine
 | macOS Apple silicon | `aarch64-apple-darwin` | Workflow target: macOS 15; historical samples do not establish the minimum OS |
 | Linux x64 | `x86_64-unknown-linux-gnu` | Workflow target: Ubuntu 24.04; historical samples do not establish compatibility with every Linux distribution |
 
-G3 release workflows are configured for Windows x64 per-user NSIS EXE, macOS arm64 DMG, and Linux x64 AppImage and DEB packages. The separate GUI validation workflow exercises update and manual rollback, bad-package automatic rollback, and interrupted-replacement recovery; release workflows check rendered startup readiness. GUI self-update accepts the Windows installer, macOS `.app.tar.gz`, and Linux AppImage. DEB installations update through the package manager. CI smoke launches on hosted runners do not establish behavior on the oldest planned OS versions or physical game-launch acceptance.
+Desktop release workflows are configured for Windows x64 per-user NSIS EXE, macOS arm64 DMG, and Linux x64 AppImage and DEB packages. The separate GUI validation workflow exercises update and manual rollback, bad-package automatic rollback, and interrupted-replacement recovery; release workflows check rendered startup readiness. GUI self-update accepts the Windows installer, macOS `.app.tar.gz`, and Linux AppImage. DEB installations update through the package manager. CI smoke launches on hosted runners do not establish behavior on the oldest planned OS versions or physical game-launch acceptance.
 
 Microsoft device login, refresh, OS credential storage and browser authorization are implemented. Online account integration remains experimental; the owner has deferred full entitled-account acceptance for this release. Offline identities remain supported. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
 
@@ -33,14 +33,14 @@ Microsoft device login, refresh, OS credential storage and browser authorization
 
 CLI and GUI update manifests are signed with the shared Tauri updater key, binding product, version, channel, commit, target and package digest. Older CLI binaries need a manual bootstrap to the first release using signed manifests. GUI installer files remain OS-unsigned and macOS packages are not notarized; cryptographic update signatures are separate from OS publisher identity. Planned support floors are Windows 10 with WebView2, macOS 13, and Linux with glibc 2.39; they have not been physically verified. Linux Microsoft-account/provider-key storage requires an available, unlocked Secret Service/D-Bus session; there is no plaintext credential fallback.
 
-To build from this checkout:
+To build the CLI from this checkout:
 
 ```sh
 cargo build --release --locked -p ccl-cli
 cargo run --release --locked -p ccl-cli -- --help
 ```
 
-See the [development guide](docs/development.en.md#environment) for toolchain and native prerequisites. Builds do not bundle Minecraft, Java runtimes, mods or user credentials. Java can be downloaded later by the launcher when needed.
+For the desktop GUI, follow the [desktop build instructions](docs/development.en.md#gui-g3), including frontend and notice generation. See the [development guide](docs/development.en.md#environment) for toolchain and native prerequisites. Builds do not bundle Minecraft, Java runtimes, mods or user credentials. Java can be downloaded later by the launcher when needed.
 
 ## Documentation
 

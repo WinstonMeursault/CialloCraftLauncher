@@ -4,7 +4,7 @@
 
 - [Environment](#environment)
 - [Build and run](#build)
-- [G3 GUI and package updates](#gui-g3)
+- [Desktop GUI and package updates](#gui-g3)
 - [Architecture and workspace](#architecture)
 - [Code boundaries](#boundaries)
 - [Configuration and data directories](#data)
@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [First stable release notes draft](#release-notes)
+- [v0.2 release notes draft](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -46,9 +46,9 @@ User workflows are in the [user guide](user-guide.en.md); commands, output and c
 <a id="gui-preview"></a>
 <a id="gui-g3"></a>
 
-## G3 GUI and package updates
+## Desktop GUI and package updates
 
-The desktop application is a separate Tauri product named `ccl-gui`, sharing the core with the CLI while keeping a distinct product identity and updater manifest. The CLI release ZIPs remain unchanged. G3 adds these desktop package formats:
+The desktop application is a separate Tauri product named `ccl-gui`, sharing the core with the CLI while keeping a distinct product identity and updater manifest. CLI release ZIPs remain available alongside these desktop package formats:
 
 | Target | Distribution package | In-app update payload | Install method |
 | --- | --- | --- | --- |
@@ -56,9 +56,11 @@ The desktop application is a separate Tauri product named `ccl-gui`, sharing the
 | macOS arm64 | `.dmg` | `.app.tar.gz` containing the app bundle | Writable `.app`; packages are not notarized |
 | Linux x64 | `.AppImage` and `.deb` | AppImage | AppImage needs a writable file location; DEB updates use the system package manager |
 
-The release workflows target Windows 2025, macOS 15 and Ubuntu 24.04. They are configured to launch the desktop app and confirm the frontend-ready marker on each host, using Xvfb with software rendering on Linux and WebView2 on Windows. These runners do not prove physical game launch or compatibility with the oldest planned systems. Planned floors are Windows 10 with WebView2, macOS 13, and Linux with glibc 2.39.
+The release workflows target Windows 2025, macOS 15 and Ubuntu 24.04. They launch the desktop app and confirm the frontend-ready marker on each host, using Xvfb with software rendering on Linux and WebView2 on Windows. These runners do not prove physical game launch or compatibility with older systems. Windows 10 with WebView2, macOS 13, and Linux with glibc 2.39 are intended minimums, but have not been certified.
 
-`crates/ccl-gui` is a Rust adapter/library with `default = []`; its optional `desktop` feature enables Tauri 2. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The CLI and default Rust builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
+`crates/ccl-gui` is a Rust adapter/library with `default = []`; its optional `desktop` feature enables Tauri 2. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The workspace's default members are only `ccl-core` and `ccl-cli`, so a plain default `cargo build` or `cargo test` omits the GUI; use `--workspace` or target `ccl-gui` explicitly. Normal CLI and core builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
+
+The `gui-validation` feature enables test-only GUI update drivers and hooks. The frontend maintenance performance harness is separately gated by `VITE_CCL_GUI_PERF_HARNESS=true`; the isolated performance acceptance scenario requires both gates to be enabled. Do not enable either for normal release packages.
 
 The app requires a confirmed game root before opening the library. The setup screen can choose a directory with the native picker or confirm the proposed directory; only confirmation creates a missing directory. Existing roots and managed instances are reused. Vanilla and managed instances can be created, including shared vanilla installs and managed instances with supported loaders. A native file picker inspects supported Modrinth, CurseForge, and MultiMC/Prism archives before import. Launch accepts an offline profile or a saved Microsoft account, with Java path, memory, managed Java installation, and dry-run controls.
 
@@ -95,7 +97,7 @@ pnpm --package=@tauri-apps/cli@2.12.4 dlx tauri build --features desktop
 The example uses Bash (macOS/Linux or Git Bash). In PowerShell, set `$target = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')`, then pass `$target` to the same fetch/notice commands. Run frontend commands in `apps/ccl-gui`, native Cargo commands from the repository root, and `tauri build` in `crates/ccl-gui`. Generate notices before a desktop build: the Tauri resources include `target/gui-notices`, covering Rust, production JavaScript, project licenses and both public document editions. `pnpm` is used only to build/package, and is not a runtime dependency.
 
 
-The Node test covers task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs formatting, adapter tests, desktop Clippy, bundles the application, and is configured to launch the UI and confirm its frontend-ready marker on Windows x64, macOS arm64 and Linux x86_64. Release workflows additionally create the distribution packages and updater payloads. A separate acceptance gate exercises a successful update followed by manual rollback, automatic rollback after a bad package, and recovery after an interrupted replacement; it also checks that a game-data sentinel remains intact. Inspect the exact commit’s workflow results for acceptance evidence. Linux needs WebKitGTK 4.1 development libraries, Xvfb and FUSE for packaging/smoke launch. Tauri uses WebView2 on Windows, WKWebView on macOS and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+The Node test covers task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs formatting, adapter tests, desktop Clippy, bundles the application, and launches the UI to confirm its frontend-ready marker on Windows x64, macOS arm64 and Linux x86_64. Release workflows additionally create distribution packages and updater payloads. A separate acceptance gate exercises a successful update followed by manual rollback, automatic rollback after a bad package, and recovery after an interrupted replacement; it also checks that a game-data sentinel remains intact. Inspect the exact commit's workflow results for acceptance evidence. Linux needs WebKitGTK 4.1 development libraries, Xvfb and FUSE for packaging/smoke launch. Tauri uses WebView2 on Windows, WKWebView on macOS and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 Both updaters consume a detached signature asset named `<manifest>.sig`, produced by Tauri CLI 2.12.4. CLI manifests are `manifest-<target>.json` with `product: "ccl-cli"`; GUI manifests are `gui-manifest-<target>.json` with `product: "ccl-gui"`. Each signature covers the exact manifest bytes and carries Tauri's signed version trusted comment. The manifests bind repository, product, channel, version, branch, full commit, target, data-schema range and package SHA-256/size/URL. The verifier public key is embedded in `ccl-core`; the `.sig` is not a signature of the OS installer itself. GUI `os_signed: false` explicitly records the absence of OS publisher signing.
 
@@ -121,7 +123,7 @@ Initial target platforms:
 
 - `crates/ccl-core`: shared services, configuration, errors, HTTP transport, task events, installation, Java discovery, and launch orchestration.
 - `crates/ccl-cli`: command-line arguments, text or JSON output, exit codes, and calls into the core.
-- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and React/TypeScript/Vite frontend; see [G3 GUI and package updates](#gui-g3) for scope and checks.
+- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and React/TypeScript/Vite frontend; see [Desktop GUI and package updates](#gui-g3) for scope and checks.
 - `docs`: public documentation for users and contributors.
 
 The core reports progress through task contexts and provides a cooperative cancellation handle. An interface displays events and collects input; the core performs work, validates configuration, and returns structured errors. The core must not depend on an interface.
@@ -143,8 +145,6 @@ The core reports progress through task contexts and provides a cooperative cance
 ## Configuration and data directories
 
 Configuration keys and default paths are maintained in the [user guide](user-guide.en.md#configuration).
-
-`auth.microsoft_client_id` is a public application ID, not a secret. Account metadata (such as account ID, name, profile IDs and selected account) is stored separately from OAuth/Minecraft tokens, which must stay in the OS credential vault scoped to the account-index path. The CurseForge API key is held in a separate OS-vault entry scoped to the configuration path; the optional `CCL_CURSEFORGE_API_KEY` environment override takes precedence. Neither credential type belongs in JSON configuration, logs, source control, or command arguments.
 
 `auth.microsoft_client_id` is a public application ID, not a secret. Account metadata (such as account ID, name, profile IDs and selected account) is stored separately from OAuth/Minecraft tokens, which must stay in the OS credential vault scoped to the account-index path. The CurseForge API key is held in a separate OS-vault entry scoped to the configuration path; the optional `CCL_CURSEFORGE_API_KEY` environment override takes precedence. Neither credential type belongs in JSON configuration, logs, source control, or command arguments.
 
@@ -190,7 +190,7 @@ GUI updater rollback is separate from CLI executable rollback. It updates only a
 
 `DiagnosticsService::doctor` reports Java candidates, directory access and whether a credential adapter is compiled in; vault unlock state is not probed. Network and write probes are explicit. `diagnose_run` checks a bounded run log plus timestamp-correlated crash reports and classifies only supported patterns. Export serializes an allowlist and substitutes paths; raw output preview requires a separate opt-in, is limited to 16 KiB and applies best-effort redaction. It can still contain secrets written by the game or mods and is never uploaded by CCL.
 
-P7 provides three-platform release validation and transactional updater tests, including Windows executable sharing locks, failed health checks and recovery of a missing entrypoint. The first P7 installation is manual because earlier binaries have no updater protocol. Current data formats require no migration; old-writer compatibility samples do not constitute every historical receipt generation. The regular performance workflow measures fixed local HTTP install fixtures, cache reuse, CLI startup and ZIP parsing, and real updater commit/rollback on all three platforms. It records requests and transferred bytes, logical disk use, and platform-available peak memory. Its historical regression gate starts after three compatible prior observations and compares up to five rolling samples; reports are uploaded even when a gate fails. Public-network throughput, Minecraft main-menu readiness and allocated disk blocks are not measured.
+Earlier CLI maintenance acceptance (historically called P7) covered three-platform release validation and transactional updater cases, including Windows executable sharing locks, failed health checks and recovery of a missing entrypoint. The first CLI build using that updater protocol required manual installation over older binaries. Current data formats require no migration; old-writer compatibility samples do not represent every historical receipt generation. The regular performance workflow measures fixed local HTTP install fixtures, cache reuse, CLI startup and ZIP parsing, and real CLI updater commit/rollback on all three platforms. It records requests and transferred bytes, logical disk use, and platform-available peak memory. Its historical regression gate starts after three compatible prior observations and compares up to five rolling samples; reports are uploaded even when a gate fails. Public-network throughput, Minecraft main-menu readiness and allocated disk blocks are not measured.
 
 For direct investigation, manually dispatch `.github/workflows/performance.yml` with `compare_ref` set to a baseline branch, tag, or full 40-character commit SHA. The paired comparison runs both revisions on the same Ubuntu 24.04 runner with Rust 1.99.0 and the same Linux target. It copies the candidate `p7_benchmark.rs` and `update_process.rs` into the baseline checkout so both revisions use the same measurement harness, records both commits, runner identity and harness hashes, and builds each revision's CLI, benchmark example, and updater test. The harness runs five alternating baseline/candidate pairs. Each pair records three cold/warm installation and updater measurements per build (15 each in total), plus seven CLI/parser measurements (35 in total). It compares paired medians for cold and warm installation, metadata parsing, updater commit, and health-failure rollback; a median slowdown above 25% fails the gate. The report is retained for 90 days. This comparison is Linux-only and complements the scheduled/push history workflow.
 
@@ -204,17 +204,17 @@ Weekly or manual upstream metadata regression covers vanilla release/snapshot ca
 
 ### Register a public desktop application
 
-The launcher uses Microsoft's device authorization flow. It is a public desktop client and must not use a client secret. Microsoft documents desktop app registration and public-client configuration in the [desktop app registration guide](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration) and its [device code flow reference](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
+The launcher uses Microsoft's device authorization flow with the `/consumers` authority. It is a public desktop client and must not use a client secret. Microsoft's current [desktop application configuration guide](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-configuration) explains public-client configuration; the [device code flow reference](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code) documents supported authorities.
 
 1. Sign in to the [Microsoft Entra admin center](https://entra.microsoft.com/) with an account allowed to create app registrations.
 2. Open **Identity → Applications → App registrations → New registration**.
-3. Give the application a clear launcher name. For the account type, select **Personal Microsoft accounts only** for the currently implemented `/consumers` authority. Microsoft personal accounts are the intended account type for a Minecraft Java owner. If the portal does not offer this choice, stop and confirm the registration design before using a broader type.
+3. Give the application a clear launcher name. Select the account type that supports personal Microsoft accounts, matching the launcher's `/consumers` authority. Microsoft's [app registration quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app) describes the available account types. If the portal does not offer a compatible choice, confirm the registration design before selecting a broader type.
 4. Register the application and copy its **Application (client) ID**. This GUID is public configuration, not a password.
 5. Open **Authentication**. Under **Advanced settings**, set **Allow public client flows** to **Yes**, then save. Device-code clients do not use a client secret or a browser redirect URI.
 6. Do not create a client secret, and do not put access or refresh tokens in launcher settings.
 7. Confirm the current Xbox and Minecraft service access requirements for your application. Registration alone does not prove that the complete sign-in flow will work. If a service rejects the application, resolve access using the returned error and that service’s official support process.
 
-Microsoft's [app registration quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app) describes supported account types. The desktop guide explains when a desktop client is a public client and how to enable public-client flows. Registration and successful earlier exchange stages do not establish public-user API approval.
+The desktop configuration guide explains how to enable public-client flows. Device-code clients do not need a redirect URI. Registration and successful earlier exchange stages do not establish public-user API approval.
 
 ### Optional checklist for future authenticated-login acceptance
 
@@ -272,7 +272,7 @@ Unit fixtures cover provider search and version payload mapping, dependency type
 
 Review `git diff -- Cargo.lock` after the check and keep only lockfile changes required by the workspace version change. Do not refresh unrelated dependency versions as part of release preparation.
 
-3. Run the local validation suite and check the diff. These are the release workflow's source checks for the host target; the hosted workflow repeats them on every release target.
+3. Before validating a stable release, update both README editions, the user guides and API/development availability statements to describe the intended published version; keep any unpublished draft clearly marked until publication. Run the local validation suite and check the diff. These are the release workflow's source checks for the host target; the hosted workflow repeats them on every release target.
 
    ```sh
    cargo fmt --all -- --check
@@ -295,9 +295,9 @@ Review `git diff -- Cargo.lock` after the check and keep only lockfile changes r
    git push origin vX.Y.Z
    ```
 
-Pushing a stable tag does not start or publish a release. After the release owner has explicitly approved the stable release and pushed its unique `vX.Y.Z` tag, open Actions → Stable Release → Run workflow with that tag selected and enter the exact confirmation `PUBLISH`. That manually dispatched run checks the tag is on `main`, requires `ccl-core`, `ccl-cli`, and `ccl-gui` versions to match, validates sources, builds both CLI ZIPs and GUI installers on the three target hosts, and attempts a GUI smoke launch on each. Only after these jobs pass does it create a draft, sign both manifest families, download and verify the release assets, and publish. Stable version tags must be unique and must never be moved to a different commit. The G3 verification currently being documented must be integrated into `dev` only after its final gate; do not merge it to `main`, create a stable tag, or publish a formal stable release without the user's explicit approval.
+Pushing a stable tag does not start or publish a release. After the release owner has explicitly approved the stable release and pushed its unique `vX.Y.Z` tag, open Actions → Stable Release → Run workflow with that tag selected and enter the exact confirmation `PUBLISH`. That manually dispatched run checks the tag is on `main`, requires `ccl-core`, `ccl-cli`, and `ccl-gui` versions to match, validates sources, builds both CLI ZIPs and GUI installers on the three target hosts, and attempts a GUI smoke launch on each. Only after these jobs pass does it create a draft, sign both manifest families, download and verify the release assets, and publish. Stable version tags must be unique and must never be moved to a different commit. The currently published dev prerelease does not constitute approval for a formal stable release; do not merge it to `main`, create a stable tag, or publish without the user's explicit approval.
 
-Before tagging, package one host build locally with the corresponding script if useful. The CLI update package is a ZIP on all three platforms; GUI packages use the formats listed in [G3 GUI and package updates](#gui-g3):
+Before tagging, package one host build locally with the corresponding script if useful. The CLI update package is a ZIP on all three platforms; GUI packages use the formats listed in [Desktop GUI and package updates](#gui-g3):
 
 ```sh
 # Linux native host; use aarch64-apple-darwin on an Apple-silicon Mac.
@@ -316,6 +316,8 @@ $env:TARGET = $target
 An ordinary local build has an unpublished commit identity unless the release build environment is supplied; use it for local checks, not as a substitute for the workflow-produced update package. The CLI package scripts require the appropriate `target/<triple>/release/ccl` executable (`ccl.exe` on Windows). At the archive root, they include the project license, both READMEs, each paired English/Simplified Chinese guide, generated `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` inventories, and paired `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` bundles containing the original license and notice texts. `scripts/third-party-notices.py` walks the target-specific normal and build dependency graph of `ccl-cli`; each inventory links to deterministic anchors in its matching language bundle. The bundles localize their introductory labels while retaining identical original license text bytes; third-party texts are consolidated into these two files. The packaging scripts verify all four notice files are present and the ZIP has no more than 256 entries, keeping it installable by current readers. The updater's 256-entry ZIP limit remains unchanged. GUI packages also embed generated third-party license and notice material for Rust and production frontend dependencies. Package scripts write SHA-256 files. CLI ZIPs and GUI installers are unsigned by OS publisher certificates; the separate signed manifests authenticate metadata and package digests for updater clients.
 
 ### Developer builds
+
+The workspace package version is currently 0.2.0; the desktop packages and signed-manifest updater protocol are available in developer prereleases. The current `main` stable release is v0.1.0 and is CLI-only. A future stable GUI release requires the release owner's explicit approval and a new stable release.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -339,23 +341,23 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## First stable release notes draft
+## v0.2 release notes draft
 
-This 0.1.0 draft describes the original CLI-only scope. Do not reuse it for G3 or a formal release without approval from the release owner.
+This is an unpublished 0.2.0 release-notes draft for the current development line, not a published stable release. A formal release requires review and explicit approval from the release owner. The existing stable release remains v0.1.0 and CLI-only.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.1.0
+# CialloCraftLauncher 0.2.0
 
-This release provides a Rust CLI and shared core for installing and launching Minecraft, managing isolated instances, installing supported loaders, importing supported Modrinth/CurseForge/MultiMC/Prism packs, and managing local content and backups. The launcher can stage, health-check, and roll back its own executable update; it does not migrate game data.
+This release provides a Rust CLI and a Tauri desktop application backed by a shared core. The CLI covers Minecraft installation and launch, isolated instances, supported loaders, Modrinth/CurseForge/MultiMC/Prism pack import, online content operations, local content management, and userdata backups; its distribution and update packages are ZIP archives on all three platforms. The desktop application provides the same core-backed workflows through a graphical interface. Windows packages include a per-user NSIS installer; macOS packages include a DMG and an app-bundle update archive; Linux packages include AppImage and DEB distributions.
 
-**Authentication and provider status:** Offline identity launch is supported. Microsoft online sign-in is experimental; the owner deferred genuine Java account validation and acceptance on 2026-10-23. CurseForge keys are supplied by users and stored in the OS credential vault; production API access depends on provider authorization.
+CLI and GUI use independent, product-specific signed update manifests and transactional update/rollback flows. The first CLI build using the signed-manifest protocol must be installed manually over v0.1.0 or earlier, whose updater cannot read the new manifest format. GUI in-app updates support writable per-user NSIS installations on Windows, writable app bundles on macOS, and writable AppImages on Linux; Linux DEB updates remain the package manager's responsibility. Offline identity launch is supported. Microsoft online sign-in is experimental, and genuine-account validation and acceptance have been deferred. CurseForge API keys are supplied by users and stored in the OS credential vault; production API access depends on provider authorization.
 
-**Compatibility and security:** Packages are unsigned. SHA-256 checks detect changed package bytes but do not authenticate the publisher. Back up important worlds before pack operations that replace content.
+**Compatibility and security:** Detached cryptographic signatures authenticate updater manifests and their package digests. They are separate from OS publisher signatures: these CLI and GUI packages are not OS-signed, and macOS packages are not notarized. Update transactions cover launcher files, not game data. CI validates builds and GUI readiness on hosted Windows x64, macOS arm64, and Linux x86_64 runners; this does not establish physical-machine game-launch coverage or certify the intended minimum OS versions. Back up important worlds before pack operations that replace content.
 
-Packages are provided for Windows x86_64, macOS arm64, and Linux x86_64. Review the included guides for setup, supported formats, and current platform requirements.
+Packages are built for Windows x86_64, macOS arm64, and Linux x86_64. Review the included guides for setup, supported formats, and current platform requirements.
 <!-- release-notes:end -->
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. Review current all-platform performance artifacts before publication; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical P7 checks do not establish performance for the release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. This draft is not an authorization to publish. Review current all-platform performance artifacts before publication; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

@@ -396,7 +396,7 @@ impl TaskRegistry {
                     .context
                     .emit(TaskEvent::Log {
                         stream: "fixture".into(),
-                        line: format!("[G0 synthetic fixture] bounded log line {completed}"),
+                        line: format!("[Synthetic task fixture] bounded log line {completed}"),
                     })
                     .map_err(|_| GuiError::new("cancelled", "Probe cancelled"))?;
                 handle

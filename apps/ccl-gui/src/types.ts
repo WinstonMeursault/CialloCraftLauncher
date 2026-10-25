@@ -13,7 +13,6 @@ export interface Bootstrap {
   preferences: Preferences
   entries: LibraryEntry[]
   warnings: string[]
-  prototype: boolean
 }
 export interface GameVersion { id: string; kind: string }
 export interface LoaderVersion { version: string; stable: boolean }

@@ -3,7 +3,7 @@
 [API 文档](api.zh-CN.md) · [开发指南](development.zh-CN.md) · [English](user-guide.en.md)
 
 - [快速开始](#quickstart)
-- [桌面 GUI 与自更新（G3）](#desktop-alpha)
+- [桌面应用与自更新](#desktop-alpha)
 - [安装与前置条件](#installation)
 - [游戏目录](#directories)
 - [设置与配置](#configuration)
@@ -40,9 +40,9 @@ ccl logs --lines 100
 
 <a id="desktop-alpha"></a>
 
-## 桌面 GUI 与自更新（G3）
+## 桌面应用与自更新
 
-下方的 CLI ZIP 与 G3 GUI 程序包分开发布。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。桌面程序作为独立应用发布，并有自己的签名更新清单。v0.2.0 稳定版发布需经用户明确同意；平台目标和发行门槛见[开发指南](development.zh-CN.md#gui-g3)。
+当前正式稳定版 v0.1.0 包含 CLI 与核心；桌面应用及签名清单更新器目前通过 v0.2.0 dev 预发行版提供，尚无稳定版 v0.2.0 GUI。若要试用桌面应用，请在 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)选择最新 dev 预发行版（标签为 `dev-<commit>`）。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
 
 桌面程序会先让你确认游戏目录，再创建缺失的目录。它可以安装原版、创建托管加载器实例、导入受支持的本地归档、使用离线玩家名或已保存的 Microsoft 账户启动游戏，并查看实时或已保存的游戏日志。Microsoft 登录仍是实验功能，需要操作系统凭据库。请在“账户”页输入公开的 Microsoft 应用客户端 ID，或在共享核心配置中设置 `auth.microsoft_client_id`。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
 
@@ -60,7 +60,7 @@ ccl logs --lines 100
 
 ## 安装与前置条件
 
-从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的归档。稳定版和开发版归档使用以下名称：
+从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。当前正式稳定版 CLI/核心为 v0.1.0；开发版另行发布。CLI 归档名称如下：
 
 | 系统 | 归档文件 |
 | --- | --- |
@@ -68,7 +68,7 @@ ccl logs --lines 100
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
 
-G3 桌面程序包使用独立名称和安装格式：
+桌面程序包使用独立名称和安装格式。当前正式稳定版 v0.1.0 仅包含 CLI 和核心；要安装 v0.2.0 桌面应用，请选择 dev 预发行版：
 
 | 系统 | 安装程序包 | 应用内更新程序包 |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ G3 桌面程序包使用独立名称和安装格式：
 
 GUI 安装程序与 CLI ZIP 使用不同名称。Windows 自更新支持按用户安装的 NSIS 程序，不支持便携 EXE。macOS 和 Linux 应用包更新需要对已安装 bundle 或 AppImage 位置有写权限。受保护位置或包管理器安装应通过原安装方式重新安装更新。
 
-发行资产附带 `.sha256` 校验文件。校验和可以发现下载损坏，但 GUI 应用内更新器还会验证独立签名清单及其绑定的程序包摘要，从而认证发行内容。手动安装的 GUI 程序包没有操作系统签名；公钥更新签名与 Authenticode 和 macOS 公证不同。
+CLI ZIP 发行资产附带 `.sha256` 校验文件。校验和可以发现下载损坏，但不能认证发行者。GUI 应用内更新器会验证独立签名清单及其绑定的程序包摘要。手动安装的 GUI 程序包没有操作系统签名；公钥更新签名与 Authenticode 和 macOS 公证不同。
 
 同时下载旁边的 `.sha256` 校验文件，并在解压前校验归档。Windows PowerShell 中，请在下载目录运行：
 
@@ -91,11 +91,11 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。更新完整性说明见[启动器更新](#maintenance)。
+解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。当前 v0.2.0 桌面应用请从 dev 预发行版获取。更新完整性说明见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
-上述目标表示构建和打包覆盖范围。Minecraft 主菜单验证范围更窄，见各功能章节；当前证据不包含 Windows 物理机游戏启动验证。Linux 启动游戏需要可用的显示服务和图形驱动；CI 成功本身不能验证用户机器的图形环境。
+上述目标表示构建和打包覆盖范围，不代表已认证最低操作系统版本。Minecraft 主菜单验证范围更窄，见各功能章节；当前证据不包含 Windows 物理机游戏启动验证。Linux 启动游戏需要可用的显示服务和图形驱动；CI 成功本身不能验证用户机器的图形环境。
 
 ### 首次运行
 
@@ -278,7 +278,7 @@ ccl instance delete renamed --yes
 
 ## 整合包、本地内容与备份
 
-CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。桌面 GUI 可通过文件选择器检查受支持的本地归档，详见[桌面 GUI 与自更新](#desktop-alpha)。
+CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。桌面应用可通过文件选择器检查受支持的本地归档，详见[桌面应用与自更新](#desktop-alpha)。
 
 已验证样本使用 Minecraft `1.21.1`、Fabric Loader `0.20.1`、Fabric API `0.116.17+1.21.1`，在 macOS arm64 及使用 CPU 渲染的 Linux x86_64 到达主菜单。macOS 上导出后重新导入的实例也到达主菜单，模组哈希与覆盖文件均匹配。这不代表其他整合包或第三方模组组合已认证。Windows 通过编译和自动化测试检查。
 
@@ -442,9 +442,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## 启动器更新与诊断
 
-首次安装 P7 需要执行一次引导步骤：P7 之前的 CCL 没有更新命令，因此需要按照项目的发行或安装说明手动安装启用 P7 的程序。`v0.1` CLI 也需要手动更新到首个签名清单版本：旧更新器无法识别新增的 `product` 字段和独立签名文件。请从 GitHub Releases 下载匹配的 CLI ZIP，并在替换旧程序前核对 `.sha256` 文件。完成这次引导后，新版 CLI 可验证签名清单。P7 会复用已有设置、账户元数据、凭据和游戏实例；兼容性检查覆盖由旧版 `2edbf0e` 配置和账户写入器生成的脱敏数据。
+当前正式稳定版 v0.1.0 包含 CLI 与核心。v0.2.0 桌面应用及其签名清单更新器目前通过 dev 预发行版提供；要检查 GUI 更新，请选择 dev 渠道。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
 
-只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定版跟随 `main`；开发版跟随 `dev`。稳定版使用 `v0.1.0` 形式的版本标签。`dev` 上的提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；开发版发行保留最近十个。
+只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 main，当前正式提供 v0.1.0 CLI/核心；dev 渠道跟随 dev，并提供 v0.2.0 GUI 预发行版。稳定版使用 v0.1.0 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
 
 ```sh
 ccl update check
@@ -482,7 +482,7 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 运行诊断根据保存的运行记录、有大小限制的游戏日志前缀以及时间戳与该运行接近的崩溃报告，识别少数常见故障模式，并提供证据与建议；未知故障不会被强行归类。结构化诊断导出只含白名单字段，并替换本地路径；不会包含账户库、凭据库、存档或服务器列表。可选原始日志预览最多包含 16 KiB 游戏输出，并进行尽力脱敏，但仍可能包含账户名、令牌或游戏/模组写入的其他内容。分享前请检查文件。CCL 不会上传诊断报告。
 
-P7 CLI 维护验收覆盖了其定义的历史样本，但不代表涵盖所有旧版本生成的数据。G3 增加签名 GUI 应用包更新和托管运行器启动检查，稳定版发布仍需经用户明确同意。托管 Windows、macOS 和 Linux 运行器不能证明最低计划系统版本上的行为或物理机游戏启动行为。清单详情见 [API 文档](api.zh-CN.md#maintenance)，发行门槛见[开发指南](development.zh-CN.md#maintenance)。
+更新兼容性检查覆盖已定义的历史样本，不代表涵盖所有旧配置、账户数据库或实例。GUI 程序包使用签名更新清单，但应用文件本身没有 Authenticode 签名或 macOS 公证。托管运行器启动检查和程序包目标不能认证计划中的最低操作系统版本。当前证据未包含 Windows 实机启动 Minecraft。清单详情见 API 文档，发行要求见开发指南。
 
 <a id="accounts"></a>
 

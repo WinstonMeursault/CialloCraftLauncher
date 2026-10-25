@@ -4,7 +4,7 @@
 
 - [CLI 命令](#cli)
 - [JSON 输出](#output)
-- [桌面适配器（alpha）](#desktop)
+- [桌面应用](#desktop)
 - [核心服务索引](#core)
 - [事件、取消与错误](#tasks)
 - [在线内容契约](#online-contract)
@@ -39,7 +39,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `pack inspect ARCHIVE\|show ID\|import ID ARCHIVE [--include-optional] [--replace-modified] [--allow-host HOST]\|export ID OUTPUT [--include-local-content]` | 检查并导入 Modrinth、CurseForge 和 MultiMC/Prism 导出包；导出 Modrinth `.mrpack`。参阅[导入指南](user-guide.zh-CN.md#imports)及 [Modrinth 与实例内容指南](user-guide.zh-CN.md#packs)。 |
 | `content list ID KIND\|add ID KIND SOURCE [--name NAME]\|remove ID KIND NAME\|enable ID NAME\|disable ID NAME\|backup ID OUTPUT\|restore ID ARCHIVE` | 管理本地模组、资源包、光影包、存档和可移植用户数据备份。`KIND` 为 `mods`、`resourcepacks`、`shaderpacks` 或 `saves`。 |
 | `online search PROVIDER QUERY [--minecraft VERSION] [--loader LOADER]... [--kind KIND] [--limit N]`；`versions PROVIDER PROJECT [--minecraft VERSION] [--loader LOADER]`；`resolve PROVIDER PROJECT MINECRAFT LOADER`；`install ID PROVIDER PROJECT [--version VERSION]`；`updates ID`；`analyze ID`；`pack-install ID PROVIDER PROJECT [--version VERSION] [--include-optional]` | 搜索 Modrinth 或 CurseForge、解析依赖、安装或更新内容，并分析已记录的在线内容。平台为 `modrinth` 或 `curseforge`；参阅[在线内容](user-guide.zh-CN.md#online)。 |
-| `launch [VERSION] [--instance ID] [--username CCLPlayer] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | 启动原版版本或隔离实例。默认使用所选 Microsoft 账户，也可显式使用离线账户。Java 可自动探测或按需从 Mojang 运行时清单安装。 |
+| `launch [VERSION] [--instance ID] [--username NAME] [--offline] [--account ID] [--java PATH] [--memory MiB] [--no-java-download] [--dry-run]` | 启动原版版本或隔离实例。默认使用所选 Microsoft 账户，也可显式使用离线账户。Java 可自动探测或按需从 Mojang 运行时清单安装。 |
 | `logs [--instance ID] [--run ID] [--lines N]` | 输出最近一次运行日志，或指定运行记录的日志，并限制输出行数（默认 `100`）。`--instance` 选择独立实例的日志。 |
 
 启动时会选择与版本元数据所需主版本号及主机架构匹配的 Java。离线玩家 UUID 使用 Java 离线玩家的名称派生 UUID 算法。启动前，启动器会根据可用的大小和 SHA-1 元数据校验客户端 JAR、适用的库文件和资源索引，准备资源文件映射；若版本指定了客户端日志配置，还会下载并校验该配置。平台原生库会解压到临时目录，游戏退出后删除；`--dry-run` 输出计划后也会删除该目录。
@@ -54,7 +54,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 `--json`、`--network-offline`、`--game-dir` 和 `--config` 都是全局选项，可以放在子命令前或后。`--network-offline` 会禁用 HTTP 请求并要求使用已验证的本地数据；它与 `launch --offline`（选择离线玩家身份）不同。只有保存的强 ETag 和服务器范围响应均匹配时，下载才会续传。`--json` 会在成功或操作错误时将唯一一份命令结果 JSON 输出到标准输出。操作错误使用 `{"ok":false,"error":{"code":"...","message":"..."}}`；`error.code` 标识错误类别，`message` 为人类可读信息。进度和诊断信息输出到标准错误。`account login` 会在标准错误输出 `kind: "device_authorization"` JSON 行；若无法打开浏览器，还可能输出 `kind: "browser_open"` 行。这些进度行不属于最终 JSON 结果。clap 生成的帮助和参数解析错误仍为文本。
 
-`update check --channel` 和 `update apply --channel` 会持久化选择的渠道。稳定版跟随 `main`，使用 `v<VERSION>` 版本标签；开发版跟随 `dev`，只有三个目标平台均完成验证和打包后才发布。CLI 清单命名为 `manifest-<target>.json`，字段包含 `product: "ccl-cli"`。对应的 `manifest-<target>.json.sig` 独立签名覆盖清单原始字节，包括仓库、产品、渠道、版本、分支、commit、目标平台、数据 schema 范围、可执行文件大小/哈希及程序包大小/哈希/URL。更新器使用程序内置公钥验证签名，然后在暂存前检查归档大小、SHA-256 与路径。`v0.1` CLI 尚不认识此清单格式，必须手动替换安装为首个签名清单发行版。清单及其摘要经过加密签名；单独的 SHA-256 只能确认字节，不能认证发布者身份。CLI ZIP 本身没有操作系统发布者签名。更新器使用安装目录 `.ccl-update` 下的操作系统独占文件锁，串行化渠道修改、暂存、状态读取、回退准备和助手事务。其他进程持锁时操作会报更新器忙（退出码 `17`）；进程或助手退出后锁会释放。`apply` 启动受限助手后返回。助手会尝试替换可执行文件、运行健康检查，并提交或恢复旧程序；在 Windows 上遇到临时共享或权限错误时，最多重试 30 秒。没有事务时，`update status` 返回 `update_status: null`；有事务时返回状态（`staged`、`replacing`、`checking`、`committed`、`rolling_back`、`rolled_back` 或 `failed`）、当前和候选构建标识、可选错误及 `unsigned`（经过认证的签名发行中为 `false`）。事务未完成时不能暂存其他更新；使用 `update recover` 恢复助手操作。`update rollback` 仅适用于已提交的更新，并会先检查保留的旧程序能否读取当前启动器元数据；它不会恢复游戏目录。除 `status`、`rollback` 和恢复外，更新命令需要网络；`--network-offline` 会阻止更新检查和下载。
+`update check --channel` 和 `update apply --channel` 会持久化选择的渠道。稳定版跟随 `main`，使用 `v<VERSION>` 版本标签；开发版跟随 `dev`，只有三个目标平台均完成验证和打包后才发布。既有 CLI ZIP 资产名保持为 `ccl-<target>.zip`；清单名为 `manifest-<target>.json`，含 `product: "ccl-cli"`。对应的 `manifest-<target>.json.sig` 独立签名覆盖清单原始字节，包括仓库、产品、渠道、版本、分支、commit、目标平台、数据 schema 范围、可执行文件大小/哈希及程序包大小/哈希/URL。Tauri 可信注释包含 `timestamp:`、`file:` 和 `version:`；更新器会认证该注释，并要求签名版本与清单版本一致。暂存前还会检查归档大小、SHA-256 与路径。`v0.1` CLI 尚不认识此清单格式，必须手动替换安装为首个签名清单发行版。清单及其摘要经过加密签名；单独的 SHA-256 只能确认字节，不能认证发布者身份。CLI ZIP 本身没有操作系统发布者签名。更新器使用安装目录 `.ccl-update` 下的操作系统独占文件锁，串行化渠道修改、暂存、状态读取、回退准备和助手事务。其他进程持锁时操作会报更新器忙（退出码 `17`）；进程或助手退出后锁会释放。`apply` 启动受限助手后返回。助手会尝试替换可执行文件、运行健康检查，并提交或恢复旧程序；在 Windows 上遇到临时共享或权限错误时，最多重试 30 秒。没有事务时，`update status` 返回 `update_status: null`；有事务时返回状态（`staged`、`replacing`、`checking`、`committed`、`rolling_back`、`rolled_back` 或 `failed`）、当前和候选构建标识、可选错误及 `unsigned`（经过认证的签名发行中为 `false`）。事务未完成时不能暂存其他更新；使用 `update recover` 恢复助手操作。`update rollback` 仅适用于已提交的更新，并会先检查保留的旧程序能否读取当前启动器元数据；它不会恢复游戏目录。除 `status`、`rollback` 和恢复外，更新命令需要网络；`--network-offline` 会阻止更新检查和下载。
 
 `doctor` 默认不探测网络，也不写文件。`--network-probe` 检查官方版本元数据端点；`--write-probe` 会在启动器数据目录临时创建并删除空文件。`diagnose --run ID` 读取已保存的运行记录和有大小限制的日志前缀，以分类已知故障模式。`diagnose --export PATH` 创建新的本地文件，仅包含白名单结构化字段。添加 `--include-log-preview` 会附加最多 16 KiB 的原始游戏输出；分享前请检查，因为游戏或模组日志可能包含秘密。报告不会上传。
 
@@ -72,15 +72,19 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 `launch` 记录包含 `run_id`、`version`、`pid`、`exit_code`、`cancelled`、`log_path`、`started_at_ms`、`finished_at_ms`。`logs` 通过 `log` 返回文本。操作流程及配置见[使用指南](user-guide.zh-CN.md)。
 
+<a id="gui-g3"></a>
+<a id="desktop-alpha"></a>
 <a id="desktop"></a>
 
-## 桌面应用（G3）
+## 桌面应用
 
-Tauri 桌面应用为 `ccl-gui`，与 CLI 发行归档分开发行。本节说明源码接口与程序包契约；跨平台验收证据以对应提交的工作流结果为准。通过 Tauri 的 `invoke` API 调用命令。命令返回类型化数据，错误序列化为 `{ "code": "...", "message": "..." }`。
+Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。0.2.0 当前仅作为开发预发行版提供；稳定版仍为 0.1.0，尚未授权发布 0.2.0 稳定版。稳定版必须针对已存在的 `vX.Y.Z` 标签手动触发工作流，并输入准确确认词 `PUBLISH`。通过 Tauri 的 `invoke` API 调用命令。成功时返回类型化数据；失败时以 `{ "code": "...", "message": "..." }` 格式拒绝调用。GUI 错误码与 CLI 错误码和退出码分开。
+
+常见 GUI 错误码包括 `setup_required`（确认游戏根目录）、`library_unavailable`（无法安全读取元数据）、`configuration_error`、`task_busy`、`task_not_found`、`task_not_cancellable`、`path_not_selected`、`cancelled` 和 `update_error`。命令还可能返回其他操作专属错误码；调用方应按 `code` 而不是本地化后的消息文本分支处理。
 
 | 命令 | 用途 |
 | --- | --- |
-| `bootstrap`、`initialize_root`、`select_root` | 解析建议/已选根目录、明确确认并创建根目录，或通过系统目录选择器选取已有目录。只有 `initialize_root` 会创建缺失目录。 |
+| `bootstrap`、`initialize_root`、`select_root`、`select_config` | 返回启动状态、明确创建并保存所选游戏根目录，或通过系统选择器选择已有根目录/配置。只有 `initialize_root` 会创建缺失的游戏目录；取消选择器时返回 `null`。 |
 | `save_preferences`、`set_network_offline` | 保存 GUI 外观偏好，或在共享核心配置中持久化 `downloads.offline`。 |
 | `list_versions`、`list_loaders`、`install_instance` | 查询版本/加载器，并启动原版/共享安装或托管加载器实例安装。 |
 | `inspect_import`、`import_instance` | 选择并检查受支持的本地归档，再将其导入为托管实例。 |
@@ -88,28 +92,40 @@ Tauri 桌面应用为 `ccl-gui`，与 CLI 发行归档分开发行。本节说�
 | `account_list`、`account_select`、`account_logout`、`account_login`、`account_refresh`、`account_check_storage`、`open_login_browser` | 列出/管理已保存账户，运行实验性的设备码登录和刷新，检查系统凭据库，或打开经过校验的验证 URI。 |
 | `cancel_task`、`task_snapshot`、`task_history`、`set_visibility` | 取消活动任务、读取当前/历史快照，或在窗口隐藏时控制事件通知。 |
 | `instance_query`、`instance_mutate`、`online_query`、`online_mutate` | 高级页面的实例/内容管理及来源发现/变更请求。 |
-| `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`gui_self_update`、`select_config` | 原生路径选择/导入检查、设置/来源/诊断、所选 CLI 维护和当前 GUI 应用包更新。 |
+| `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`gui_self_update` | 原生路径选择/导入检查、设置/来源/诊断、所选 CLI 维护和当前 GUI 应用包更新。 |
 
-长时间操作会返回 `TaskSnapshot`，字段包括 `id`、单调递增的 `revision`、`state`、`kind`、`phase`、进度、可选 PID、有界 `logs`、安全的 `error`/`error_code`、可选结果和可选 `authorization`。授权信息仅包含 `user_code`、`verification_uri` 和 `expires_in`；设备码和账户令牌留在 Rust 内。`gui-task` 事件会发送任务快照。接收方应忽略比已处理 `(id, revision)` 更旧的快照。一次只运行一个任务；切换页面不会取消任务。最多保留八个已完成快照。后端最多保存 1,000 行任务日志，每行最多 512 个字符；任务页面显示最近 100 行。非生命周期进度/日志通知最多每秒 10 次。安装/导入取消采用协作方式；停止游戏是单独确认的操作。生产任务页面显示已接入的工作，不包含合成探针。
+`bootstrap` 返回 `Bootstrap` 对象，字段为 `root`、`root_exists`、`setup_required`、`launch_defaults`、`config_path`、`preferences`、`entries` 和 `warnings`。`launch_defaults` 包含可空的 `java`、数值型 `max_memory_mb`，以及布尔型 `auto_install_java` 和 `network_offline`。`preferences` 包含 `theme`（`system`、`light`、`dark`）及 `language`（`en`、`zh-CN`）。每个游戏库条目包含 `key`、`id`、`kind`（`vanilla` 或 `managed`）、`minecraft`、可空的 `loader` 和 `game_directory`。条目 key 格式为 `vanilla:<version>` 或 `managed:<instance-id>`。警告用于报告不可用或不兼容的游戏库元数据；bootstrap 不会改写这些文件。只有在用户明确确认后，`initialize_root` 才会创建并保存建议的根目录。`select_root` 只选择已有目录。`save_preferences` 接收 `{ theme, language }`；GUI 偏好与共享核心配置分开保存。
 
-GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI 共用的核心 `downloads.offline` 设置。GUI 偏好设置使用独立 `gui.json`；账户元数据保存在核心配置旁，令牌使用操作系统凭据库。参阅[桌面 GUI 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-g3)。
+`install_instance` 接收 `{ id, minecraft, loader, loader_version, shared }`。共享原版安装将 `shared` 设为 `true`，并令 `loader` 和 `loader_version` 为 null。`shared: false` 时，两个加载器字段均为 null 会创建托管原版实例；指定两个字段则安装托管加载器。`launch_game` 接收 `{ key, identity, java, memory_mb, auto_install_java, dry_run }`；`identity` 为 `{ kind: "offline" | "microsoft", username, account_id }`。离线身份使用 `account_id: null` 和可选用户名（默认 `CCLPlayer`）；Microsoft 身份要求 `account_id`，并使用 `username: null`。key 使用上述游戏库条目格式。`inspect_import` 打开原生归档选择器，取消时返回 `null`，否则返回 `{ path, summary }`；`import_instance` 接收 `{ update_existing, id, archive, include_optional, replace_modified, allowed_hosts }`。归档必须与最近一次检查或拖入的路径一致。`select_config` 取消时返回 `null`，否则选择现有有效配置并返回刷新的 `Bootstrap`。`CCL_GUI_CONFIG_PATH` 固定配置并禁用配置选择器；`CCL_GUI_GAME_DIR` 固定根目录并禁用根目录选择。
 
-已保存日志每次最多读取末尾 1 MiB，保留最多 1,000 行，每行最多 8,192 字符，并返回 `truncated`。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例与默认导入在实例锁内拒绝已有 ID；显式更新已有整合包实例时保留核心冲突检查；共享原版安装可校验和修复已有版本。
+`list_versions` 返回 `{ id, kind }` 条目；`list_loaders` 接收 `{ minecraft, loader }` 并返回加载器版本记录。`account_list` 返回 `{ accounts, selected }`；账户元数据包含 `id`、`username`、`uuid`、可空的 `xuid`、`account_type`、可空的 `oauth_client_id` 和可空的 `last_used_unix`，不含令牌。`account_login` 接收可空的 `client_id` 和 `open_browser`；`account_refresh` 接收账户 `id`；二者均返回任务快照。`open_login_browser` 接收 `task_id`，只会打开关联活动登录任务中的验证 URI。`account_check_storage` 成功时返回 `{ available: true }`。`choose_path` 接收 `content_file`、`content_directory`、`archive`、`export`、`backup`、`diagnostic` 或 `installation` 之一，并返回可空的已选路径；后续命令必须具有匹配的原生选择器授权。`cancel_task` 接收 `{ id }`；`task_history` 最多返回八个已完成快照。
+
+长时间操作会返回 `TaskSnapshot`，字段包括 `id`、`revision`、`state`、`kind`、`cancellable`、`phase`、`completed`、可空的 `total` 和 `pid`、`logs`、可空的 `error` 和 `error_code`、可空的 `result` 及可空的 `authorization`。`state` 为 `running`、`cancelling`、`succeeded`、`failed` 或 `cancelled`。授权信息仅包含 `user_code`、`verification_uri` 和 `expires_in`；设备码和账户令牌留在 Rust 内。`gui-task` 事件会发送任务快照。接收方应忽略比已处理 `(id, revision)` 更旧的快照。一次只运行一个任务；切换页面不会取消任务。最多保留八个已完成快照。native registry 最多保存 1,000 行任务日志，每行最多 512 个字符。发送到 WebView 的每份快照——事件以及 `task_snapshot`、`task_history`、`cancel_task` 响应——最多包含最近 100 行。窗口隐藏时，前端只保留最近待处理快照；重新显示后会请求 `task_snapshot` 以同步状态。窗口可见时，普通进度/日志通知合并后最多每秒 10 次；生命周期和终态转换立即发送。安装/导入取消采用协作方式；同步实例事务可能不可取消，并通过 `cancellable: false` 标明。停止游戏是单独确认的操作。
+
+GUI 中离线身份选项与持久化网络离线设置分开。`set_network_offline { offline }` 会更新共享核心 `downloads.offline` 值并返回刷新的 `Bootstrap`，因此 CLI 和 GUI 使用同一设置。GUI 外观偏好保存在独立 `gui.json`；根目录和配置选择也保存在其中。账户元数据保存在核心配置旁，令牌使用操作系统凭据库。Microsoft 登录仍属实验功能；本文不声称已完成真实账户验收。参阅[桌面 GUI 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-g3)。
+
+`log_runs` 按最新优先返回最多 1,000 条已保存运行记录。`read_run_log` 接收 `{ key, run_id, lines }`，返回 `{ run_id, text, truncated }`；`run_id` 可为 null 以选择最近一次运行。它最多读取文件末尾 1 MiB，最多返回 1,000 行，并将单行截为 8,192 字符；`lines` 上限为 1,000。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例与默认导入在实例锁内拒绝已有 ID；显式更新已有整合包实例时保留核心冲突检查；共享原版安装可校验和修复已有版本。
 
 高级页面提供托管实例的加载器安装/更新/卸载、重命名/复制/删除、历史记录/还原/回滚、磁盘用量及清理预览/执行、整合包检查/收据/导出、本地内容列出/添加/移除/启用/禁用，以及用户数据备份/还原。共享原版条目在此页面为只读。`InstanceRequest` 是带 `operation` 标签的 JSON 枚举，操作值包括 `list`、`show`、`install`、`update`、`uninstall_loader`、`rename`、`copy`、`delete`、`history`、`restore`、`rollback`、`disk_usage`、`clean`、`pack_inspect`、`pack_show`、`pack_export`、`content_list`、`content_add`、`content_remove`、`content_enable`、`content_disable`、`content_backup` 和 `content_restore`；未知字段会被拒绝。变更在任务中运行。重命名、复制、删除、还原、清理和本地内容编辑等同步文件系统操作使用核心实例锁和任务准入控制，开始后不可取消；实例回滚同样如此。加载器变更、在线安装、导入和启动会收到任务取消及核心清理上下文。快照包含 `cancellable`；不可取消事务的取消请求会被拒绝，关闭需等待事务完成。
 
+各操作字段为：`list {}`、`show { id }`、`install/update { id, minecraft, loader, loader_version }`、`uninstall_loader { id }`、`rename/copy { id, destination }`、`delete/history/rollback/disk_usage/pack_show { id }`、`restore { id, revision }`、`clean { id, keep, include_previous, apply }`、`pack_inspect { archive }`、`pack_export { id, output, include_local_content }`、`content_list { id, kind }`、`content_add { id, kind, source, name? }`、`content_remove { id, kind, name }`、`content_enable/content_disable { id, name }`，以及 `content_backup { id, output }` / `content_restore { id, archive }`。`kind` 的序列化值为 `mod`、`resource_pack`、`shader_pack` 或 `save`（与 CLI 内容类型参数不同）。`loader` 使用小写值：`fabric`、`quilt`、`legacyfabric`、`optifine`、`forge` 或 `neoforge`。
+
 在就绪窗口中拖入一个 `.zip` 或 `.mrpack` 会检查归档并打开导入对话框。用户可编辑实例名称和导入选项，必须明确执行导入；不会自动覆盖已有实例。默认拒绝已有 ID。明确设置 `update_existing: true` 并单独确认后，可进入核心整合包更新路径；`replace_modified` 仍需单独授权。适配器只接受与对应用途匹配的原生选择器授权路径（archive、export、backup、content file/directory、diagnostic、installation 或 drop）；拖入归档在检查前也会核验 drop 授权。
 
-`OnlineQuery` 操作值为 `search`、`versions`、`resolve`、`updates`、`analyze`；`OnlineMutation` 为 `install`、`pack_install`。来源序列化为 `modrinth` 或 `curseforge`。搜索字段为 `provider`、`query`、可选 `minecraft`、字符串数组 `loader`、`kind`（默认 `mod`）和 `limit`（默认 `20`）。安装请求包含 `id`、`provider`、`project` 和可选 `version`；整合包安装另接受默认 `false` 的 `include_optional`。适配器创建核心 `OnlineInstallRequest { root, instance_id, provider, project_id, version_id }` 并调用带上下文的安装路径，以验证目标实例身份及加载器兼容性，并将任务上下文传递到下载和暂存变更。CurseForge 凭据来自所选配置对应的系统凭据库，除非设置了 `CCL_CURSEFORGE_API_KEY`；状态只返回 `saved` 和 `environment_override`，不返回密钥。
+`OnlineQuery` 和 `OnlineMutation` 是带 `operation` 标签且拒绝未知字段的 JSON 枚举。查询操作为 `search { provider, query, minecraft?, loader?, kind?, limit? }`、`versions { provider, project, minecraft?, loader? }`、`resolve { provider, project, version?, minecraft, loader? }`、`updates { id }` 和 `analyze { id }`。变更操作为 `install { id, provider, project, version? }` 及 `pack_install { id, provider, project, version?, include_optional? }`。来源序列化为 `modrinth` 或 `curseforge`。搜索默认空加载器列表、`kind: "mod"`、`limit: 20`。适配器创建核心 `OnlineInstallRequest { root, instance_id, provider, project_id, version_id }` 并调用带上下文的安装路径，以验证目标实例身份及加载器兼容性，并将任务上下文传递到下载和暂存变更。CurseForge 凭据来自所选配置对应的系统凭据库，除非设置了 `CCL_CURSEFORGE_API_KEY`；状态只返回 `saved` 和 `environment_override`，不返回密钥。
 
-维护请求包括 `settings`、`set { key, value, expected }`、`reset { key?, expected }`、`provider_status`、`provider_set { key }`、`provider_remove`、`doctor { network_probe, write_probe }`、`diagnose { key?, run? }`、`export_diagnostics { key?, run?, output, include_log_preview }` 和 `about`。十项可编辑设置为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel`、`downloads.offline`、`auth.microsoft_client_id`、`launch.java`、`launch.max_memory_mb` 和 `launch.auto_install_java`。每项单独保存；核心配置锁内会比较 `expected`，外部 CLI/GUI 修改会导致陈旧设置错误，不会覆盖外部改动；重新加载后再保存。重置可针对单项或全部设置，也可修复损坏配置。选择其他配置会先验证并选中该文件，然后清除已缓存的路径授权和拖入归档选择。`CCL_GUI_CONFIG_PATH` 固定配置并禁用选择器。来源密钥通过密码输入框录入，仅写入系统凭据库；环境变量状态只报告存在/不存在，且变量优先。
+`MaintenanceRequest` 是带 `operation` 标签且拒绝未知字段的 JSON 枚举，接受 `settings`、`set { key, value, expected }`、`reset { key?, expected }`、`provider_status`、`provider_set { key }`、`provider_remove`、`doctor { network_probe, write_probe }`、`diagnose { key?, run? }`、`export_diagnostics { key?, run?, output, include_log_preview }` 和 `about`。十项可编辑设置为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel`、`downloads.offline`、`auth.microsoft_client_id`、`launch.java`、`launch.max_memory_mb` 和 `launch.auto_install_java`。每项单独保存；核心配置锁内会比较 `expected`，外部 CLI/GUI 修改会导致陈旧设置错误，不会覆盖外部改动；重新加载后再保存。重置可针对单项或全部设置，也可修复损坏配置。选择其他配置会先验证并选中该文件，然后清除已缓存的路径授权和拖入归档选择。`CCL_GUI_CONFIG_PATH` 固定配置并禁用选择器。来源密钥通过密码输入框录入，仅写入系统凭据库；环境变量状态只报告存在/不存在，且变量优先。
 
 诊断导出保存在本地，并要求通过保存路径授权。原始日志预览默认关闭，只有明确启用才会包含，且受核心大小限制；尽力脱敏不保证移除所有秘密。分享前请人工检查导出文件。`update_installation` 使用既有 `UpdateRequest` 的 `status`、`check`、`apply`、`rollback`、`recover` 操作，每项携带 `installation_root`；`check` 和 `apply` 还携带 `channel: "stable" | "dev"`。原生选择器选取含独立 CLI 可执行文件的目录，这些请求只更新所选 CLI。
 
-`gui_self_update` 接收带标签的请求，操作包括 `status`、`check { channel }`、`apply { channel }`、`rollback` 和 `recover`，不含 `installation_root` 字段，只作用于当前 GUI 安装。响应含当前 `build`、已保存的 `selected_channel`、`supported`、可选 `reason`、事务 `status`、可选 `check`、助手 PID 和 `restart_required`。检查结果可能包括 `available`、`build_pending`、分支提交及候选清单；事务状态包括阶段、版本、渠道、备份状态和上次错误。GUI 清单名为 `gui-manifest-<target>.json`，字段为 `schema_version`、`repository`、`product`、`channel`、`version`、`commit`、`branch`、`target`、`data_schema_min`、`data_schema_max`、`os_signed` 和 `asset { format, name, size, sha256, url }`。`asset` 标识更新负载；仅用于分发的 DMG/DEB 是独立发行资产。当前未使用操作系统发布者签名，故 `os_signed` 为 false。独立签名文件 `gui-manifest-<target>.json.sig` 覆盖清单原始字节；两个产品使用同一内置发行公钥。GUI 更新器接受 Windows 按用户安装的 NSIS EXE、macOS `.app.tar.gz` 或 Linux AppImage；DEB 通过包管理器更新。助手保存上一版程序包，并在 60 秒内未收到启动健康确认时回滚。`about` 响应报告 `os_signed: false` 和 `update_manifest_signatures_required: true`；核心版本号来自实际链接的核心构建。源码见 [`self_update.rs`](../crates/ccl-gui/src/self_update.rs)、[`self_update_commands.rs`](../crates/ccl-gui/src/self_update_commands.rs) 和负责独立 CLI 操作的 [`update_service.rs`](../crates/ccl-gui/src/update_service.rs)。
+`gui_self_update` 接收带 `operation` 标签的请求，操作为 `status`、`check { channel }`、`apply { channel }`、`rollback` 或 `recover`。它只作用于当前 GUI 安装，不含 `installation_root`。响应包含 `build`、`selected_channel`、`supported`、可空的 `reason`、`status`、`check`、`helper_pid` 和 `restart_required`。`check` 包含 `available`、`build_pending`、`branch_commit` 和可空的 `candidate`；事务状态包含 `phase`、`version`、`channel`、`has_backup` 和可空的 `last_error`。启动助手前，`apply`、`rollback` 和 `recover` 都会请求确认；若已启动助手，应用会退出并重启。GUI 清单名为 `gui-manifest-<target>.json`，字段为 `schema_version`、`repository`、`product`、`channel`、`version`、`commit`、`branch`、`target`、`data_schema_min`、`data_schema_max`、`os_signed` 和 `asset { format, name, size, sha256, url }`。`asset` 标识更新负载；仅用于分发的 DMG/DEB 是独立发行资产。当前安装程序没有操作系统发布者签名，故 `os_signed` 为 false。独立签名文件 `gui-manifest-<target>.json.sig` 覆盖清单原始字节，并带有 Tauri 可信的 `timestamp:`、`file:` 和 `version:` 注释；更新器会验证受签名保护的版本与清单相符。两个产品使用同一内置发行公钥。GUI 更新器接受 Windows 按用户安装的 NSIS EXE、macOS `.app.tar.gz` 或 Linux AppImage；DEB 通过包管理器更新。助手保存上一版程序包，并在 60 秒内未收到启动健康确认时回滚。源码见 [`self_update.rs`](../crates/ccl-gui/src/self_update.rs)、[`self_update_commands.rs`](../crates/ccl-gui/src/self_update_commands.rs) 和负责独立 CLI 操作的 [`update_service.rs`](../crates/ccl-gui/src/update_service.rs)。
+
+`update_installation` 接收由 `operation` 标记的 `UpdateRequest`：`status`、`rollback` 和 `recover` 携带 `{ installation_root }`；`check` 和 `apply` 还需携带 `{ channel }`。`UpdateResponse` 使用 `status`、`checked`、`started` 或 `recovery_started` 结果标签，对应返回构建/状态、更新检查结果或助手 PID。所有操作均作为任务分发；所选目录必须是已由原生目录选择器授权的现有 CLI 安装目录。这些请求不会更新 GUI 可执行文件。
+
+发行目标格式为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x86_64 AppImage 和 DEB。GUI 更新负载为 NSIS EXE、macOS `.app.tar.gz` 和 AppImage；DEB 由包管理器更新。安装程序没有操作系统发布者签名，macOS 程序包未经公证。GUI 更新清单签名认证元数据及更新负载摘要；它与 Authenticode 和 Apple 签名/公证不同。
 
 
-解析请求还接受可选 `version` 和可为空的 `loader`。选定版本会解析它自身固定的依赖图；安装复用同一解析路径。版本或目标筛选改变时，GUI 清除旧计划，并要求先生成计划再安装内容。
+发现页也可针对所选 Minecraft 版本解析可选版本和可空的加载器。选定版本会解析它自身固定的依赖图；安装复用同一解析路径。版本或目标筛选改变时，GUI 清除旧计划，并要求先生成计划再安装内容。
 
 <a id="core"></a>
 

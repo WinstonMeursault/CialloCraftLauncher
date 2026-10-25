@@ -32,7 +32,6 @@ pub struct Bootstrap {
     pub preferences: Preferences,
     pub entries: Vec<LibraryEntry>,
     pub warnings: Vec<String>,
-    pub prototype: bool,
 }
 pub fn bootstrap(
     store: &PreferencesStore,
@@ -73,7 +72,6 @@ pub fn bootstrap(
         preferences,
         entries: vec![],
         warnings: vec![],
-        prototype: true,
     };
     let compatibility = inspect_compatibility(config_path, &result.root);
     if !compatibility.compatible {

@@ -41,7 +41,7 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .crumb { color: var(--muted); font-size: 11px; }
 .crumb span { padding: 0 7px; color: var(--line); }
 .top-actions { display: flex; align-items: center; gap: 10px; }
-.prototype-badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: 10px; }
+.edition-badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: 10px; }
 .locale-switch, .icon-button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 11px; }
 .hero { position: relative; min-height: 151px; display: flex; align-items: center; overflow: hidden; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--hero); }
 .hero-copy { position: relative; z-index: 1; max-width: 70%; padding: 21px 25px; }

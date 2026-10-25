@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-CCL 提供 Rust 核心、命令行界面和 Tauri 桌面 GUI。G3 增加独立桌面安装包与 GUI 应用包更新器；v0.2.0 稳定版发布需经用户明确同意。开发版属于预发布，不代表已完成稳定版验收。
+CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包更新器的 Tauri 桌面 GUI。当前稳定版 v0.1.0 包含 CLI 与核心；GUI 和签名清单更新协议可在 v0.2.0 开发预发行中使用。v0.2.0 稳定版发布须经所有者明确同意。
 
 | 方面 | 已提供的功能 |
 | --- | --- |
@@ -21,7 +21,7 @@ CCL 提供 Rust 核心、命令行界面和 Tauri 桌面 GUI。G3 增加独立�
 | macOS Apple 芯片 | `aarch64-apple-darwin` | 工作流目标：macOS 15；历史样本不能证明最低系统版本 |
 | Linux x64 | `x86_64-unknown-linux-gnu` | 工作流目标：Ubuntu 24.04；历史样本不能证明兼容所有 Linux 发行版 |
 
-G3 发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。独立 GUI 验证工作流检查更新并手动回退、坏程序包自动回退及替换中断后的恢复；发行工作流检查渲染后的启动就绪状态。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
+桌面发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。独立 GUI 验证工作流检查更新并手动回退、坏程序包自动回退及替换中断后的恢复；发行工作流检查渲染后的启动就绪状态。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
 
 Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实现。在线账户集成仍属实验性功能；所有者已暂缓本次发行的真实正版账户完整验收。继续支持离线身份。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
 
@@ -33,14 +33,14 @@ Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实�
 
 CLI 与 GUI 更新清单使用共享的 Tauri 更新密钥签名，绑定产品、版本、渠道、提交、目标平台和程序包摘要。早于首个签名清单版本的 CLI 需要先手动更新。GUI 安装文件仍未使用操作系统发布者证书签名，macOS 程序包也未经公证；更新加密签名与操作系统发布者身份是两回事。计划的最低支持版本为 Windows 10（含 WebView2）、macOS 13，以及 glibc 2.39 的 Linux；尚未在这些最低版本上进行物理验证。Linux 的 Microsoft 账户/平台 key 存储需要可用且已解锁的 Secret Service/D-Bus 会话，没有明文凭据回退。
 
-从当前源码构建：
+从当前源码构建 CLI：
 
 ```sh
 cargo build --release --locked -p ccl-cli
 cargo run --release --locked -p ccl-cli -- --help
 ```
 
-工具链与本机构建依赖见[开发指南](docs/development.zh-CN.md#environment)。构建产物不附带 Minecraft、Java 运行时、模组或用户凭据；需要时启动器可另行下载 Java。
+桌面 GUI 请按[桌面构建说明](docs/development.zh-CN.md#gui-g3)准备前端及许可证声明。工具链与本机构建依赖见[开发指南](docs/development.zh-CN.md#environment)。构建产物不附带 Minecraft、Java 运行时、模组或用户凭据；需要时启动器可另行下载 Java。
 
 ## 文档
 

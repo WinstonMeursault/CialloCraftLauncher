@@ -52,7 +52,7 @@ test('history replaces stale revisions, sorts newest first, and retains eight ta
 
 test('keeps managed entries when a busy library refresh omits them', () => {
   const oldEntry = { key: 'managed:atelier', id: 'atelier', kind: 'managed' as const, minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
-  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en' }, entries: [oldEntry], warnings: [], prototype: true }
+  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en' }, entries: [oldEntry], warnings: [] }
   const incomplete: Bootstrap = { ...current, entries: [], warnings: ['Managed instances are busy or unreadable; retry after other operations finish'] }
 
   assert.deepEqual(retainBusyManagedEntries(current, incomplete).entries, [oldEntry])

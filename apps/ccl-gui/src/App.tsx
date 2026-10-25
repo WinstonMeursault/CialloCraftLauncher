@@ -555,7 +555,7 @@ export default function App() {
     </aside>
 
     <main className="main">
-      <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span><div className="top-actions"><span className="prototype-badge">{t.prototype}</span><button className="locale-switch" onClick={() => setLanguage(language === 'en' ? 'zh-CN' : 'en')}>{language === 'en' ? '简体中文' : 'English'}</button></div></header>
+      <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span><div className="top-actions"><span className="edition-badge">{t.edition}</span><button className="locale-switch" onClick={() => setLanguage(language === 'en' ? 'zh-CN' : 'en')}>{language === 'en' ? '简体中文' : 'English'}</button></div></header>
       {error && <div className="alert" role="alert"><strong>{t.error}</strong><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError(null)}>×</button></div>}
       {pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label="Dismiss" onClick={() => setPageNotice(null)}>×</button></div>}
       {loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
