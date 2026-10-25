@@ -283,7 +283,11 @@ fn updater_rejects_data_inside_or_containing_the_application() {
             .protect_data_paths(&[install.target.join("config.json")])
             .is_err()
     );
-    assert!(install.protect_data_paths(std::slice::from_ref(&temp.0)).is_err());
+    assert!(
+        install
+            .protect_data_paths(std::slice::from_ref(&temp.0))
+            .is_err()
+    );
     assert!(
         install
             .protect_data_paths(&[
