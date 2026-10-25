@@ -1,7 +1,6 @@
-//! Branch-bound GitHub updates and recoverable executable replacement.
-//! Release packages are currently unsigned. HTTPS and hashes detect corruption;
-//! they do not provide an independent publisher trust root.
+//! Branch-bound, signed GitHub updates and recoverable executable replacement.
 use crate::{CancellationToken, config::DownloadConfig};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,6 +14,17 @@ use std::{
 };
 
 pub const REPOSITORY: &str = "WinstonMeursault/CialloCraftLauncher";
+const PRODUCT: &str = "ccl-cli";
+const SIGNATURE_SUFFIX: &str = ".sig";
+const MAX_SIGNATURE: u64 = 64 * 1024;
+const UPDATE_PUBLIC_KEY: &str = include_str!("update-public-key.pub");
+#[cfg(test)]
+static TEST_SIGNING_KEY: std::sync::OnceLock<minisign::KeyPair> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn test_signing_keypair() -> &'static minisign::KeyPair {
+    TEST_SIGNING_KEY.get_or_init(|| minisign::KeyPair::generate_unencrypted_keypair().unwrap())
+}
 const MAX_ARCHIVE: u64 = 128 * 1024 * 1024;
 const MAX_EXECUTABLE: u64 = 64 * 1024 * 1024;
 // Existing local binaries may contain substantial DWARF debug information. This
@@ -95,13 +105,13 @@ pub struct UpdateAsset {
 #[serde(deny_unknown_fields)]
 pub struct UpdateManifest {
     pub schema_version: u32,
+    pub product: String,
     pub repository: String,
     pub channel: Channel,
     pub version: String,
     pub commit: String,
     pub branch: String,
     pub target: String,
-    pub unsigned: bool,
     pub executable_sha256: String,
     pub executable_size: u64,
     pub data_schema_min: u32,
@@ -119,11 +129,11 @@ impl UpdateManifest {
     }
     pub fn validate(&self, channel: Channel, target: &str, tag: &str) -> Result<()> {
         if self.schema_version != 1
+            || self.product != PRODUCT
             || self.repository != REPOSITORY
             || self.channel != channel
             || self.branch != channel.branch()
             || self.target != target
-            || !self.unsigned
             || !hex_string(&self.commit, 40)
             || !hex_string(&self.asset.sha256, 64)
             || !hex_string(&self.executable_sha256, 64)
@@ -155,6 +165,112 @@ impl UpdateManifest {
         }
         Ok(())
     }
+}
+
+/// Verify a Tauri-compatible base64-encoded Minisign signature over exact bytes.
+/// The public key is compiled into the updater so downloaded configuration cannot
+/// replace the trust root.
+pub fn verify_release_signature(
+    bytes: &[u8],
+    signature: &str,
+) -> std::result::Result<(), UpdateError> {
+    let key = embedded_update_public_key()?;
+    verify_release_signature_with_key(bytes, signature, &key).map(|_| ())
+}
+
+/// Verify both the exact payload and Tauri's authenticated version field.
+pub fn verify_release_signature_for_version(
+    bytes: &[u8],
+    signature: &str,
+    version: &str,
+) -> Result<()> {
+    let key = embedded_update_public_key()?;
+    let signature = verify_release_signature_with_key(bytes, signature, &key)?;
+    verify_signed_version(&signature, version)
+}
+
+fn verify_signed_version(signature: &minisign::SignatureBox, version: &str) -> Result<()> {
+    let comment = signature
+        .trusted_comment()
+        .map_err(|_| invalid("missing signed app version"))?;
+    let mut versions = comment
+        .split('\t')
+        .filter_map(|field| field.strip_prefix("version:"));
+    if comment.contains(['\r', '\n'])
+        || versions.next() != Some(version)
+        || versions.next().is_some()
+    {
+        return Err(invalid("signed app version does not match manifest"));
+    }
+    Ok(())
+}
+
+fn embedded_update_public_key() -> Result<minisign::PublicKey> {
+    #[cfg(test)]
+    {
+        Ok(test_signing_keypair().pk.clone())
+    }
+    #[cfg(not(test))]
+    {
+        parse_update_public_key(UPDATE_PUBLIC_KEY)
+    }
+}
+
+fn parse_update_public_key(contents: &str) -> Result<minisign::PublicKey> {
+    let decoded = STANDARD
+        .decode(contents.trim())
+        .map_err(|_| invalid("invalid embedded update verification key"))?;
+    let key_text = std::str::from_utf8(&decoded)
+        .map_err(|_| invalid("invalid embedded update verification key"))?;
+    minisign::PublicKeyBox::from_string(key_text.trim())
+        .and_then(|key| key.into_public_key())
+        .map_err(|_| invalid("invalid embedded update verification key"))
+}
+
+fn verify_release_signature_with_key(
+    bytes: &[u8],
+    signature: &str,
+    key: &minisign::PublicKey,
+) -> Result<minisign::SignatureBox> {
+    if signature.len() as u64 > MAX_SIGNATURE {
+        return Err(invalid("release signature exceeds size limit"));
+    }
+    let decoded = STANDARD
+        .decode(signature.trim())
+        .map_err(|_| invalid("malformed release signature"))?;
+    let signature =
+        std::str::from_utf8(&decoded).map_err(|_| invalid("malformed release signature"))?;
+    let signature = minisign::SignatureBox::from_string(signature)
+        .map_err(|_| invalid("malformed release signature"))?;
+    minisign::verify(
+        key,
+        &signature,
+        std::io::Cursor::new(bytes),
+        true,
+        false,
+        false,
+    )
+    .map_err(|_| invalid("release signature verification failed"))?;
+    Ok(signature)
+}
+
+fn verify_manifest_signature(
+    bytes: &[u8],
+    signature: &str,
+    manifest: &UpdateManifest,
+) -> Result<()> {
+    let key = embedded_update_public_key()?;
+    verify_manifest_signature_with_key(bytes, signature, manifest, &key)
+}
+
+fn verify_manifest_signature_with_key(
+    bytes: &[u8],
+    signature: &str,
+    manifest: &UpdateManifest,
+    key: &minisign::PublicKey,
+) -> Result<()> {
+    let signature = verify_release_signature_with_key(bytes, signature, key)?;
+    verify_signed_version(&signature, &manifest.version)
 }
 fn hex_string(value: &str, length: usize) -> bool {
     value.len() == length
@@ -373,14 +489,30 @@ impl UpdateService {
             let Some(asset) = release.assets.iter().find(|a| a.name == name) else {
                 continue;
             };
+            let signature_name = format!("{name}{SIGNATURE_SUFFIX}");
+            let Some(signature_asset) = release.assets.iter().find(|a| a.name == signature_name)
+            else {
+                continue;
+            };
             let expected = format!(
                 "https://github.com/{REPOSITORY}/releases/download/{}/{name}",
                 release.tag_name
             );
-            if asset.browser_download_url != expected {
+            let expected_signature = format!("{expected}{SIGNATURE_SUFFIX}");
+            if asset.browser_download_url != expected
+                || signature_asset.browser_download_url != expected_signature
+            {
                 return Err(invalid("manifest URL escaped selected repository"));
             }
-            let manifest: UpdateManifest = self.json(&expected, token).await?;
+            let manifest_bytes = self.bytes(&expected, MAX_METADATA, token).await?;
+            let signature_bytes = self
+                .bytes(&expected_signature, MAX_SIGNATURE, token)
+                .await?;
+            let signature = std::str::from_utf8(&signature_bytes)
+                .map_err(|_| invalid("malformed release signature"))?;
+            let manifest: UpdateManifest = serde_json::from_slice(&manifest_bytes)
+                .map_err(|_| invalid("malformed update manifest"))?;
+            verify_manifest_signature(&manifest_bytes, signature, &manifest)?;
             manifest.validate(channel, &current.target, &release.tag_name)?;
             if manifest.commit != branch_commit {
                 let compare: serde_json::Value = self
@@ -424,7 +556,7 @@ impl UpdateService {
             available,
             current,
             candidate,
-            unsigned: true,
+            unsigned: false,
         })
     }
     pub async fn stage(
@@ -442,6 +574,27 @@ impl UpdateService {
         // A GUI or other frontend may update a separately selected CLI install.
         // Bind the manifest to that executable's target, not the frontend build.
         manifest.validate(manifest.channel, &install.identity()?.target, &tag)?;
+        let manifest_name = format!("manifest-{}.json", manifest.target);
+        let manifest_url =
+            format!("https://github.com/{REPOSITORY}/releases/download/{tag}/{manifest_name}");
+        let manifest_bytes = self.bytes(&manifest_url, MAX_METADATA, token).await?;
+        let downloaded: UpdateManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|_| invalid("malformed update manifest"))?;
+        if serde_json::to_value(&downloaded).ok() != serde_json::to_value(manifest).ok() {
+            return Err(invalid(
+                "staged manifest differs from signed release manifest",
+            ));
+        }
+        let signature_bytes = self
+            .bytes(
+                &format!("{manifest_url}{SIGNATURE_SUFFIX}"),
+                MAX_SIGNATURE,
+                token,
+            )
+            .await?;
+        let signature = std::str::from_utf8(&signature_bytes)
+            .map_err(|_| invalid("malformed release signature"))?;
+        verify_manifest_signature(&manifest_bytes, signature, manifest)?;
         let prefix = format!("{}/repos/{REPOSITORY}", self.api_root);
         let head: serde_json::Value = self
             .json(
@@ -638,7 +791,7 @@ impl Journal {
             },
             candidate: self.new_identity.clone(),
             error: self.error.clone(),
-            unsigned: true,
+            unsigned: false,
         }
     }
 }
@@ -1237,6 +1390,40 @@ mod tests {
         },
     };
 
+    fn signed_bytes(bytes: &[u8], version: &str) -> String {
+        let trusted_comment = format!("timestamp:1\tfile:fixture.json\tversion:{version}");
+        let signature = minisign::sign(
+            None,
+            &test_signing_keypair().sk,
+            std::io::Cursor::new(bytes),
+            Some(&trusted_comment),
+            None,
+        )
+        .unwrap();
+        STANDARD.encode(signature.to_string().as_bytes())
+    }
+
+    #[cfg(not(windows))]
+    fn manifest_signature_routes(manifest: &UpdateManifest) -> HashMap<String, (u16, Vec<u8>)> {
+        let tag = match manifest.channel {
+            Channel::Stable => format!("v{}", manifest.version),
+            Channel::Dev => format!("dev-{}", manifest.commit),
+        };
+        let name = format!("manifest-{}.json", manifest.target);
+        let bytes = serde_json::to_vec(manifest).unwrap();
+        let signature = signed_bytes(&bytes, &manifest.version);
+        HashMap::from([
+            (
+                format!("/{REPOSITORY}/releases/download/{tag}/{name}"),
+                (200, bytes),
+            ),
+            (
+                format!("/{REPOSITORY}/releases/download/{tag}/{name}{SIGNATURE_SUFFIX}"),
+                (200, signature.into_bytes()),
+            ),
+        ])
+    }
+
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
@@ -1260,13 +1447,13 @@ mod tests {
         };
         UpdateManifest {
             schema_version: 1,
+            product: PRODUCT.into(),
             repository: REPOSITORY.into(),
             channel,
             version: "0.1.0".into(),
             commit,
             branch: channel.branch().into(),
             target: target.clone(),
-            unsigned: true,
             executable_sha256: digest(b"new"),
             executable_size: 3,
             data_schema_min: 1,
@@ -1383,10 +1570,14 @@ mod tests {
         };
         let name = format!("manifest-{}.json", manifest.target);
         let url = format!("https://github.com/{REPOSITORY}/releases/download/{tag}/{name}");
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let signature = signed_bytes(&manifest_bytes, &manifest.version);
+        let signature_url = format!("{url}{SIGNATURE_SUFFIX}");
         HashMap::from([
             (format!("/repos/{REPOSITORY}/commits/{}",channel.branch()),(200,serde_json::to_vec(&json!({"sha":head})).unwrap())),
-            (format!("/repos/{REPOSITORY}/releases?per_page=100&page=1"),(200,serde_json::to_vec(&json!([{"tag_name":tag,"draft":false,"prerelease":channel==Channel::Dev,"assets":[{"name":name,"browser_download_url":url}]}])).unwrap())),
-            (format!("/{REPOSITORY}/releases/download/{tag}/{name}"),(200,serde_json::to_vec(&manifest).unwrap())),
+            (format!("/repos/{REPOSITORY}/releases?per_page=100&page=1"),(200,serde_json::to_vec(&json!([{"tag_name":tag,"draft":false,"prerelease":channel==Channel::Dev,"assets":[{"name":name,"browser_download_url":url},{"name":format!("{name}{SIGNATURE_SUFFIX}"),"browser_download_url":signature_url}]}])).unwrap())),
+            (format!("/{REPOSITORY}/releases/download/{tag}/{name}"),(200,manifest_bytes)),
+            (format!("/{REPOSITORY}/releases/download/{tag}/{name}{SIGNATURE_SUFFIX}"),(200,signature.into_bytes())),
             (format!("/repos/{REPOSITORY}/compare/{}...{head}",manifest.commit),(200,serde_json::to_vec(&json!({"status":"ahead"})).unwrap())),
         ])
     }
@@ -1420,6 +1611,35 @@ mod tests {
         assert!(good.validate(Channel::Stable, &good.target, &tag).is_err());
         assert!(good.validate(Channel::Dev, "other-target", &tag).is_err());
     }
+
+    #[test]
+    fn signed_manifest_rejects_corruption_and_version_mismatch() {
+        let manifest = manifest(Channel::Dev);
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let signature = signed_bytes(&bytes, &manifest.version);
+        let key = test_signing_keypair().pk.clone();
+        verify_manifest_signature_with_key(&bytes, &signature, &manifest, &key).unwrap();
+
+        let mut corrupted = bytes.clone();
+        corrupted[0] ^= 1;
+        assert!(
+            verify_manifest_signature_with_key(&corrupted, &signature, &manifest, &key).is_err()
+        );
+
+        let wrong_version_signature = signed_bytes(&bytes, "9.9.9");
+        assert!(
+            verify_manifest_signature_with_key(&bytes, &wrong_version_signature, &manifest, &key)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn embedded_public_key_uses_tauri_base64_export_format() {
+        let key = parse_update_public_key(UPDATE_PUBLIC_KEY)
+            .expect("tracked Tauri-exported update public key should parse");
+        assert!(!key.keynum().is_empty());
+    }
+
     #[tokio::test]
     async fn offline_and_cancellation_stop_before_http() {
         let service = UpdateService::new(&DownloadConfig {
@@ -1669,16 +1889,16 @@ mod tests {
             .strip_prefix("https://github.com")
             .unwrap()
             .to_owned();
-        let server = Server::new(HashMap::from([
-            (route, (200, archive)),
+        let mut stage_routes = manifest_signature_routes(&manifest);
+        stage_routes.insert(route, (200, archive));
+        stage_routes.insert(
+            format!("/repos/{REPOSITORY}/commits/dev"),
             (
-                format!("/repos/{REPOSITORY}/commits/dev"),
-                (
-                    200,
-                    serde_json::to_vec(&json!({"sha":manifest.commit})).unwrap(),
-                ),
+                200,
+                serde_json::to_vec(&json!({"sha":manifest.commit})).unwrap(),
             ),
-        ]));
+        );
+        let server = Server::new(stage_routes);
         let config = temp.0.join("config.json");
         let game = temp.0.join("game");
         let status = server
@@ -1722,16 +1942,16 @@ mod tests {
             .strip_prefix("https://github.com")
             .unwrap()
             .to_owned();
-        let server = Server::new(HashMap::from([
-            (path, (200, b"bad".to_vec())),
+        let mut stage_routes = manifest_signature_routes(&manifest);
+        stage_routes.insert(path, (200, b"bad".to_vec()));
+        stage_routes.insert(
+            format!("/repos/{REPOSITORY}/commits/dev"),
             (
-                format!("/repos/{REPOSITORY}/commits/dev"),
-                (
-                    200,
-                    serde_json::to_vec(&json!({"sha":manifest.commit})).unwrap(),
-                ),
+                200,
+                serde_json::to_vec(&json!({"sha":manifest.commit})).unwrap(),
             ),
-        ]));
+        );
+        let server = Server::new(stage_routes);
         assert!(
             server
                 .service()

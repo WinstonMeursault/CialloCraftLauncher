@@ -54,7 +54,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 `--json`、`--network-offline`、`--game-dir` 和 `--config` 都是全局选项，可以放在子命令前或后。`--network-offline` 会禁用 HTTP 请求并要求使用已验证的本地数据；它与 `launch --offline`（选择离线玩家身份）不同。只有保存的强 ETag 和服务器范围响应均匹配时，下载才会续传。`--json` 会在成功或操作错误时将唯一一份命令结果 JSON 输出到标准输出。操作错误使用 `{"ok":false,"error":{"code":"...","message":"..."}}`；`error.code` 标识错误类别，`message` 为人类可读信息。进度和诊断信息输出到标准错误。`account login` 会在标准错误输出 `kind: "device_authorization"` JSON 行；若无法打开浏览器，还可能输出 `kind: "browser_open"` 行。这些进度行不属于最终 JSON 结果。clap 生成的帮助和参数解析错误仍为文本。
 
-`update check --channel` 和 `update apply --channel` 会持久化选择的渠道。稳定版跟随 `main`，使用 `v<VERSION>` 版本标签；开发版跟随 `dev`，只有三个目标平台均完成验证和打包后才发布。更新器会核对仓库、分支、commit、目标平台和数据读取范围，并在暂存前检查归档大小、SHA-256 与路径。发行包未签名：HTTPS 和 SHA-256 可以检测传输或归档损坏，但不能验证发布者身份。更新器使用安装目录 `.ccl-update` 下的操作系统独占文件锁，串行化渠道修改、暂存、状态读取、回退准备和助手事务。其他进程持锁时操作会报更新器忙（退出码 `17`）；进程或助手退出后锁会释放。`apply` 启动受限助手后返回。助手会尝试替换可执行文件、运行健康检查，并提交或恢复旧程序；在 Windows 上遇到临时共享或权限错误时，最多重试 30 秒。没有事务时，`update status` 返回 `update_status: null`；有事务时返回状态（`staged`、`replacing`、`checking`、`committed`、`rolling_back`、`rolled_back` 或 `failed`）、当前和候选构建标识、可选错误及 `unsigned`。事务未完成时不能暂存其他更新；使用 `update recover` 恢复助手操作。`update rollback` 仅适用于已提交的更新，并会先检查保留的旧程序能否读取当前启动器元数据；它不会恢复游戏目录。除 `status`、`rollback` 和恢复外，更新命令需要网络；`--network-offline` 会阻止更新检查和下载。
+`update check --channel` 和 `update apply --channel` 会持久化选择的渠道。稳定版跟随 `main`，使用 `v<VERSION>` 版本标签；开发版跟随 `dev`，只有三个目标平台均完成验证和打包后才发布。CLI 清单命名为 `manifest-<target>.json`，字段包含 `product: "ccl-cli"`。对应的 `manifest-<target>.json.sig` 独立签名覆盖清单原始字节，包括仓库、产品、渠道、版本、分支、commit、目标平台、数据 schema 范围、可执行文件大小/哈希及程序包大小/哈希/URL。更新器使用程序内置公钥验证签名，然后在暂存前检查归档大小、SHA-256 与路径。`v0.1` CLI 尚不认识此清单格式，必须手动替换安装为首个签名清单发行版。清单及其摘要经过加密签名；单独的 SHA-256 只能确认字节，不能认证发布者身份。CLI ZIP 本身没有操作系统发布者签名。更新器使用安装目录 `.ccl-update` 下的操作系统独占文件锁，串行化渠道修改、暂存、状态读取、回退准备和助手事务。其他进程持锁时操作会报更新器忙（退出码 `17`）；进程或助手退出后锁会释放。`apply` 启动受限助手后返回。助手会尝试替换可执行文件、运行健康检查，并提交或恢复旧程序；在 Windows 上遇到临时共享或权限错误时，最多重试 30 秒。没有事务时，`update status` 返回 `update_status: null`；有事务时返回状态（`staged`、`replacing`、`checking`、`committed`、`rolling_back`、`rolled_back` 或 `failed`）、当前和候选构建标识、可选错误及 `unsigned`（经过认证的签名发行中为 `false`）。事务未完成时不能暂存其他更新；使用 `update recover` 恢复助手操作。`update rollback` 仅适用于已提交的更新，并会先检查保留的旧程序能否读取当前启动器元数据；它不会恢复游戏目录。除 `status`、`rollback` 和恢复外，更新命令需要网络；`--network-offline` 会阻止更新检查和下载。
 
 `doctor` 默认不探测网络，也不写文件。`--network-probe` 检查官方版本元数据端点；`--write-probe` 会在启动器数据目录临时创建并删除空文件。`diagnose --run ID` 读取已保存的运行记录和有大小限制的日志前缀，以分类已知故障模式。`diagnose --export PATH` 创建新的本地文件，仅包含白名单结构化字段。添加 `--include-log-preview` 会附加最多 16 KiB 的原始游戏输出；分享前请检查，因为游戏或模组日志可能包含秘密。报告不会上传。
 
@@ -74,9 +74,9 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 <a id="desktop"></a>
 
-## 桌面适配器（alpha）
+## 桌面应用（G3）
 
-可选 Tauri 桌面适配器为 `ccl-gui` `0.2.0-alpha.1`，不包含在 CLI 发行归档中。它仍在进行验证；本节说明当前源码接口，不代表已完成跨平台发行。通过 Tauri 的 `invoke` API 调用命令。命令返回类型化数据，错误序列化为 `{ "code": "...", "message": "..." }`。
+Tauri 桌面应用为 `ccl-gui`，与 CLI 发行归档分开发行。本节说明源码接口与程序包契约；跨平台验收证据以对应提交的工作流结果为准。通过 Tauri 的 `invoke` API 调用命令。命令返回类型化数据，错误序列化为 `{ "code": "...", "message": "..." }`。
 
 | 命令 | 用途 |
 | --- | --- |
@@ -88,11 +88,11 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 | `account_list`、`account_select`、`account_logout`、`account_login`、`account_refresh`、`account_check_storage`、`open_login_browser` | 列出/管理已保存账户，运行实验性的设备码登录和刷新，检查系统凭据库，或打开经过校验的验证 URI。 |
 | `cancel_task`、`task_snapshot`、`task_history`、`set_visibility` | 取消活动任务、读取当前/历史快照，或在窗口隐藏时控制事件通知。 |
 | `instance_query`、`instance_mutate`、`online_query`、`online_mutate` | 高级页面的实例/内容管理及来源发现/变更请求。 |
-| `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`select_config` | 原生路径选择/导入检查、设置/来源/诊断及所选 CLI 维护。 |
+| `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`gui_self_update`、`select_config` | 原生路径选择/导入检查、设置/来源/诊断、所选 CLI 维护和当前 GUI 应用包更新。 |
 
 长时间操作会返回 `TaskSnapshot`，字段包括 `id`、单调递增的 `revision`、`state`、`kind`、`phase`、进度、可选 PID、有界 `logs`、安全的 `error`/`error_code`、可选结果和可选 `authorization`。授权信息仅包含 `user_code`、`verification_uri` 和 `expires_in`；设备码和账户令牌留在 Rust 内。`gui-task` 事件会发送任务快照。接收方应忽略比已处理 `(id, revision)` 更旧的快照。一次只运行一个任务；切换页面不会取消任务。最多保留八个已完成快照。后端最多保存 1,000 行任务日志，每行最多 512 个字符；任务页面显示最近 100 行。非生命周期进度/日志通知最多每秒 10 次。安装/导入取消采用协作方式；停止游戏是单独确认的操作。生产任务页面显示已接入的工作，不包含合成探针。
 
-GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI 共用的核心 `downloads.offline` 设置。GUI 偏好设置使用独立 `gui.json`；账户元数据保存在核心配置旁，令牌使用操作系统凭据库。参阅[桌面 alpha 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-preview)。
+GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI 共用的核心 `downloads.offline` 设置。GUI 偏好设置使用独立 `gui.json`；账户元数据保存在核心配置旁，令牌使用操作系统凭据库。参阅[桌面 GUI 使用说明](user-guide.zh-CN.md#desktop-alpha)和[开发说明](development.zh-CN.md#gui-g3)。
 
 已保存日志每次最多读取末尾 1 MiB，保留最多 1,000 行，每行最多 8,192 字符，并返回 `truncated`。日志页从任务快照显示当前启动日志，启动结束后恢复读取已保存运行记录。新建托管实例与默认导入在实例锁内拒绝已有 ID；显式更新已有整合包实例时保留核心冲突检查；共享原版安装可校验和修复已有版本。
 
@@ -104,7 +104,9 @@ GUI 中离线身份选项与持久化网络离线设置分开。后者是 CLI �
 
 维护请求包括 `settings`、`set { key, value, expected }`、`reset { key?, expected }`、`provider_status`、`provider_set { key }`、`provider_remove`、`doctor { network_probe, write_probe }`、`diagnose { key?, run? }`、`export_diagnostics { key?, run?, output, include_log_preview }` 和 `about`。十项可编辑设置为 `downloads.version_list_source`、`downloads.file_source`、`downloads.mirror_root`、`downloads.http_proxy`、`downloads.max_parallel`、`downloads.offline`、`auth.microsoft_client_id`、`launch.java`、`launch.max_memory_mb` 和 `launch.auto_install_java`。每项单独保存；核心配置锁内会比较 `expected`，外部 CLI/GUI 修改会导致陈旧设置错误，不会覆盖外部改动；重新加载后再保存。重置可针对单项或全部设置，也可修复损坏配置。选择其他配置会先验证并选中该文件，然后清除已缓存的路径授权和拖入归档选择。`CCL_GUI_CONFIG_PATH` 固定配置并禁用选择器。来源密钥通过密码输入框录入，仅写入系统凭据库；环境变量状态只报告存在/不存在，且变量优先。
 
-诊断导出保存在本地，并要求通过保存路径授权。原始日志预览默认关闭，只有明确启用才会包含，且受核心大小限制；尽力脱敏不保证移除所有秘密。分享前请人工检查导出文件。GUI 更新请求使用 `UpdateRequest` 的 `status`、`check`、`apply`、`rollback`、`recover` 操作，每项携带 `installation_root`；`check` 和 `apply` 还携带 `channel: "stable" | "dev"`。原生选择器选取包含独立 CLI 可执行文件的目录。这些请求只更新所选 CLI 安装；GUI 应用包更新属于独立的 G3 功能。源码见 [`instance_service.rs`](../crates/ccl-gui/src/instance_service.rs)、[`online_service.rs`](../crates/ccl-gui/src/online_service.rs)、[`maintenance.rs`](../crates/ccl-gui/src/maintenance.rs)、[`update_service.rs`](../crates/ccl-gui/src/update_service.rs) 和 [`advanced_commands.rs`](../crates/ccl-gui/src/advanced_commands.rs)。
+诊断导出保存在本地，并要求通过保存路径授权。原始日志预览默认关闭，只有明确启用才会包含，且受核心大小限制；尽力脱敏不保证移除所有秘密。分享前请人工检查导出文件。`update_installation` 使用既有 `UpdateRequest` 的 `status`、`check`、`apply`、`rollback`、`recover` 操作，每项携带 `installation_root`；`check` 和 `apply` 还携带 `channel: "stable" | "dev"`。原生选择器选取含独立 CLI 可执行文件的目录，这些请求只更新所选 CLI。
+
+`gui_self_update` 接收带标签的请求，操作包括 `status`、`check { channel }`、`apply { channel }`、`rollback` 和 `recover`，不含 `installation_root` 字段，只作用于当前 GUI 安装。响应含当前 `build`、已保存的 `selected_channel`、`supported`、可选 `reason`、事务 `status`、可选 `check`、助手 PID 和 `restart_required`。检查结果可能包括 `available`、`build_pending`、分支提交及候选清单；事务状态包括阶段、版本、渠道、备份状态和上次错误。GUI 清单名为 `gui-manifest-<target>.json`，字段为 `schema_version`、`repository`、`product`、`channel`、`version`、`commit`、`branch`、`target`、`data_schema_min`、`data_schema_max`、`os_signed` 和 `asset { format, name, size, sha256, url }`。`asset` 标识更新负载；仅用于分发的 DMG/DEB 是独立发行资产。当前未使用操作系统发布者签名，故 `os_signed` 为 false。独立签名文件 `gui-manifest-<target>.json.sig` 覆盖清单原始字节；两个产品使用同一内置发行公钥。GUI 更新器接受 Windows 按用户安装的 NSIS EXE、macOS `.app.tar.gz` 或 Linux AppImage；DEB 通过包管理器更新。助手保存上一版程序包，并在 60 秒内未收到启动健康确认时回滚。`about` 响应报告 `os_signed: false` 和 `update_manifest_signatures_required: true`；核心版本号来自实际链接的核心构建。源码见 [`self_update.rs`](../crates/ccl-gui/src/self_update.rs)、[`self_update_commands.rs`](../crates/ccl-gui/src/self_update_commands.rs) 和负责独立 CLI 操作的 [`update_service.rs`](../crates/ccl-gui/src/update_service.rs)。
 
 
 解析请求还接受可选 `version` 和可为空的 `loader`。选定版本会解析它自身固定的依赖图；安装复用同一解析路径。版本或目标筛选改变时，GUI 清除旧计划，并要求先生成计划再安装内容。
@@ -183,13 +185,13 @@ token.cancel();
 
 ## 更新、兼容性与诊断
 
-更新器只从本项目 GitHub 仓库获取发行内容。稳定版由 `main` 上的 `v<VERSION>` 标签发布；开发版由 `dev` 提交触发，Windows x64、macOS arm64 和 Linux x86_64 均通过验证后才发布，并保留最近十个开发版发行。清单声明的数据 schema 读取范围为 `1..=1`；当前读取器继续兼容无 schema 的旧配置、账户元数据和实例元数据，并接受 schema 1 收据。严格元数据中的未知字段或未来收据 schema 会阻止兼容检查和更新器回退。
+更新器只从本项目 GitHub 仓库获取发行内容。稳定版由 `main` 上的 `v<VERSION>` 标签发布；开发版由 `dev` 提交触发，Windows x64、macOS arm64 和 Linux x86_64 均通过验证后才发布，并保留最近十个开发版发行。CLI 与 GUI 清单使用不同的 `product` 值（`ccl-cli`、`ccl-gui`），各有对应 `.json.sig` 文件。Tauri CLI 2.12.4 使用同一个长期 Actions 密钥签署清单原始 JSON 字节；匹配的公钥嵌入 `ccl-core`。清单声明的数据 schema 读取范围为 `1..=1`；当前读取器继续兼容无 schema 的旧配置、账户元数据和实例元数据，并接受 schema 1 收据。严格元数据中的未知字段或未来收据 schema 会阻止兼容检查和更新器回退。安装文件本身没有操作系统发布者证书签名；发行签名认证清单及程序包摘要，不代表 Authenticode 签名或 macOS 公证。
 
 `compatibility::inspect_compatibility` 为只读检查。它检查指定配置、相邻账户元数据以及 CCL 管理的实例代次和收据；不会打开操作系统凭据库，也不会检查存档等普通游戏文件。目前没有数据迁移。未来引入格式迁移时，必须锁定并备份受影响的元数据、暂存后原子提交、支持中断恢复，并在保留的旧读取器无法读取新数据时拒绝二进制回退。
 
 `DiagnosticsService::doctor` 检查 Java 候选、目录访问和是否编译了凭据库适配器，但不会判断用户凭据库是否已解锁。网络和写入探测需显式启用。`diagnose_run` 检查有大小限制的游戏日志前缀，以及时间戳接近该运行记录的崩溃报告，并提供已知分类和证据；未知原因仍会保持未知。结构化导出会替换路径，并排除账户、凭据、存档和服务器列表。原始日志预览是单独的可选字段，会进行尽力脱敏但不保证全面。
 
-发行包未签名；完整性校验不能证明发布者身份。
+CLI 归档和 GUI 安装程序没有操作系统发布者证书签名。更新器使用内置发行公钥验证签名清单及其程序包摘要；这不等于 Authenticode 签名或 macOS 公证。
 
 <a id="exit-codes"></a>
 

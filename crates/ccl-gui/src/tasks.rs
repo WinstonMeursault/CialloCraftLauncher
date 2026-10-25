@@ -13,6 +13,7 @@ use std::{
 };
 
 const LOG_LINES: usize = 1000;
+const DISPLAY_LOG_LINES: usize = 100;
 const LOG_LINE_CHARS: usize = 512;
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +40,17 @@ pub struct TaskSnapshot {
     pub error_code: Option<String>,
     pub result: Option<Value>,
     pub authorization: Option<DeviceAuthorization>,
+}
+impl TaskSnapshot {
+    /// Bound log history sent to the WebView while retaining the full native
+    /// history for diagnostics and task-history queries inside the process.
+    pub fn for_display(mut self) -> Self {
+        if self.logs.len() > DISPLAY_LOG_LINES {
+            let excess = self.logs.len() - DISPLAY_LOG_LINES;
+            self.logs.drain(..excess);
+        }
+        self
+    }
 }
 struct Record {
     snapshot: TaskSnapshot,
@@ -109,12 +121,12 @@ impl TaskRegistry {
         if self.visible.load(Ordering::Acquire)
             && let Some(snapshot) = self.snapshot()
         {
-            (self.notify)(snapshot);
+            self.publish_snapshot(snapshot);
         }
     }
     fn publish_snapshot(&self, snapshot: TaskSnapshot) {
         if self.visible.load(Ordering::Acquire) {
-            (self.notify)(snapshot);
+            (self.notify)(snapshot.for_display());
         }
     }
     fn edit(&self, id: u64, force: bool, edit: impl FnOnce(&mut TaskSnapshot)) {
@@ -440,6 +452,67 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         r.set_visible(true);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+    #[test]
+    fn raw_history_keeps_1000_lines_while_notifications_keep_the_latest_100_and_terminal_state() {
+        let notifications = Arc::new(Mutex::new(Vec::new()));
+        let received = notifications.clone();
+        let registry = TaskRegistry::new(Arc::new(move |snapshot| {
+            received.lock().unwrap().push(snapshot);
+        }));
+        registry
+            .start("log_fixture", |handle| async move {
+                for index in 1..=1200 {
+                    handle
+                        .context
+                        .emit(TaskEvent::Log {
+                            stream: "fixture".into(),
+                            line: format!("log-{index:04}"),
+                        })
+                        .unwrap();
+                }
+                Ok(serde_json::json!({"complete":true}))
+            })
+            .unwrap();
+
+        let raw = wait(&registry);
+        assert_eq!(raw.state, TaskState::Succeeded);
+        assert_eq!(raw.logs.len(), LOG_LINES);
+        assert_eq!(raw.logs.first().map(String::as_str), Some("log-0201"));
+        assert_eq!(raw.logs.last().map(String::as_str), Some("log-1200"));
+
+        let display = raw.for_display();
+        assert_eq!(display.logs.len(), DISPLAY_LOG_LINES);
+        assert_eq!(display.logs.first().map(String::as_str), Some("log-1101"));
+        assert_eq!(display.logs.last().map(String::as_str), Some("log-1200"));
+        assert_eq!(display.state, TaskState::Succeeded);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let terminal_notified = notifications
+                .lock()
+                .unwrap()
+                .last()
+                .is_some_and(|snapshot| snapshot.state == TaskState::Succeeded);
+            if terminal_notified {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal notification was not published"
+            );
+            std::thread::yield_now();
+        }
+        let sent = notifications.lock().unwrap();
+        assert!(!sent.is_empty());
+        assert!(
+            sent.iter()
+                .all(|snapshot| snapshot.logs.len() <= DISPLAY_LOG_LINES)
+        );
+        let terminal = sent.last().unwrap();
+        assert_eq!(terminal.state, TaskState::Succeeded);
+        assert_eq!(terminal.logs.first().map(String::as_str), Some("log-1101"));
+        assert_eq!(terminal.logs.last().map(String::as_str), Some("log-1200"));
     }
     #[test]
     fn unknown_total_pid_result_and_worker_failure_are_reported() {

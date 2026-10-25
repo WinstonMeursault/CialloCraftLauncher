@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { acceptTaskSnapshot, formatGuiError, newestHistory, redactSensitive, retainBusyManagedEntries, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
+import { acceptTaskSnapshot, boundLogLines, formatGuiError, GUI_LOG_MAX_BYTES, GUI_LOG_MAX_LINES, newestHistory, redactSensitive, retainBusyManagedEntries, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
 
 function snapshot(id: number, revision: number): TaskSnapshot {
   return { id, revision, kind: 'probe', phase: 'running', state: 'running', completed: 0, total: 10, logs: [], error: null, error_code: null, pid: null, result: null, authorization: null }
@@ -69,4 +69,27 @@ test('dry-run plans redact sensitive fields and token arguments', () => {
   assert.deepEqual(redactSensitive({ prepared: { access_token: 'secret', arguments: ['--accessToken', 'secret', 'client_secret=secret'] } }), {
     prepared: { access_token: '[redacted]', arguments: ['--accessToken', '[redacted]', 'client_secret=[redacted]'] },
   })
+})
+
+test('100,000-line pressure fixture retains only the bounded tail and byte budget', () => {
+  const input = Array.from({ length: 100_000 }, (_, index) => `${index.toString().padStart(6, '0')} ${'日志'.repeat(500)}`)
+  const started = performance.now()
+  const output = boundLogLines(input)
+  const elapsedMs = performance.now() - started
+  const bytes = new TextEncoder().encode(output.join('\n')).byteLength
+
+  assert.ok(output.length > 0 && output.length <= GUI_LOG_MAX_LINES)
+  assert.ok(Number(output[0]!.slice(0, 5)) > 5_000)
+  assert.match(output.at(-1)!, /^099999 /)
+  assert.ok(bytes <= GUI_LOG_MAX_BYTES)
+  assert.ok(output.every(line => new TextEncoder().encode(line).byteLength <= 8 * 1024))
+  console.log(JSON.stringify({ workload: '100000-lines', retained_lines: output.length, retained_utf8_bytes: bytes, reducer_elapsed_ms: Number(elapsedMs.toFixed(2)), scope: 'log state bound only; not a GUI measurement' }))
+})
+
+test('a single oversized Unicode line is truncated on a UTF-8 boundary', () => {
+  const output = boundLogLines([`${'界'.repeat(10_000)}tail`])
+  const bytes = new TextEncoder().encode(output[0]!).byteLength
+  assert.ok(bytes <= 8 * 1024)
+  assert.equal(output[0]!.endsWith('tail'), true)
+  assert.doesNotThrow(() => new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(output[0]!)))
 })

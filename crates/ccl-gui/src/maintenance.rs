@@ -201,7 +201,7 @@ impl Maintenance {
                 Ok(json!({"path":output,"notice":report.raw_log_preview_notice}))
             }
             MaintenanceRequest::About => Ok(
-                json!({"gui_version":env!("CARGO_PKG_VERSION"),"core_version":"0.1.0","os":std::env::consts::OS,"architecture":std::env::consts::ARCH,"repository":"https://github.com/WinstonMeursault/CialloCraftLauncher","unsigned":true}),
+                json!({"gui_version":env!("CARGO_PKG_VERSION"),"core_version":ccl_core::update::BuildIdentity::current().version,"os":std::env::consts::OS,"architecture":std::env::consts::ARCH,"repository":"https://github.com/WinstonMeursault/CialloCraftLauncher","os_signed":false,"update_manifest_signatures_required":true}),
             ),
         }
     }

@@ -61,12 +61,12 @@ def main() -> None:
     manifest = {
         "schema_version": 1,
         "repository": repository,
+        "product": "ccl-cli",
         "channel": channel,
         "version": version,
         "commit": commit,
         "branch": branch,
         "target": args.target,
-        "unsigned": True,
         "data_schema_min": 1,
         "data_schema_max": 1,
         "executable_size": len(executable),

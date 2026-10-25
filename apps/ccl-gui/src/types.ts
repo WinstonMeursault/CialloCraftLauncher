@@ -60,6 +60,55 @@ export interface RunRecord {
   finished_at_ms: number | null
 }
 export interface LogText { text: string }
+export type UpdateChannel = 'stable' | 'dev'
+export interface GuiUpdateManifest {
+  version: string; commit: string; channel: UpdateChannel; target: string; os_signed: boolean
+  asset: { format: string; name: string; size: number; sha256: string; url: string }
+}
+export interface GuiSelfUpdateResponse {
+  selected_channel: UpdateChannel
+  build: { version: string; commit: string; channel: UpdateChannel; target: string }
+  supported: boolean; reason: string | null
+  status: { phase: string; version: string; channel: UpdateChannel; has_backup: boolean; last_error: string | null } | null
+  check: { available: boolean; build_pending: boolean; branch_commit: string; candidate: GuiUpdateManifest | null } | null
+  helper_pid: number | null; restart_required: boolean
+}
+
+export const GUI_LOG_MAX_LINES = 5_000
+export const GUI_LOG_MAX_BYTES = 4 * 1024 * 1024
+export const GUI_LOG_MAX_LINE_BYTES = 8 * 1024
+
+/** Keep log text bounded before it enters React state or the DOM. */
+export function boundLogLines(lines: readonly string[], maxLines = GUI_LOG_MAX_LINES, maxBytes = GUI_LOG_MAX_BYTES): string[] {
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  const bounded: string[] = []
+  let bytes = 0
+  const candidates = lines.slice(-Math.max(0, maxLines))
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const raw = candidates[index]!
+    let line = raw
+    let encoded = encoder.encode(line)
+    if (encoded.byteLength > GUI_LOG_MAX_LINE_BYTES) {
+      encoded = encoded.slice(encoded.byteLength - (GUI_LOG_MAX_LINE_BYTES - 3))
+      line = `…${decoder.decode(encoded)}`
+      encoded = encoder.encode(line)
+      while (encoded.byteLength > GUI_LOG_MAX_LINE_BYTES) {
+        line = `…${Array.from(line.slice(1)).slice(1).join('')}`
+        encoded = encoder.encode(line)
+      }
+    }
+    const separatorBytes = bounded.length ? 1 : 0
+    if (bytes + separatorBytes + encoded.byteLength > maxBytes) break
+    bounded.push(line)
+    bytes += separatorBytes + encoded.byteLength
+  }
+  return bounded.reverse()
+}
+
+export function boundLogText(text: string, maxLines = GUI_LOG_MAX_LINES, maxBytes = GUI_LOG_MAX_BYTES): string {
+  return boundLogLines(text.split(/\r?\n/), maxLines, maxBytes).join('\n')
+}
 export interface ImportPreview { path: string; summary: unknown }
 
 export interface InstanceRequest { id: string; minecraft: string; loader: string | null; loader_version: string | null; shared: boolean }

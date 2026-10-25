@@ -4,7 +4,7 @@
 
 - [环境](#environment)
 - [构建与运行](#build)
-- [GUI alpha 预览](#gui-preview)
+- [G3 GUI 与应用包更新](#gui-g3)
 - [架构与工作区](#architecture)
 - [代码边界](#boundaries)
 - [配置与数据目录](#data)
@@ -44,10 +44,19 @@ cargo run -p ccl-cli -- --help
 用户流程见[使用指南](user-guide.zh-CN.md)，命令、输出及核心服务见 [API 文档](api.zh-CN.md)。
 
 <a id="gui-preview"></a>
+<a id="gui-g3"></a>
 
-## GUI alpha 预览
+## G3 GUI 与应用包更新
 
-桌面适配器 `ccl-gui` 的版本为 `0.2.0-alpha.1`；`ccl-core` 和 `ccl-cli` 仍为 `0.1.0`。这是 alpha 适配器，不表示 0.2 产品范围已经完成。截至 2026-10-24，验证仍在进行。CLI 发行归档不包含桌面程序，三个平台目标表示构建目标，不代表验证均已完成。
+桌面应用是独立的 Tauri 产品 `ccl-gui`，与 CLI 共享核心代码，但具有独立产品身份和更新清单。CLI 发行 ZIP 保持原有名称。G3 增加以下桌面程序包格式：
+
+| 目标 | 分发程序包 | 应用内更新负载 | 安装方式 |
+| --- | --- | --- | --- |
+| Windows x64 | 按用户安装的 NSIS `.exe` | NSIS `.exe` | 安装到用户可写位置；GUI 更新器不支持便携版和系统级安装 |
+| macOS arm64 | `.dmg` | 包含应用 bundle 的 `.app.tar.gz` | 可写的 `.app`；程序包未经公证 |
+| Linux x64 | `.AppImage` 和 `.deb` | AppImage | AppImage 文件位置需可写；DEB 通过系统包管理器更新 |
+
+发行工作流目标为 Windows 2025、macOS 15 和 Ubuntu 24.04，并配置为在各主机启动桌面应用并确认前端就绪标记：Linux 使用 Xvfb 和软件渲染，Windows 使用 WebView2。这些运行器不能证明物理机游戏启动或对最低计划系统版本的兼容性。计划的最低版本为 Windows 10（含 WebView2）、macOS 13，以及 glibc 2.39 的 Linux。
 
 `crates/ccl-gui` 是 Rust 适配器/库，默认 feature 集为空（`default = []`）；可选的 `desktop` feature 启用 Tauri 2。`apps/ccl-gui` 是 React/TypeScript/Vite 前端。CLI 和默认 Rust 构建不依赖 Node.js 或 WebView。前端使用 Node 24 和 pnpm 11.25.0。
 
@@ -61,23 +70,38 @@ GUI 外观偏好（`theme`、`language` 和所选根目录）保存在独立的 
 
 高级页面使用类型化的 `InstanceRequest`、`OnlineQuery` 和 `OnlineMutation` 适配器。来源安装会创建带上下文的核心 `OnlineInstallRequest`，使用所选游戏根目录和实例 ID，在通过目标身份及加载器兼容性校验后，经实例事务执行下载。文件操作的选择器授权绑定到相应用途的路径。拖入一个 `.zip` 或 `.mrpack` 会检查归档并打开可编辑导入对话框；必须明确执行导入，已有 ID 会被拒绝，不会覆盖。同步文件系统变更开始后不可取消；带任务上下文的异步操作协作响应取消并完成核心清理。
 
-维护面板只通过与配置绑定的系统凭据库存储 CurseForge 密钥；`CCL_CURSEFORGE_API_KEY` 是明确的环境变量覆盖，UI/状态响应不会泄露密钥。诊断原始日志预览默认关闭，受大小限制且仅尽力脱敏；导出保存在本地，分享前需人工复核。更新面板要求通过原生选择器选取含独立 CLI 可执行文件的目录，并对该 CLI 执行 stable（`main`）或 dev（`dev`）渠道操作。GUI 应用包更新归 G3 处理，此适配器不会执行该操作。
+维护面板只通过与配置绑定的系统凭据库存储 CurseForge 密钥；`CCL_CURSEFORGE_API_KEY` 是明确的环境变量覆盖，UI/状态响应不会泄露密钥。诊断原始日志预览默认关闭，受大小限制且仅尽力脱敏；导出保存在本地，分享前需人工复核。维护面板分别提供已安装 GUI 应用包和所选独立 CLI 的更新控制，两者均使用 stable（`main`）或 dev（`dev`）渠道。
 
-### 构建并检查桌面 alpha
+### 构建并启动桌面应用
 
 在仓库根目录执行；需先安装 Node 24、pnpm 11.25.0、Rust 及目标平台的本地依赖：
 
 ```sh
 cd apps/ccl-gui
 pnpm install --frozen-lockfile
+pnpm test
 pnpm build
-node --test tests/task-snapshot.test.ts
 cd ../..
+target="$(rustc -vV | sed -n 's/^host: //p')"
+cargo fetch --locked --target "$target"
+python3 scripts/gui-notices.py --target "$target"
 cargo test -p ccl-gui --locked
 cargo run -p ccl-gui --features desktop --release --locked
+# 打包前先退出开发窗口。
+cd crates/ccl-gui
+pnpm --package=@tauri-apps/cli@2.12.4 dlx tauri build --features desktop
 ```
 
-Node 测试检查过期/新任务快照的排序；`.github/workflows/gui.yml` 会在构建前端前运行此 Node 测试。工作流还会运行工作区格式检查、适配器测试、桌面版 Clippy，以及 Windows x64、macOS arm64 和 Linux x86_64 上的优化桌面构建。这些工作仍属验证过程，不代表所有桌面目标或游戏启动均已通过。Linux job 安装 `libwebkit2gtk-4.1-dev`、`build-essential`、`libssl-dev`、`libxdo-dev`、`librsvg2-dev`、`libayatana-appindicator3-dev` 和 `patchelf`。Tauri 使用系统 WebView：Windows 为 WebView2，macOS 为 WKWebView，Linux 为 WebKitGTK 4.1；参见 [Tauri v2 前置要求](https://v2.tauri.app/start/prerequisites/)。CCL 的最低操作系统版本和完整平台行为仍未验证。
+上述示例使用 Bash（macOS/Linux 或 Git Bash）。PowerShell 中可用 `$target = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')` 设置目标，再将 `$target` 传给相同的 fetch/通知生成命令。前端命令在 `apps/ccl-gui` 执行，原生 Cargo 命令从仓库根目录执行，`tauri build` 在 `crates/ccl-gui` 执行。桌面构建前需生成通知：Tauri 资源包含 `target/gui-notices`，涵盖 Rust、生产 JavaScript、项目许可证及双语公开文档。`pnpm` 仅用于构建打包，不是运行时依赖。
+
+
+Node 测试检查任务快照排序；`.github/workflows/gui.yml` 会在构建前端前运行该测试。工作流还运行格式检查、适配器测试、桌面版 Clippy、打包应用，并配置在 Windows x64、macOS arm64 和 Linux x86_64 上启动 UI 并确认前端就绪标记。发行工作流还会生成分发程序包和更新负载。独立发行验收门会检查成功更新后手动回退、坏程序包触发自动回退，以及替换中断后的恢复，并确认游戏数据标记文件仍完好。验收证据以对应精确提交的工作流结果为准。Linux 需要 WebKitGTK 4.1 开发库、Xvfb 和 FUSE，用于打包/启动检查。Tauri 使用系统 WebView：Windows 为 WebView2，macOS 为 WKWebView，Linux 为 WebKitGTK 4.1；参见 [Tauri v2 前置要求](https://v2.tauri.app/start/prerequisites/)。
+
+两个更新器使用 Tauri CLI 2.12.4 生成独立 `.json.sig` 签名资产。CLI 清单为 `manifest-<target>.json`，`product: "ccl-cli"`；GUI 清单为 `gui-manifest-<target>.json`，`product: "ccl-gui"`。每个签名覆盖完整 JSON 原始字节，并带有受签名保护的 Tauri 版本 trusted comment。清单绑定仓库、产品、渠道、版本、分支、完整 commit、目标平台、数据 schema 范围及程序包 SHA-256/大小/URL。验证公钥嵌入 `ccl-core`；`.sig` 签名的不是操作系统安装程序本身。GUI 清单中的 `os_signed: false` 表示没有操作系统发布者签名。
+
+发行构建设置 `CCL_BUILD_CHANNEL`、`CCL_BUILD_COMMIT` 和 `CCL_BUILD_TARGET`，使 GUI 报告其 stable/dev 渠道、完整提交及目标平台。普通本机构建使用 unpublished 提交标识；不得将其当作可发布更新。
+
+两个工作流使用同一组 GitHub Actions 密钥 `CCL_UPDATE_SIGNING_PRIVATE_KEY` 与 `CCL_UPDATE_SIGNING_PRIVATE_KEY_PASSWORD`，为 CLI 和 GUI 清单签名。应将其视为长期更新信任密钥：不得将内容写入源码或日志，并由发行所有者保管受保护的恢复副本，不要随意轮换或删除。已安装更新器信任程序内置公钥；丢失匹配的私钥会导致这些安装无法验证后续发行。不要在文档或发行说明中填写密钥内容。
 
 <a id="architecture"></a>
 
@@ -85,7 +109,7 @@ Node 测试检查过期/新任务快照的排序；`.github/workflows/gui.yml` �
 
 ### 目标
 
-CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心提供配置、目录、网络、下载和安装逻辑；命令行和当前桌面 alpha 调用相同的核心服务。核心不依赖任何一种界面，因此桌面功能可以继续扩展，而无需把业务逻辑移入界面层。
+CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心提供配置、目录、网络、下载和安装逻辑；命令行和桌面 GUI 调用相同的核心服务。核心不依赖任何一种界面，因此桌面功能可以继续扩展，而无需把业务逻辑移入界面层。
 
 首批目标平台：
 
@@ -97,7 +121,7 @@ CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心
 
 - `crates/ccl-core`：共享服务、配置、错误、HTTP 传输、任务事件、安装、Java 探测和启动编排。
 - `crates/ccl-cli`：命令行参数、文本或 JSON 输出、退出码，以及对核心的调用。
-- `crates/ccl-gui` 和 `apps/ccl-gui`：可选桌面适配器及 React/TypeScript/Vite 前端；当前范围和检查见 [GUI alpha 预览](#gui-preview)。
+- `crates/ccl-gui` 和 `apps/ccl-gui`：可选桌面适配器及 React/TypeScript/Vite 前端；范围和检查见 [G3 GUI 与应用包更新](#gui-g3)。
 - `docs`：面向用户和贡献者的公开文档。
 
 核心通过任务上下文报告进度，并提供协作式取消句柄。界面展示事件并收集输入；核心执行工作、验证配置并返回结构化错误。核心不得依赖界面。
@@ -106,7 +130,7 @@ CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心
 
 ## 代码边界
 
-`loaders`、`instance` 及 `launch --instance` 在 CLI 和桌面 alpha 中复用相同核心服务。`modpack_format` 负责 Modrinth 归档解析、校验和写入；`import_formats` 检测 CurseForge 和 MultiMC/Prism 归档，并通过事务化整合包流程转换受支持的输入；`modpacks` 协调整合包导入/导出并管理所有权收据；`content` 管理本地文件和用户数据备份。在线服务集成位于 `online_content`。整合包导入和内容编辑使用与实例操作相同的暂存事务和跨进程锁。现代 Forge/NeoForge 处理器由核心启动，通过任务事件报告输出，不得直接写入 CLI 标准输出。NeoForge SHA-512 回退会先校验安装器字节，再由安装流程计算 SHA-1。
+`loaders`、`instance` 及 `launch --instance` 在 CLI 和桌面 GUI 中复用相同核心服务。`modpack_format` 负责 Modrinth 归档解析、校验和写入；`import_formats` 检测 CurseForge 和 MultiMC/Prism 归档，并通过事务化整合包流程转换受支持的输入；`modpacks` 协调整合包导入/导出并管理所有权收据；`content` 管理本地文件和用户数据备份。在线服务集成位于 `online_content`。整合包导入和内容编辑使用与实例操作相同的暂存事务和跨进程锁。现代 Forge/NeoForge 处理器由核心启动，通过任务事件报告输出，不得直接写入 CLI 标准输出。NeoForge SHA-512 回退会先校验安装器字节，再由安装流程计算 SHA-1。
 
 - 可复用的领域逻辑放在 `crates/ccl-core`。
 - `crates/ccl-core` 不得依赖终端或图形界面库。
@@ -150,17 +174,21 @@ CLI 通过 `ccl credentials curseforge set` 接收 CurseForge 密钥：程序会
 
 ## 更新、兼容性与诊断
 
-`update::UpdateService` 只查询 `WinstonMeursault/CialloCraftLauncher`。稳定版使用 `main` 上的 `v<VERSION>` 标签。每次向 `dev` 推送都会启动 Windows x64、macOS arm64 和 Linux x86_64 的验证与打包；所有任务通过后，才会将对应提交发布为不可变的 `dev-<完整 SHA>`。工作流保留最近十个开发版发行。稳定标签必须匹配 CLI crate 版本，且其提交位于 `main`。清单绑定仓库、渠道、分支、完整 commit、目标平台、程序哈希和数据读取范围（`1..=1`）。
+CLI `update::UpdateService` 和 GUI 应用包更新器只查询 `WinstonMeursault/CialloCraftLauncher`。稳定版使用 `main` 上的 `v<VERSION>` 标签；每次向 `dev` 推送都会启动 Windows x64、macOS arm64 和 Linux x86_64 的验证与打包；所有任务通过后，才会将对应提交发布为不可变的 `dev-<完整 SHA>` 预发行版。工作流保留最近十个开发版发行。两个产品都要求包含 `product`、仓库、渠道、版本、分支、完整 commit、目标平台、负载摘要和数据读取范围（`1..=1`）的签名清单。
 
 `UpdateService::check` 会区分可用程序包与尚未完成发行的分支提交。`stage` 下载并校验有大小限制的 ZIP、归档路径及哈希，然后暂存候选程序。`Installation` 管理渠道选择和持久事务日志；`launch_helper` 启动受限旧程序助手，由 `execute_helper` 异步执行替换、健康检查或回滚；Windows 对临时共享占用有界重试。`prepare_rollback` 会先检查当前数据兼容性。二进制更新器不会恢复游戏数据。当前格式无需迁移；读取器保留无 schema 配置/账户/实例元数据的读取能力，并接受 schema 1 收据。未知的未来配置或实例字段以及大于 1 的收据 schema 会被拒绝。首轮回归使用从基线 `2edbf0e` 的 Git 归档生成的配置与账户元数据；夹具已脱敏，测试账户凭据没有写入文件。
 
-发行归档未签名。HTTPS、大小和 SHA-256 检查可以发现损坏，但不能认证发布者身份；不得将其称为签名或发布者验证。尚未实现系统签名或公证。`update status`、`rollback` 和 `recover` 不需要网络；`check` 和 `apply` 需要网络，且会被 `--network-offline` 阻止。
+每份清单都配有独立 `.json.sig` 资产。Tauri CLI 2.12.4 对清单原始字节签名，并带有受签名保护的版本 trusted comment。CLI 和 GUI 共用保存在 GitHub Actions Secrets 中的长期私钥；匹配公钥嵌入 `ccl-core`。若丢失该私钥，或未计划客户端迁移就轮换密钥，已安装程序内置的信任根将无法验证后续签名。不要将密钥内容放入源码、日志或文档，应由发行所有者保管受保护的恢复副本。
+
+清单签名认证清单及其程序包摘要；单独的 SHA-256 只能发现字节变化，不能认证程序包发布者。这不等同于 Windows Authenticode 或 macOS Developer ID 签名/公证。当前 GUI 安装程序没有操作系统发布者签名，macOS 程序包也未经公证。CLI ZIP 同样没有操作系统签名。`update status`、`rollback` 和 `recover` 不需要网络；更新检查和应用需要网络，且会被 `--network-offline` 阻止。首次使用新 `product` 字段和独立签名清单的 CLI 发行，必须先手动覆盖安装旧版 CLI，因为其更新器不能解析新格式。
+
+GUI 更新器与 CLI 二进制回退是不同事务。GUI 更新器只支持 Windows 按用户安装且可写的 NSIS 安装、可写的 macOS `.app` 和可写的 Linux AppImage。Linux DEB 由包管理器控制。助手保留经过检查的旧应用树，等待最多 60 秒以取得更新后 GUI 的启动健康确认；确认失败时恢复旧树。GUI 事务中断后的恢复也会尽可能回到上一版。该事务不包含游戏数据。About 响应报告 `os_signed: false` 和 `update_manifest_signatures_required: true`；核心版本号根据实际链接的核心构建动态报告。
 
 `compatibility::inspect_compatibility(config_path, game_root)` 是只读检查，不访问操作系统凭据库，只检查 CCL 管理的元数据。未来迁移必须锁定并备份受影响数据、暂存并原子提交、支持安全的中断恢复；若保留的旧读取器无法读取新数据，则拒绝回退。不得通过恢复整个游戏目录来回退启动器。
 
 `DiagnosticsService::doctor` 报告 Java 候选、目录访问和是否编译凭据库适配器；不探测凭据库解锁状态。网络与写入探测需显式启用。`diagnose_run` 检查有大小限制的运行日志和时间戳接近的崩溃报告，仅识别已支持模式。导出只序列化白名单字段并替换路径；原始输出预览需单独显式选择，最多 16 KiB，并尽力脱敏。它仍可能包含游戏或模组写入的秘密，CCL 不会上传该报告。
 
-P7 提供三平台发行校验与事务式更新测试，覆盖 Windows 程序共享锁、健康检查失败和入口丢失恢复。首个 P7 需手动安装，因为更早的二进制没有更新协议。当前数据格式无需迁移；旧写入器兼容样本不代表全部历史收据代次。常规性能工作流在三个平台上使用固定本地 HTTP 安装夹具，测量冷/热安装、缓存复用、CLI 启动和 ZIP 解析，以及真实更新助手的提交/回滚；记录请求与传输字节、逻辑磁盘量和平台可用的峰值内存。至少三份兼容的历史观测后才启用历史退化门槛，最多比较五份滚动样本；即使门槛失败也会上传报告。它不测公网吞吐、Minecraft 主菜单就绪或实际分配磁盘块。
+P7 CLI 维护验收覆盖其定义的三平台发行和事务更新样本，包括 Windows 程序共享锁、健康检查失败和入口丢失恢复；首个 P7 需手动安装，因为更早的二进制没有更新协议。当前数据格式无需迁移；旧写入器样本不代表所有历史数据。G3 增加签名 GUI 程序包更新和托管运行器启动检查，最终稳定版发布仍需经用户明确同意。常规性能工作流在三个平台上使用固定本地 HTTP 安装夹具，测量冷/热安装、缓存复用、CLI 启动和 ZIP 解析，以及真实 CLI 更新助手的提交/回滚；它不验证最低系统版本、物理机游戏启动、公网吞吐或实际分配磁盘块。
 
 要直接调查性能，可手动触发 `.github/workflows/performance.yml` 并设置 `compare_ref` 为基线分支、标签或完整 40 位提交 SHA。配对比较在同一个 Ubuntu 24.04 运行器上以 Rust 1.99.0 构建两个版本，使用相同 Linux 目标平台。工作流将候选版的 `p7_benchmark.rs` 和 `update_process.rs` 复制到基线工作区，让两个版本使用相同测量程序；报告会记录两个提交、运行器信息和测量程序哈希，并为两个版本分别构建 CLI、基准示例和更新测试。基准以交替顺序执行五组基线/候选配对。每组每个构建记录三次冷/热安装及更新器测量（各共 15 次），另记录七次 CLI/解析测量（共 35 次）。比较冷/热安装、元数据解析、更新提交和健康检查失败回滚的配对中位数；中位退化超过 25% 会导致门槛失败。报告保留 90 天。该比较仅覆盖 Linux，并补充定时/推送触发的历史性能工作流。
 
@@ -225,16 +253,20 @@ CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作�
 ### 稳定版发行前
 
 1. 准确描述身份验证和服务商支持范围。离线身份仍受支持；所有者于 2026-10-23 推迟了 Microsoft 在线登录的真实账户验收，该验收不是首个稳定版的发行门槛。将 Microsoft 在线集成描述为实验功能，也不要根据测试夹具或本地保存密钥推断 CurseForge 已授权线上访问。检查当前所有平台的性能制品；调查疑似退化时，使用选定基线执行 Linux 配对比较。
-2. 从干净工作区获取远端引用，将已验收的 `dev` 提交集成至 `main`。保留本地 main 的独立改动，解决并复核合并冲突，不重置分支或强制推送。发行源码就位后，再将 `crates/ccl-core/Cargo.toml` 和 `crates/ccl-cli/Cargo.toml` 中的 `version` 字段设为发行用的三段版本号。运行检查按需更新 `Cargo.lock`，检查差异后再提交，然后确认两个版本一致：
+2. 只有在明确批准正式稳定版发行后，才从干净工作区获取远端引用并将已验收的 `dev` 提交集成至 `main`。保留本地 main 的独立改动，解决并复核合并冲突，不重置分支或强制推送。将 `crates/ccl-core/Cargo.toml`、`crates/ccl-cli/Cargo.toml` 和 `crates/ccl-gui/Cargo.toml` 的 `version` 字段设为相同的发行版本，并同步 `crates/ccl-gui/tauri.conf.json` 和 `apps/ccl-gui/package.json`。GUI 和 CLI 版本必须与稳定标签一致。按需更新 `Cargo.lock` 并检查差异：
 
    ```sh
    git fetch origin
    git switch main
    git pull --ff-only origin main
    git merge --no-ff origin/dev
-   # 解决并复核冲突，然后按需修改两个 package 版本。
+   # 解决并复核冲突，然后按需修改全部三个 package 版本。
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z
+   test "$(python3 -c 'import tomllib; print(tomllib.load(open("crates/ccl-gui/Cargo.toml", "rb"))["package"]["version"])')" = X.Y.Z
+   test "$(python3 -c 'import json; print(json.load(open("crates/ccl-gui/tauri.conf.json"))["version"])')" = X.Y.Z
+   test "$(node -p 'require("./apps/ccl-gui/package.json").version')" = X.Y.Z
+   test "$(python3 -c 'import tomllib; print(tomllib.load(open("crates/ccl-gui/Cargo.toml", "rb"))["package"]["version"])')" = X.Y.Z
    ```
 
 检查 `git diff -- Cargo.lock`，只保留工作区版本变更所需的锁文件更新。发行准备时不要顺带刷新无关依赖版本。
@@ -252,7 +284,7 @@ CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作�
 4. 将版本变更和发行就绪的源码提交并推送到 `main`。若目标版本已经正确，合并后没有额外版本变更，则跳过下面仅用于版本变更的 add/commit 命令。只暂存审核过的文件，包括 package 版本清单和锁文件。确认目标提交可从 `origin/main` 到达，然后创建并推送完全匹配的标签：
 
    ```sh
-   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml
+   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml crates/ccl-gui/Cargo.toml crates/ccl-gui/tauri.conf.json apps/ccl-gui/package.json
    git commit -m "chore: prepare vX.Y.Z"
    git push origin main
    git fetch origin main
@@ -262,9 +294,9 @@ CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作�
    git push origin vX.Y.Z
    ```
 
-该标签会触发 `.github/workflows/release-stable.yml`。工作流确认标签位于 `main` 且两个 crate 版本与标签一致，运行格式、Clippy、测试和 Windows 凭据库探测，然后在 Windows x64、macOS arm64 和 Linux x86_64 上构建并检查 ZIP。发布任务拒绝使用已有 GitHub 发行的标签，创建草稿发行，生成三个更新器清单，重新下载制品，并校验归档校验和及清单绑定的可执行文件哈希/身份；通过后才发布为最新稳定版。稳定版标签必须唯一，且不能移动到其他提交。
+推送稳定标签不会自动启动或发布发行。发行所有者明确批准正式稳定版并推送唯一的 `vX.Y.Z` 标签后，在 Actions → Stable Release → Run workflow 中选择该标签，并输入准确确认词 `PUBLISH`。手动触发的工作流会确认标签位于 `main` 且 `ccl-core`、`ccl-cli`、`ccl-gui` 版本一致，然后验证源码，在 Windows x64、macOS arm64 和 Linux x86_64 上构建 CLI ZIP 与 GUI 安装包，并尝试在每个托管运行器启动 GUI。所有任务通过后才会创建草稿、签署两类清单、重新下载并验证发行资产，最后发布。稳定标签必须唯一且不能移动到其他提交。当前 G3 改动只有在最终门槛通过后才可集成到 `dev`；未经用户明确批准，不得将其合并到 `main`、创建稳定标签或发布正式稳定版。
 
-如有需要，可在打标签前使用对应脚本打包一个本机目标版本。三个平台的更新器程序包都是 ZIP：
+如有需要，可在打标签前使用对应脚本打包一个本机目标版本。三个平台的 CLI 更新程序包都是 ZIP；GUI 格式见[G3 GUI 与应用包更新](#gui-g3)：
 
 ```sh
 # Linux 本机；Apple 芯片 Mac 改用 aarch64-apple-darwin。
@@ -280,7 +312,7 @@ $env:TARGET = $target
 ./scripts/package-preview.ps1
 ```
 
-普通本机构建在未提供发行构建环境时使用 unpublished 提交标识；可用于本地检查，不能代替工作流产生的更新程序包。打包脚本要求对应的 `target/<三元组>/release/ccl` 程序存在（Windows 文件名为 `ccl.exe`）。归档根目录包含项目许可证、两份 README、配对的中英文指南、生成的 `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` 清单，以及包含原始许可证和声明文本的 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 双语文本包。`scripts/third-party-notices.py` 会读取 `ccl-cli` 在所选目标下的常规及构建依赖图；每份清单都链接到对应语言文本包内的确定性锚点。两份文本包会翻译介绍标签，同时保留完全一致的原始许可证文本字节；第三方原文统一收录在这两个文件中。打包脚本会验证四个声明文件均已进入归档，且 ZIP 不超过 256 个条目，以确保当前读取器可以安装。更新器既有的 256 项 ZIP 限制保持不变。打包脚本还会检查归档并生成 SHA-256 文件。校验和可发现意外损坏，但程序包和可执行文件都未签名，因此无法认证发布者。
+普通本机构建在未提供发行构建环境时使用 unpublished 提交标识；可用于本地检查，不能代替工作流产生的更新程序包。CLI 打包脚本要求对应的 `target/<三元组>/release/ccl` 程序存在（Windows 文件名为 `ccl.exe`）。归档根目录包含项目许可证、两份 README、配对的中英文指南、生成的 `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` 清单，以及包含原始许可证和声明文本的 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 双语文本包。`scripts/third-party-notices.py` 会读取 `ccl-cli` 在所选目标下的常规及构建依赖图；每份清单都链接到对应语言文本包内的确定性锚点。两份文本包会翻译介绍标签，同时保留完全一致的原始许可证文本字节；第三方原文统一收录在这两个文件中。打包脚本会验证四个声明文件均已进入归档，且 ZIP 不超过 256 个条目，以确保当前读取器可以安装。GUI 程序包还会嵌入由 Rust 和生产前端依赖生成的第三方许可证/声明材料。CLI ZIP 和 GUI 安装程序均无操作系统发布者签名；独立的签名清单可供更新器验证其元数据和程序包摘要。
 
 ### 开发版
 
@@ -293,20 +325,22 @@ git pull --ff-only origin dev
 git push origin dev
 ```
 
-工作流要求三个平台验证和打包期间，被测试提交仍是 `dev` 当前分支头。成功后，它会创建不可变标签 `dev-<完整提交 SHA>`，校验三个 ZIP、校验和与清单，发布预发行版，并保留最新十个符合条件的开发版发行。不要手动创建或推送该标签。如果验证时 `dev` 前进了，旧提交不会发布；应改为验证新分支头。
+工作流要求三个平台验证、打包和尝试 GUI 启动检查期间，被测提交仍是 `dev` 当前分支头。成功后，它会创建不可变标签 `dev-<完整提交 SHA>`，校验 CLI ZIP、GUI 程序包、校验和与签名清单，发布预发行版，并保留最新十个符合条件的开发版发行。不要手动创建或推送该标签。如果验证时 `dev` 前进了，旧提交不会发布；应改为验证新分支头。G3 任务仅在完成最终门槛后集成至 `dev`；未经用户明确批准，不得合并到 `main`、创建稳定标签或发布正式稳定版。
 
 ### 发行门槛故障排查
 
-- **稳定版标签被拒绝：** 确认标签提交是 `origin/main` 的祖先、两个 package 版本与去掉 `v` 后的标签相同，并已提交 `Cargo.lock`。使用 `python3 scripts/check-package-versions.py --expected X.Y.Z` 检查。
-- **`--locked` 报告锁文件需要变更：** 更新两个 package 版本，运行 `cargo check --workspace`，检查并只提交所需的 `Cargo.lock` 变更，然后重跑 locked 检查。
+- **稳定版标签被拒绝：** 确认标签提交是 `origin/main` 的祖先、core/CLI/GUI Cargo 版本及 GUI 配置元数据与去掉 `v` 后的标签相同，并已提交 `Cargo.lock`。使用 `python3 scripts/check-package-versions.py --expected X.Y.Z` 和发行清单中的 GUI 元数据检查。
+- **`--locked` 报告锁文件需要变更：** 更新三个 Rust package 版本并同步 Tauri 配置和前端 package 版本，运行 `cargo check --workspace`，检查并只提交所需的 `Cargo.lock` 变更，然后重跑 locked 检查。
 - **本地链接或构建失败：** 安装[环境](#environment)中列出的目标编译器/链接器和 SDK。本机目标构建通过不能证明其他目标可以链接。
 - **凭据库探测失败：** 解锁操作系统凭据服务。Linux 需要持久的 Secret Service/D-Bus 会话；CCL 会返回错误，不会将凭据明文写入文件。
 - **开发版发行未生成：** 查看三个平台的验证任务，并确认 `dev` 是否已超过被测提交。任务失败或分支头过期不会生成不可变程序包。
-- **哈希校验通过：** 这只能确认字节与清单/校验和一致，不能证明程序包已签名或由已验证身份发布。
+- **哈希校验通过：** 这只能确认字节与摘要一致，不能认证发布者身份。更新器客户端还会验证独立清单签名；它与操作系统发布者签名不同。
 
 <a id="release-notes"></a>
 
 ## 首个稳定版发行说明草稿
+
+此 `0.1.0` 草稿描述最初的 CLI 范围。下面关于未签名程序包的说明仅适用于该历史草稿；不得未经发行所有者批准便复用于 G3 或正式发行。
 
 <!-- release-notes:start -->
 # CialloCraftLauncher 0.1.0
