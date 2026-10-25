@@ -4,32 +4,34 @@
 
 ## 项目状态
 
-CCL 目前提供命令行界面与独立于界面的可复用核心，GUI 计划后续开发。首个正式 CLI 版本正在准备中；开发版属于预发布，不代表已完成稳定版验收。
+CCL 提供 Rust 核心、命令行界面和 Tauri 桌面 GUI。G3 增加独立桌面安装包与 GUI 应用包更新器；v0.2.0 稳定版发布需经用户明确同意。开发版属于预发布，不代表已完成稳定版验收。
 
 | 方面 | 已提供的功能 |
 | --- | --- |
 | 安装与启动 | 原版版本、Java 探测/托管运行时、下载校验/缓存复用、进程日志与显式网络离线模式 |
 | 实例与加载器 | 隔离实例；Fabric、Quilt、Legacy Fabric、Forge、NeoForge、OptiFine；修订版回退、重命名/复制/删除/历史和清理 |
 | 整合包与内容 | Modrinth 整合包、受支持的 CurseForge/MultiMC/Prism 导入、在线搜索/依赖/更新/冲突分析、本地内容与用户数据备份 |
-| 维护 | 稳定/开发更新渠道、事务式程序替换/恢复/回退、本地诊断与持续回归流程 |
+| 维护 | CLI 与 GUI 的稳定/开发签名更新、事务式安装/恢复/回退、本地诊断与回归流程 |
 
-支持范围以指南中经验证的样本和边界为准，不代表全部 Minecraft 版本、加载器组合或操作系统版本。构建与自动化测试覆盖：
+支持范围以指南中的样本和边界为准，不代表全部 Minecraft 版本、加载器组合或操作系统版本。CI 与发行工作流配置的目标平台为：
 
 | 平台 | 归档目标名称 | 验证边界 |
 | --- | --- | --- |
-| Windows x64 | `x86_64-pc-windows-msvc` | Windows runner 构建/测试、凭据库与更新进程测试；尚无 Windows 物理游戏启动验收 |
-| macOS Apple 芯片 | `aarch64-apple-darwin` | 自动检查及物理机安装/游戏启动/更新样本 |
-| Linux x64 | `x86_64-unknown-linux-gnu` | 自动检查和物理机样本；无显示环境中部分游戏验证使用虚拟显示与软件渲染 |
+| Windows x64 | `x86_64-pc-windows-msvc` | 工作流目标：Windows 2025；尚无 Windows 物理游戏启动验收 |
+| macOS Apple 芯片 | `aarch64-apple-darwin` | 工作流目标：macOS 15；历史样本不能证明最低系统版本 |
+| Linux x64 | `x86_64-unknown-linux-gnu` | 工作流目标：Ubuntu 24.04；历史样本不能证明兼容所有 Linux 发行版 |
+
+G3 发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。发行验收门覆盖更新并手动回退、坏程序包自动回退及替换中断后的恢复。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
 
 Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实现。在线账户集成仍属实验性功能；所有者已暂缓本次发行的真实正版账户完整验收。继续支持离线身份。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
 
 ## 安装与开始使用
 
-1. 打开 [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)，选择发行，下载与上表目标匹配的归档及其 `.sha256` 文件。开发标签以 `dev-` 开头，稳定标签为 `v<VERSION>`。GitHub 自动提供的源码归档不是可执行程序包。
-2. 按[使用指南](docs/user-guide.zh-CN.md#installation)完成摘要核对与平台设置，解压整个归档，在解压目录运行程序，或将该目录加入 `PATH`。
-3. 运行 `ccl --help` 和 `ccl doctor`（加入 `PATH` 前，Unix 使用 `./ccl`，PowerShell 使用 `.\ccl.exe`），再按指南完成配置、账户设置和安装。
+1. 打开 [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)，选择发行并下载目标平台的 CLI ZIP 或 GUI 安装程序。CLI ZIP 附带 `.sha256` 文件；开发标签以 `dev-` 开头，稳定标签为 `v<VERSION>`。GitHub 自动提供的源码归档不是可执行程序包。
+2. 按[使用指南](docs/user-guide.zh-CN.md#installation)完成平台安装。若希望在应用中更新，请将 GUI 安装在用户可写的位置。DEB 安装应使用系统包管理器更新。
+3. CLI 和 GUI 更新器会验证发行清单的独立签名，然后核对清单绑定的程序包哈希。安装文件本身没有 Authenticode 签名或公证，操作系统可能显示发布者警告。
 
-程序包未签名、未公证；HTTPS 与摘要可检测损坏，不能独立认证发布者。最低系统版本及其他架构尚未认证。Linux 的 Microsoft 账户/平台 key 存储需要可用且已解锁的 Secret Service/D-Bus 会话，没有明文凭据回退。
+CLI 与 GUI 更新清单使用共享的 Tauri 更新密钥签名，绑定产品、版本、渠道、提交、目标平台和程序包摘要。早于首个签名清单版本的 CLI 需要先手动更新。GUI 安装文件仍未使用操作系统发布者证书签名，macOS 程序包也未经公证；更新加密签名与操作系统发布者身份是两回事。计划的最低支持版本为 Windows 10（含 WebView2）、macOS 13，以及 glibc 2.39 的 Linux；尚未在这些最低版本上进行物理验证。Linux 的 Microsoft 账户/平台 key 存储需要可用且已解锁的 Secret Service/D-Bus 会话，没有明文凭据回退。
 
 从当前源码构建：
 
@@ -53,7 +55,7 @@ cargo run --release --locked -p ccl-cli -- --help
 
 ## 致谢
 
-感谢 Hello Minecraft! Launcher（HMCL）的开发者和贡献者为开源 Minecraft 启动器所做的工作。CialloCraftLauncher 独立开发，图形界面计划在未来提供，目前尚不可用。
+感谢 Hello Minecraft! Launcher（HMCL）的开发者和贡献者为开源 Minecraft 启动器所做的工作。CialloCraftLauncher 独立开发；GUI 与 CLI 是共享 Rust 核心的独立应用程序。
 
 ## 许可证
 

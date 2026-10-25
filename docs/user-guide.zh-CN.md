@@ -3,7 +3,7 @@
 [API 文档](api.zh-CN.md) · [开发指南](development.zh-CN.md) · [English](user-guide.en.md)
 
 - [快速开始](#quickstart)
-- [桌面 alpha](#desktop-alpha)
+- [桌面 GUI 与自更新（G3）](#desktop-alpha)
 - [安装与前置条件](#installation)
 - [游戏目录](#directories)
 - [设置与配置](#configuration)
@@ -40,9 +40,9 @@ ccl logs --lines 100
 
 <a id="desktop-alpha"></a>
 
-## 桌面 alpha
+## 桌面 GUI 与自更新（G3）
 
-本指南介绍的发行归档包含 CLI。源码中另有版本为 `0.2.0-alpha.1` 的桌面适配器 `ccl-gui`；它仍属实验功能，不包含在这些归档中，平台验证仍在进行。构建说明和当前范围见[开发指南](development.zh-CN.md#gui-preview)。
+下方的 CLI ZIP 与 G3 GUI 程序包分开发布。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。桌面程序作为独立应用发布，并有自己的签名更新清单。v0.2.0 稳定版发布需经用户明确同意；平台目标和发行门槛见[开发指南](development.zh-CN.md#gui-g3)。
 
 桌面程序会先让你确认游戏目录，再创建缺失的目录。它可以安装原版、创建托管加载器实例、导入受支持的本地归档、使用离线玩家名或已保存的 Microsoft 账户启动游戏，并查看实时或已保存的游戏日志。Microsoft 登录仍是实验功能，需要操作系统凭据库。请在“账户”页输入公开的 Microsoft 应用客户端 ID，或在共享核心配置中设置 `auth.microsoft_client_id`。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
 
@@ -52,9 +52,9 @@ ccl logs --lines 100
 
 高级页面用于管理托管实例。选中实例后，可安装/更新/移除加载器、查看历史和存储、预览或执行修订版本清理、还原或回滚修订版本、管理内容、创建或还原用户数据备份，以及检查/导出 Modrinth 整合包收据。共享原版条目在此页面为只读。在“发现”页选择 Modrinth 或 CurseForge，搜索并选择项目和版本，然后可查看版本或解析依赖后再安装。模组安装目标为当前选中的托管实例；整合包安装会先请求确认，因为它可能创建或更新指定实例。除非勾选，否则不会包含可选文件。
 
-设置页将外观和游戏根目录与共享核心设置分开。维护面板提供十项核心值：版本清单来源、文件来源、镜像地址、代理、并行下载数、网络离线、Microsoft 客户端 ID、默认 Java 路径、默认内存和自动安装 Java。每项分别保存。若 CLI 或其他进程修改了配置，请先重新加载；陈旧修改会被拒绝。除非 `CCL_GUI_CONFIG_PATH` 固定配置，否则可以选择本地 JSON 配置。CurseForge 密钥通过密码输入框录入并保存在系统凭据库。`CCL_CURSEFORGE_API_KEY` 会覆盖已保存值；状态只显示是否存在已保存密钥或环境变量覆盖。
+设置页将外观和游戏根目录与共享核心设置分开。维护面板提供十项核心值：版本清单来源、文件来源、镜像地址、代理、并行下载数、网络离线、Microsoft 客户端 ID、默认 Java 路径、默认内存和自动安装 Java。每项分别保存。若 CLI 或其他进程修改了配置，请先重新加载；陈旧修改会被拒绝。除非 `CCL_GUI_CONFIG_PATH` 固定配置，否则可以选择本地 JSON 配置。CurseForge 密钥通过密码输入框录入并保存在系统凭据库。`CCL_CURSEFORGE_API_KEY` 会覆盖已保存值；状态只显示是否存在已保存密钥或环境变量覆盖。维护面板也分别提供 GUI 应用包更新和独立 CLI 更新控制。
 
-健康检查只有在勾选对应选项后才会执行网络或临时写入探测。诊断导出保存在本地。原始日志预览必须明确启用，尽管会尽力脱敏，仍可能含私人信息；分享前请检查文件。维护更新器作用于你选定目录中的独立 CLI，可选 stable（`main`）或 dev（`dev`）渠道。它不会更新 GUI 应用包；GUI 应用包更新由 G3 实现。
+健康检查只有在勾选对应选项后才会执行网络或临时写入探测。诊断导出保存在本地。原始日志预览必须明确启用，尽管会尽力脱敏，仍可能含私人信息；分享前请检查文件。CLI 更新器作用于你选定目录中的独立 CLI；GUI 更新控制只作用于当前安装的桌面程序包。两者均支持 stable（`main`）和 dev（`dev`）渠道，并会保存所选渠道。
 
 <a id="installation"></a>
 
@@ -68,6 +68,18 @@ ccl logs --lines 100
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
 
+G3 桌面程序包使用独立名称和安装格式：
+
+| 系统 | 安装程序包 | 应用内更新程序包 |
+| --- | --- | --- |
+| Windows x86_64 | `ccl-gui-x86_64-pc-windows-msvc.exe`（按用户安装的 NSIS） | NSIS EXE；安装到用户可写位置 |
+| macOS arm64 | `ccl-gui-aarch64-apple-darwin.dmg` | `.app.tar.gz`；将 `.app` 保存在可写位置 |
+| Linux x86_64 | `ccl-gui-x86_64-unknown-linux-gnu.AppImage` 或 `.deb` | AppImage 支持应用内更新；DEB 通过包管理器更新 |
+
+GUI 安装程序与 CLI ZIP 使用不同名称。Windows 自更新支持按用户安装的 NSIS 程序，不支持便携 EXE。macOS 和 Linux 应用包更新需要对已安装 bundle 或 AppImage 位置有写权限。受保护位置或包管理器安装应通过原安装方式重新安装更新。
+
+发行资产附带 `.sha256` 校验文件。校验和可以发现下载损坏，但 GUI 应用内更新器还会验证独立签名清单及其绑定的程序包摘要，从而认证发行内容。手动安装的 GUI 程序包没有操作系统签名；公钥更新签名与 Authenticode 和 macOS 公证不同。
+
 同时下载旁边的 `.sha256` 校验文件，并在解压前校验归档。Windows PowerShell 中，请在下载目录运行：
 
 ```powershell
@@ -79,7 +91,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个归档文件夹，并将可执行文件、README 文件、`docs/` 目录、`LICENSE`、`THIRD-PARTY.en.md`、`THIRD-PARTY.zh-CN.md` 和 `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` 一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。这些发行归档仅包含 CLI，不含实验性的桌面 alpha。发行归档未签名；完整性验证的限制见[启动器更新](#maintenance)。
+解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。更新完整性说明见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
@@ -266,7 +278,7 @@ ccl instance delete renamed --yes
 
 ## 整合包、本地内容与备份
 
-CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。桌面 alpha 可通过文件选择器检查受支持的本地归档，详见[桌面 alpha](#desktop-alpha)。
+CCL 可检查、导入和导出 Modrinth .mrpack v1 归档（含 Quilt 依赖），并管理独立实例内容。CurseForge、MultiMC/Prism 导出通过[其他格式转换器](user-guide.zh-CN.md#imports)导入。桌面 GUI 可通过文件选择器检查受支持的本地归档，详见[桌面 GUI 与自更新](#desktop-alpha)。
 
 已验证样本使用 Minecraft `1.21.1`、Fabric Loader `0.20.1`、Fabric API `0.116.17+1.21.1`，在 macOS arm64 及使用 CPU 渲染的 Linux x86_64 到达主菜单。macOS 上导出后重新导入的实例也到达主菜单，模组哈希与覆盖文件均匹配。这不代表其他整合包或第三方模组组合已认证。Windows 通过编译和自动化测试检查。
 
@@ -430,7 +442,7 @@ ccl --network-offline launch --instance my-world --offline
 
 ## 启动器更新与诊断
 
-首次安装 P7 需要执行一次引导步骤：P7 之前的 CCL 没有更新命令，因此需要按照项目的发行或安装说明手动安装启用 P7 的程序。P7 会复用已有设置、账户元数据和凭据，以及游戏实例；兼容性检查覆盖了由旧版 `2edbf0e` 配置和账户写入器生成的脱敏数据。完成首次替换后，启用 P7 的版本即可通过更新器升级和回退。
+首次安装 P7 需要执行一次引导步骤：P7 之前的 CCL 没有更新命令，因此需要按照项目的发行或安装说明手动安装启用 P7 的程序。`v0.1` CLI 也需要手动更新到首个签名清单版本：旧更新器无法识别新增的 `product` 字段和独立签名文件。请从 GitHub Releases 下载匹配的 CLI ZIP，并在替换旧程序前核对 `.sha256` 文件。完成这次引导后，新版 CLI 可验证签名清单。P7 会复用已有设置、账户元数据、凭据和游戏实例；兼容性检查覆盖由旧版 `2edbf0e` 配置和账户写入器生成的脱敏数据。
 
 只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定版跟随 `main`；开发版跟随 `dev`。稳定版使用 `v0.1.0` 形式的版本标签。`dev` 上的提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；开发版发行保留最近十个。
 
@@ -444,7 +456,13 @@ ccl update recover
 ccl update recover --installation /path/to/ccl
 ```
 
-使用 `--channel` 选择渠道会保存该设置。`check` 报告是否有兼容的已发布程序包。`apply` 下载并校验当前目标平台的归档，然后启动助手异步替换程序；在 Windows 遇到临时程序共享占用时最多重试 30 秒。命令返回后可用 `update status` 查看状态；若助手仍持有更新锁，请稍后重试，忙响应不等于事务失败。助手或替换过程被中断时用 `recover` 恢复；若常规程序无法运行，可通过保留的助手执行恢复，并用 `--installation` 指定原程序路径。`rollback` 只有在当前配置、账户元数据、实例和收据可由保留的旧程序读取时才会使用旧程序。二进制回退不会恢复游戏目录、存档或内容。启动器更新包未签名：HTTPS、大小和 SHA-256 校验可发现传输或文件损坏，但不能独立验证发行者身份。`--network-offline` 会阻止更新检查和下载。通过包管理器安装或只读目录中的程序应通过原有安装方式更新。
+使用 `--channel` 选择渠道会保存该设置。`check` 报告是否有兼容的已发布程序包。`apply` 下载并校验当前目标平台的归档，然后启动助手异步替换程序。CLI 清单命名为 `manifest-<target>.json`，并附带对应的 `.json.sig` 文件。签名覆盖清单原始字节，绑定产品、版本、渠道、分支、提交、目标平台和程序包摘要。更新器使用程序内置公钥验证签名，然后检查程序包大小、SHA-256 和归档路径再暂存。CLI ZIP 本身没有操作系统签名。Windows 遇到临时程序共享占用时最多重试 30 秒。命令返回后可用 `update status` 查看状态；若助手仍持有更新锁，请稍后重试，忙响应不等于事务失败。助手或替换过程被中断时用 `recover` 恢复；若常规程序无法运行，可通过保留的助手执行恢复，并用 `--installation` 指定原程序路径。`rollback` 只有在当前配置、账户元数据、实例和收据可由保留的旧程序读取时才会使用旧程序。二进制回退不会恢复游戏目录、存档或内容。
+
+GUI 维护面板有独立的“检查更新”“下载并安装”“回滚 GUI 更新”和“恢复中断的更新”控制。GUI 清单命名为 `gui-manifest-<target>.json`，并附带 `.json.sig` 文件，由同一个内置更新公钥验证。签名绑定产品/版本/渠道/提交/目标平台及更新程序包摘要；操作系统发布者签名是另一种身份验证，本项目目前不提供。GUI 安装文件没有 Authenticode 签名，macOS 程序包也未经公证。
+
+自更新只支持按用户安装的 Windows NSIS 应用、可写的 macOS `.app` 和可写的 Linux AppImage。Linux DEB 安装使用包管理器更新。助手会保留经过检查的旧应用副本，安装已验证程序包、启动新版，并等待最多 60 秒以取得启动健康确认。如果应用提前退出或未确认启动，助手会恢复并重新启动旧应用。更新成功后且备份仍可用时，可使用 GUI 回滚控制。若事务中断，可用恢复控制；条件允许时恢复到已知的旧应用。事务日志和更新数据保存在已安装应用之外。应用回滚不触及游戏文件、存档、账户和凭据。
+
+同一 GUI 安装一次只允许一个应用实例或更新助手操作。如果状态或更新操作提示安装正忙，请关闭其他实例或等待助手完成后再试。`--network-offline` 会阻止 CLI 和 GUI 更新检查与下载。通过包管理器或只读方式安装的程序应通过原安装方式更新。
 
 `doctor` 检查 Java 候选、启动器/游戏目录访问情况以及是否编译了系统凭据库适配器。它不会登录，也不验证凭据库是否解锁。添加 `--network-probe` 可访问 Mojang 版本元数据端点；添加 `--write-probe` 会在 CCL 数据目录创建并删除临时空文件。这两种探测都需显式启用。
 
@@ -460,7 +478,7 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 运行诊断根据保存的运行记录、有大小限制的游戏日志前缀以及时间戳与该运行接近的崩溃报告，识别少数常见故障模式，并提供证据与建议；未知故障不会被强行归类。结构化诊断导出只含白名单字段，并替换本地路径；不会包含账户库、凭据库、存档或服务器列表。可选原始日志预览最多包含 16 KiB 游戏输出，并进行尽力脱敏，但仍可能包含账户名、令牌或游戏/模组写入的其他内容。分享前请检查文件。CCL 不会上传诊断报告。
 
-约定的 P7 维护范围已通过验收，包括三平台 CI 与打包，以及 macOS 和 Linux 上的真实 GitHub 更新/回退检查。Windows CI 和打包验证不代表 Windows 物理机游戏启动行为。发行包未签名，兼容性检查覆盖定义过的历史样本，不涵盖所有旧版本程序生成的数据。数据兼容范围见 [API 文档](api.zh-CN.md#maintenance)，验证详情见[开发指南](development.zh-CN.md#maintenance)。
+P7 CLI 维护验收覆盖了其定义的历史样本，但不代表涵盖所有旧版本生成的数据。G3 增加签名 GUI 应用包更新和托管运行器启动检查，稳定版发布仍需经用户明确同意。托管 Windows、macOS 和 Linux 运行器不能证明最低计划系统版本上的行为或物理机游戏启动行为。清单详情见 [API 文档](api.zh-CN.md#maintenance)，发行门槛见[开发指南](development.zh-CN.md#maintenance)。
 
 <a id="accounts"></a>
 

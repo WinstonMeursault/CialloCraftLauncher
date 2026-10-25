@@ -4,7 +4,7 @@
 
 - [Environment](#environment)
 - [Build and run](#build)
-- [GUI alpha preview](#gui-preview)
+- [G3 GUI and package updates](#gui-g3)
 - [Architecture and workspace](#architecture)
 - [Code boundaries](#boundaries)
 - [Configuration and data directories](#data)
@@ -44,10 +44,19 @@ cargo run -p ccl-cli -- --help
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
 <a id="gui-preview"></a>
+<a id="gui-g3"></a>
 
-## GUI alpha preview
+## G3 GUI and package updates
 
-The desktop adapter is `ccl-gui` version `0.2.0-alpha.1`; `ccl-core` and `ccl-cli` remain `0.1.0`. This is an alpha adapter, not completion of the 0.2 product scope. Validation is in progress as of 2026-10-24. The desktop app is not included in the CLI release archives, and the three platform targets describe build intent rather than completed validation.
+The desktop application is a separate Tauri product named `ccl-gui`, sharing the core with the CLI while keeping a distinct product identity and updater manifest. The CLI release ZIPs remain unchanged. G3 adds these desktop package formats:
+
+| Target | Distribution package | In-app update payload | Install method |
+| --- | --- | --- | --- |
+| Windows x64 | Per-user NSIS `.exe` | NSIS `.exe` | Writable user installation; portable and machine-wide installations are unsupported by the GUI updater |
+| macOS arm64 | `.dmg` | `.app.tar.gz` containing the app bundle | Writable `.app`; packages are not notarized |
+| Linux x64 | `.AppImage` and `.deb` | AppImage | AppImage needs a writable file location; DEB updates use the system package manager |
+
+The release workflows target Windows 2025, macOS 15 and Ubuntu 24.04. They are configured to launch the desktop app and confirm the frontend-ready marker on each host, using Xvfb with software rendering on Linux and WebView2 on Windows. These runners do not prove physical game launch or compatibility with the oldest planned systems. Planned floors are Windows 10 with WebView2, macOS 13, and Linux with glibc 2.39.
 
 `crates/ccl-gui` is a Rust adapter/library with `default = []`; its optional `desktop` feature enables Tauri 2. `apps/ccl-gui` is the React/TypeScript/Vite frontend. The CLI and default Rust builds do not require Node.js or a WebView. The frontend uses Node 24 and pnpm 11.25.0.
 
@@ -61,9 +70,9 @@ The Settings panel edits ten shared values: version-list source, file source, mi
 
 The Advanced page uses typed `InstanceRequest`, `OnlineQuery`, and `OnlineMutation` adapters. Provider installation creates the core context-aware `OnlineInstallRequest` with selected game root and instance ID, validating target identity and loader compatibility before applying downloads through the instance transaction. Picker grants bind file operations to paths selected for their purpose. Dropping one `.zip` or `.mrpack` inspects it and opens the editable import modal; import requires an explicit action, and an existing ID is rejected rather than overwritten. Synchronous filesystem mutations are not cancellable once begun; async operations with task context cooperate with cancellation and finish core cleanup.
 
-Maintenance stores CurseForge keys only through the config-scoped OS vault; `CCL_CURSEFORGE_API_KEY` is an explicit override and UI/status responses never expose the value. Diagnostic raw log preview is opt-in, bounded and only best-effort redacted; exported reports stay local and require manual review before sharing. The updater panel requires a native selection of the folder containing a standalone CLI executable and applies stable (`main`) or dev (`dev`) channel operations to that CLI. GUI application-package updates belong to G3 and are not performed by this adapter.
+Maintenance stores CurseForge keys only through the config-scoped OS vault; `CCL_CURSEFORGE_API_KEY` is an explicit override and UI/status responses never expose the value. Diagnostic raw log preview is opt-in, bounded and only best-effort redacted; exported reports stay local and require manual review before sharing. Maintenance provides distinct update controls for the installed GUI package and a selected standalone CLI. Both use stable (`main`) or dev (`dev`) channels.
 
-### Build and check the desktop alpha
+### Build and launch the desktop application
 
 From the repository root, with Node 24, pnpm 11.25.0, Rust, and the target's native dependencies installed:
 
@@ -75,9 +84,17 @@ node --test tests/task-snapshot.test.ts
 cd ../..
 cargo test -p ccl-gui --locked
 cargo run -p ccl-gui --features desktop --release --locked
+cargo install tauri-cli --version 2.12.4 --locked
+cargo tauri build --config crates/ccl-gui/tauri.conf.json --features desktop
 ```
 
-The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs workspace formatting, adapter tests, desktop Clippy, and an optimized desktop build on Windows x64, macOS arm64, and Linux x86_64. These jobs are validation work in progress, not a claim that all desktop targets or game launches have passed. The Linux job installs `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, and `patchelf`. Tauri uses WebView2 on Windows, WKWebView on macOS, and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/). CCL's minimum supported OS versions and full platform behavior are not yet validated.
+The Node test covers task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs formatting, adapter tests, desktop Clippy, bundles the application, and is configured to launch the UI and confirm its frontend-ready marker on Windows x64, macOS arm64 and Linux x86_64. Release workflows additionally create the distribution packages and updater payloads. A separate acceptance gate exercises a successful update followed by manual rollback, automatic rollback after a bad package, and recovery after an interrupted replacement; it also checks that a game-data sentinel remains intact. G3 validation remains in progress; these gates are configured, but no claim is made here that they have passed. Linux needs WebKitGTK 4.1 development libraries, Xvfb and FUSE for packaging/smoke launch. Tauri uses WebView2 on Windows, WKWebView on macOS and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+Both updaters consume a detached signature asset named `<manifest>.sig`, produced by Tauri CLI 2.12.4. CLI manifests are `manifest-<target>.json` with `product: "ccl-cli"`; GUI manifests are `gui-manifest-<target>.json` with `product: "ccl-gui"`. Each signature covers the exact manifest bytes and carries Tauri's signed version trusted comment. The manifests bind repository, product, channel, version, branch, full commit, target, data-schema range and package SHA-256/size/URL. The verifier public key is embedded in `ccl-core`; the `.sig` is not a signature of the OS installer itself. GUI `os_signed: false` explicitly records the absence of OS publisher signing.
+
+The release build sets `CCL_BUILD_CHANNEL`, `CCL_BUILD_COMMIT` and `CCL_BUILD_TARGET` so the GUI reports the release's stable/dev channel, full commit and host target. An ordinary local build uses an unpublished commit identity; do not treat it as a publishable update.
+
+The two workflows use the same repository Actions secrets, `CCL_UPDATE_SIGNING_PRIVATE_KEY` and `CCL_UPDATE_SIGNING_PRIVATE_KEY_PASSWORD`, for both manifest families. Treat this as a long-lived updater trust key: keep its contents out of source and logs, maintain an owner-controlled protected recovery copy, and do not casually rotate or delete it. Installed updaters trust the embedded public key; losing the matching private key prevents future releases from being verified by those installations. Never include secret values in documentation or release notes.
 
 <a id="architecture"></a>
 
@@ -85,7 +102,7 @@ The Node test covers stale/new task snapshot ordering; `.github/workflows/gui.ym
 
 ### Goals
 
-CialloCraftLauncher started with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and the current desktop alpha call the same core services. The core does not depend on either interface, so desktop features can grow without moving business logic into the UI layer.
+CialloCraftLauncher started with a command-line interface. The reusable Rust core provides configuration, directory, network, download, and installation logic; the CLI and desktop GUI call the same core services. The core does not depend on either interface, so desktop features can grow without moving business logic into the UI layer.
 
 Initial target platforms:
 
@@ -97,7 +114,7 @@ Initial target platforms:
 
 - `crates/ccl-core`: shared services, configuration, errors, HTTP transport, task events, installation, Java discovery, and launch orchestration.
 - `crates/ccl-cli`: command-line arguments, text or JSON output, exit codes, and calls into the core.
-- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and React/TypeScript/Vite frontend; see [GUI alpha preview](#gui-preview) for current scope and checks.
+- `crates/ccl-gui` and `apps/ccl-gui`: optional desktop adapter and React/TypeScript/Vite frontend; see [G3 GUI and package updates](#gui-g3) for scope and checks.
 - `docs`: public documentation for users and contributors.
 
 The core reports progress through task contexts and provides a cooperative cancellation handle. An interface displays events and collects input; the core performs work, validates configuration, and returns structured errors. The core must not depend on an interface.
@@ -106,7 +123,7 @@ The core reports progress through task contexts and provides a cooperative cance
 
 ## Code boundaries
 
-`loaders`, `instance`, and `launch --instance` reuse the same core services in the CLI and desktop alpha. `modpack_format` owns Modrinth archive parsing, validation, and writing; `import_formats` detects CurseForge and MultiMC/Prism archives and converts supported inputs through the transactional pack pipeline; `modpacks` coordinates import/export and ownership receipts; `content` manages local files and userdata backups. Online provider integrations live in `online_content`. Pack imports and content edits use the same staged instance transaction and cross-process lock as instance changes. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout. NeoForge SHA-512 fallback verifies installer bytes before the install pipeline derives its SHA-1 value.
+`loaders`, `instance`, and `launch --instance` reuse the same core services in the CLI and desktop GUI. `modpack_format` owns Modrinth archive parsing, validation, and writing; `import_formats` detects CurseForge and MultiMC/Prism archives and converts supported inputs through the transactional pack pipeline; `modpacks` coordinates import/export and ownership receipts; `content` manages local files and userdata backups. Online provider integrations live in `online_content`. Pack imports and content edits use the same staged instance transaction and cross-process lock as instance changes. Modern Forge/NeoForge processors are launched by core with output delivered through task events; they must not write directly to CLI stdout. NeoForge SHA-512 fallback verifies installer bytes before the install pipeline derives its SHA-1 value.
 
 - Put reusable domain logic in `crates/ccl-core`.
 - `crates/ccl-core` must not depend on terminal or graphical-interface libraries.
@@ -152,11 +169,15 @@ The `modpack_format` module reads and writes Modrinth format version 1 archives,
 
 ## Updates, compatibility and diagnostics
 
-`update::UpdateService` checks only `WinstonMeursault/CialloCraftLauncher`. Stable packages use a `v<VERSION>` tag on `main`. Every `dev` push starts validation and packaging on Windows x64, macOS arm64 and Linux x86_64; the matching commit is published as immutable `dev-<full-SHA>` only after all jobs pass. The release workflow keeps the ten newest developer releases. Stable tags must match the CLI crate version and point to a commit on `main`. Manifests bind repository, channel, branch, full commit, target, executable digest and data reader range (`1..=1`).
+The CLI `update::UpdateService` and the GUI package updater check only `WinstonMeursault/CialloCraftLauncher`. Stable releases use a `v<VERSION>` tag on `main`; every `dev` push starts validation and packaging on Windows x64, macOS arm64 and Linux x86_64, then publishes an immutable `dev-<full-SHA>` prerelease only after all jobs pass. The workflow keeps the ten newest developer releases. Both products require a signed manifest with `product`, repository, channel, version, branch, full commit, target, payload digest, and data-reader range (`1..=1`). Stable GUI and CLI versions must match the stable tag.
 
 `UpdateService::check` distinguishes an available package from a branch head whose build is not published yet. `stage` downloads and validates the bounded ZIP, its paths and hashes, then stages the candidate. `Installation` owns channel preference and the persistent transaction journal; `launch_helper` starts the restricted old-image helper, and `execute_helper` completes replacement, health check or rollback asynchronously. `prepare_rollback` checks current data compatibility before changing transaction state. The binary updater does not restore game data. There is no data migration in the current format; readers preserve schema-less config/account/instance metadata and accept receipt schema 1. Unknown future config or instance fields and receipt schemas above 1 are refused. The initial regression uses config and account metadata generated by a git archive of baseline `2edbf0e`; those fixtures are sanitized, and the fixture account secrets were never persisted.
 
-Release archives are unsigned. HTTPS, size and SHA-256 checks detect corruption but do not authenticate the publisher. Do not describe these checks as signatures or verified publisher identity. OS signing/notarization is not implemented. Update `status`, `rollback` and `recover` do not need network access; update check/apply do, and `--network-offline` blocks them.
+Each manifest has a detached `.json.sig` asset. Tauri CLI 2.12.4 signs the exact JSON bytes and carries a signed version trusted comment. The CLI and GUI use the same long-lived private key from repository Actions secrets; `ccl-core` embeds the matching public key. Losing that private key, or rotating it without a planned client migration, strands existing installations because their embedded trust root cannot verify the new signatures. Keep both secret values out of source, logs, and docs, and retain a protected recovery copy under the release owner's control.
+
+These signatures authenticate the manifest and its package digest; SHA-256 alone detects changes but does not authenticate who made the package. Manifest authentication is distinct from Windows Authenticode signing and macOS Developer ID signing/notarization. The current GUI installers are OS-unsigned and macOS packages are not notarized. The CLI ZIP is also not OS-signed. Update `status`, `rollback` and `recover` do not need network access; update check/apply do, and `--network-offline` blocks them. The first CLI release with the new `product` field and detached signature requires manual installation over older CLI versions, whose updater cannot parse that manifest format.
+
+GUI updater rollback is separate from CLI executable rollback. It updates only a writable per-user NSIS installation on Windows, a writable `.app` on macOS, or a writable AppImage on Linux. Linux DEB installations stay under package-manager control. The helper preserves a checked previous application tree, waits up to 60 seconds for the updated GUI's startup health acknowledgment, and restores the previous tree if health confirmation fails. Recovery after an interrupted GUI transaction also returns to the previous tree where possible. The transaction never includes game data. The About response reports `os_signed: false` and `update_manifest_signatures_required: true`; its core version comes from the linked core build.
 
 `compatibility::inspect_compatibility(config_path, game_root)` is read-only, does not access the OS credential vault, and only inspects CCL-owned metadata. A future migration must lock and back up affected metadata, stage and atomically commit, recover safely after interruption, and refuse rollback if the retained reader cannot consume the new data. Never roll back the launcher by restoring a whole game directory.
 
@@ -227,16 +248,19 @@ Unit fixtures cover provider search and version payload mapping, dependency type
 ### Before a stable release
 
 1. Describe authentication and provider scope accurately. Offline identity remains supported; the owner deferred genuine-account Microsoft online acceptance on 2026-10-23, so it is not a first-stable-release gate. Describe the Microsoft online integration as experimental, and don't infer live CurseForge authorization from fixtures or a local key save. Inspect current all-platform performance artifacts; use the paired Linux comparison against a selected baseline when investigating a suspected regression.
-2. Start from a clean working tree, fetch the remote refs, and integrate the accepted `dev` commit into `main`. Preserve any independent local-main changes and resolve/review merge conflicts; do not reset or force-push the branch. Once the release source is on `main`, set the `version` fields in both `crates/ccl-core/Cargo.toml` and `crates/ccl-cli/Cargo.toml` to the release's three-part version. Refresh and commit `Cargo.lock`, then confirm the versions agree:
+2. Start from a clean working tree, fetch the remote refs, and integrate the accepted `dev` commit into `main` only when a formal stable release is explicitly authorized. Preserve any independent local-main changes and resolve/review merge conflicts; do not reset or force-push the branch. Set the `version` fields in `crates/ccl-core/Cargo.toml`, `crates/ccl-cli/Cargo.toml`, and `crates/ccl-gui/Cargo.toml` to the same release version; also synchronize `crates/ccl-gui/tauri.conf.json` and `apps/ccl-gui/package.json`. GUI and CLI versions must equal the stable tag. Refresh and commit `Cargo.lock`, then confirm all versions agree:
 
    ```sh
    git fetch origin
    git switch main
    git pull --ff-only origin main
    git merge --no-ff origin/dev
-   # Resolve/review any conflicts, then edit both package versions if needed.
+   # Resolve/review any conflicts, then edit all three package versions if needed.
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z
+   test "$(python3 -c 'import tomllib; print(tomllib.load(open("crates/ccl-gui/Cargo.toml", "rb"))["package"]["version"])')" = X.Y.Z
+   test "$(python3 -c 'import json; print(json.load(open("crates/ccl-gui/tauri.conf.json"))["version"])')" = X.Y.Z
+   test "$(node -p 'require("./apps/ccl-gui/package.json").version')" = X.Y.Z
    ```
 
 Review `git diff -- Cargo.lock` after the check and keep only lockfile changes required by the workspace version change. Do not refresh unrelated dependency versions as part of release preparation.
@@ -254,7 +278,7 @@ Review `git diff -- Cargo.lock` after the check and keep only lockfile changes r
 4. Commit and push the version change and release-ready source to `main`. If the selected version is already correct and the merge contains no additional version changes, skip the version-only add/commit commands below. Stage only reviewed paths, including the package version manifests and lockfile. Confirm the intended commit is reachable from `origin/main`. Then create and push the exact matching tag:
 
    ```sh
-   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml
+   git add Cargo.lock crates/ccl-core/Cargo.toml crates/ccl-cli/Cargo.toml crates/ccl-gui/Cargo.toml crates/ccl-gui/tauri.conf.json apps/ccl-gui/package.json
    git commit -m "chore: prepare vX.Y.Z"
    git push origin main
    git fetch origin main
@@ -264,9 +288,9 @@ Review `git diff -- Cargo.lock` after the check and keep only lockfile changes r
    git push origin vX.Y.Z
    ```
 
-The tag starts `.github/workflows/release-stable.yml`. It checks the tag is on `main`, verifies both crate versions match, runs formatting, Clippy, tests and the Windows vault probes, then builds and smoke-checks Windows x64, macOS arm64 and Linux x86_64 ZIPs. The publish job refuses an existing GitHub release with that tag, creates a draft release, generates three updater manifests, downloads the assets again, checks archive checksums and manifest-bound executable hashes/identities, and only then publishes it as the latest stable release. Stable version tags must be unique and must never be moved to a different commit.
+Pushing a stable tag does not start or publish a release. After the release owner has explicitly approved the stable release and pushed its unique `vX.Y.Z` tag, open Actions → Stable Release → Run workflow with that tag selected and enter the exact confirmation `PUBLISH`. That manually dispatched run checks the tag is on `main`, requires `ccl-core`, `ccl-cli`, and `ccl-gui` versions to match, validates sources, builds both CLI ZIPs and GUI installers on the three target hosts, and attempts a GUI smoke launch on each. Only after these jobs pass does it create a draft, sign both manifest families, download and verify the release assets, and publish. Stable version tags must be unique and must never be moved to a different commit. The G3 verification currently being documented must be integrated into `dev` only after its final gate; do not merge it to `main`, create a stable tag, or publish a formal stable release without the user's explicit approval.
 
-Before tagging, package one host build locally with the corresponding script if useful. The updater package is a ZIP on all three platforms:
+Before tagging, package one host build locally with the corresponding script if useful. The CLI update package is a ZIP on all three platforms; GUI packages use the formats listed in [G3 GUI and package updates](#gui-g3):
 
 ```sh
 # Linux native host; use aarch64-apple-darwin on an Apple-silicon Mac.
@@ -282,7 +306,7 @@ $env:TARGET = $target
 ./scripts/package-preview.ps1
 ```
 
-An ordinary local build has an unpublished commit identity unless the release build environment is supplied; use it for local checks, not as a substitute for the workflow-produced update package. The package scripts require the appropriate `target/<triple>/release/ccl` executable (`ccl.exe` on Windows). At the archive root, they include the project license, both READMEs, each paired English/Simplified Chinese guide, generated `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` inventories, and paired `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` bundles containing the original license and notice texts. `scripts/third-party-notices.py` walks the target-specific normal and build dependency graph of `ccl-cli`; each inventory links to deterministic anchors in its matching language bundle. The bundles localize their introductory labels while retaining identical original license text bytes; third-party texts are consolidated into these two files. The packaging scripts verify all four notice files are present and the ZIP has no more than 256 entries, keeping it installable by current readers. The updater's 256-entry ZIP limit remains unchanged. Package scripts also smoke-check the archive and write a SHA-256 file. A checksum detects accidental corruption but the archive and executable are unsigned, so it does not authenticate the publisher.
+An ordinary local build has an unpublished commit identity unless the release build environment is supplied; use it for local checks, not as a substitute for the workflow-produced update package. The CLI package scripts require the appropriate `target/<triple>/release/ccl` executable (`ccl.exe` on Windows). At the archive root, they include the project license, both READMEs, each paired English/Simplified Chinese guide, generated `THIRD-PARTY.en.md` / `THIRD-PARTY.zh-CN.md` inventories, and paired `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` bundles containing the original license and notice texts. `scripts/third-party-notices.py` walks the target-specific normal and build dependency graph of `ccl-cli`; each inventory links to deterministic anchors in its matching language bundle. The bundles localize their introductory labels while retaining identical original license text bytes; third-party texts are consolidated into these two files. The packaging scripts verify all four notice files are present and the ZIP has no more than 256 entries, keeping it installable by current readers. The updater's 256-entry ZIP limit remains unchanged. GUI packages also embed generated third-party license and notice material for Rust and production frontend dependencies. Package scripts write SHA-256 files. CLI ZIPs and GUI installers are unsigned by OS publisher certificates; the separate signed manifests authenticate metadata and package digests for updater clients.
 
 ### Developer builds
 
@@ -295,20 +319,22 @@ git pull --ff-only origin dev
 git push origin dev
 ```
 
-The workflow requires the tested commit to remain the current `dev` tip while all three platform jobs validate and package. On success it creates immutable tag `dev-<full commit SHA>`, verifies the three ZIPs, checksums and manifests, publishes a prerelease, and retains the newest ten matching developer releases. Do not create or push that tag manually. If another commit reaches `dev` during validation, no release for the stale tip should be published; validate the new tip instead.
+The workflow requires the tested commit to remain the current `dev` tip while all three platform jobs validate, package and attempt the GUI smoke launch. On success it creates immutable tag `dev-<full commit SHA>`, verifies the CLI ZIPs, GUI installers, checksums and signed manifests, publishes a prerelease, and retains the newest ten matching developer releases. Do not create or push that tag manually. If another commit reaches `dev` during validation, no release for the stale tip should be published; validate the new tip instead. A dev prerelease is not formal stable-release approval.
 
 ### Troubleshooting release gates
 
-- **Stable tag rejected:** confirm the tag commit is an ancestor of `origin/main`, both package versions equal the tag without the `v`, and `Cargo.lock` is committed. The checker is `python3 scripts/check-package-versions.py --expected X.Y.Z`.
-- **`--locked` reports a lockfile change:** update the two package versions, run `cargo check --workspace`, inspect and commit only required `Cargo.lock` changes, then repeat locked checks.
+- **Stable tag rejected:** confirm the tag commit is an ancestor of `origin/main`, core/CLI/GUI Cargo versions and GUI package metadata equal the tag without the `v`, and `Cargo.lock` is committed. The checker is `python3 scripts/check-package-versions.py --expected X.Y.Z` plus the GUI metadata checks in the release checklist.
+- **`--locked` reports a lockfile change:** update all three Rust package versions, synchronize the Tauri config and frontend package versions, run `cargo check --workspace`, inspect and commit only required `Cargo.lock` changes, then repeat locked checks.
 - **Native link/build failure:** install the target-specific compiler/linker and SDK listed under [Environment](#environment). A host build does not prove another target can link.
 - **Credential vault probe fails:** unlock the OS credential service. On Linux, ensure a persistent Secret Service/D-Bus session is available; CCL deliberately returns an error instead of saving credentials in plaintext.
 - **Developer release is absent:** inspect all three validation jobs and check whether `dev` moved past the tested commit. A failed or stale-tip job does not produce an immutable package.
-- **Hash check passes:** this confirms byte integrity against the manifest/checksum. It does not prove that the package was signed or published by a verified identity.
+- **Hash check passes:** this confirms byte integrity against a digest. Updater clients also verify the detached manifest signature; this remains separate from operating system publisher signing.
 
 <a id="release-notes"></a>
 
 ## First stable release notes draft
+
+This 0.1.0 draft describes the original CLI-only scope. Do not reuse it for G3 or a formal release without approval from the release owner.
 
 <!-- release-notes:start -->
 # CialloCraftLauncher 0.1.0
