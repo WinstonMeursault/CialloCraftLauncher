@@ -114,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pid", type=int, required=True, help="PID of the release GUI main process")
     parser.add_argument("--bundle-id", default="io.github.winstonmeursault.ccl.gui", help="Expected GUI bundle identifier used to match app-specific WebKit data paths")
-    parser.add_argument("--scenario", choices=("idle-visible", "idle-hidden"), required=True)
+    parser.add_argument("--scenario", choices=("idle-visible", "idle-hidden", "log-pressure-visible", "log-pressure-hidden"), required=True)
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--output", required=True, help="JSON evidence path")

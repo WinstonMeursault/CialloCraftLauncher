@@ -99,11 +99,17 @@ async fn select_root(
 }
 #[tauri::command]
 fn cancel_task(state: State<'_, DesktopState>, id: u64) -> Result<TaskSnapshot, GuiError> {
-    state.tasks.cancel(id)
+    state
+        .tasks
+        .cancel(id)
+        .map(|snapshot| snapshot.for_display())
 }
 #[tauri::command]
 fn task_snapshot(state: State<'_, DesktopState>) -> Option<TaskSnapshot> {
-    state.tasks.snapshot()
+    state
+        .tasks
+        .snapshot()
+        .map(|snapshot| snapshot.for_display())
 }
 #[tauri::command]
 fn set_visibility(state: State<'_, DesktopState>, visible: bool) {
@@ -115,7 +121,20 @@ fn set_visibility(state: State<'_, DesktopState>, visible: bool) {
 fn gui_log_pressure(state: State<'_, DesktopState>) -> Result<TaskSnapshot, GuiError> {
     let _gate = try_operation_gate(&state.operation_gate)?;
     check_idle(&state.closing, &state.tasks)?;
-    ccl_gui::validation::start_log_pressure(&state.tasks)
+    ccl_gui::validation::start_log_pressure(&state.tasks).map(|snapshot| snapshot.for_display())
+}
+
+#[cfg(feature = "gui-validation")]
+#[tauri::command]
+fn gui_blank_baseline(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<(), GuiError> {
+    let _gate = try_operation_gate(&state.operation_gate)?;
+    check_idle(&state.closing, &state.tasks)?;
+    app.get_webview_window("main").ok_or_else(||GuiError::new("validation_window","Validation window is unavailable"))?
+        .eval("document.getElementById('root')?.replaceChildren(); document.title = 'CCL blank rendering control';")
+        .map_err(|_|GuiError::new("validation_window","Could not prepare blank rendering control"))
 }
 
 include!("commands.rs");
@@ -209,7 +228,9 @@ fn main() {
             choose_path, instance_query, instance_mutate, online_query, online_mutate, maintenance, inspect_dropped, update_installation, select_config,
             gui_self_update, gui_ready,
             #[cfg(feature = "gui-validation")]
-            gui_log_pressure
+            gui_log_pressure,
+            #[cfg(feature = "gui-validation")]
+            gui_blank_baseline
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event

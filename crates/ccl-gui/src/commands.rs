@@ -248,7 +248,12 @@ async fn launch_game(
 }
 #[tauri::command]
 fn task_history(state: State<'_, DesktopState>) -> Vec<TaskSnapshot> {
-    state.tasks.history()
+    state
+        .tasks
+        .history()
+        .into_iter()
+        .map(TaskSnapshot::for_display)
+        .collect()
 }
 #[tauri::command]
 async fn account_list(state: State<'_, DesktopState>) -> Result<AccountListing, GuiError> {
