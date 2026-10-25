@@ -237,13 +237,15 @@ fn validate_export(bytes: &[u8], key: &str) -> GuiResult<()> {
     let encoded = bytes
         .strip_prefix(&[0xff, 0xfe])
         .ok_or_else(|| error("Registry export has an invalid encoding"))?;
-    if encoded.len() % 2 != 0 {
+    let (pairs, remainder) = encoded.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(error("Registry export has an invalid encoding"));
     }
     let text = String::from_utf16(
-        &encoded
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        &pairs
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
             .collect::<Vec<_>>(),
     )
     .map_err(|_| error("Registry export has an invalid encoding"))?;

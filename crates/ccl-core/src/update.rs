@@ -1403,6 +1403,7 @@ mod tests {
         STANDARD.encode(signature.to_string().as_bytes())
     }
 
+    #[cfg(not(windows))]
     fn manifest_signature_routes(manifest: &UpdateManifest) -> HashMap<String, (u16, Vec<u8>)> {
         let tag = match manifest.channel {
             Channel::Stable => format!("v{}", manifest.version),

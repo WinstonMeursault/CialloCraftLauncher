@@ -52,7 +52,7 @@ def pinned_license_sources(package):
 
 
 def command_output(command, cwd):
-    result = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
+    result = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(command)}\n{detail}")
