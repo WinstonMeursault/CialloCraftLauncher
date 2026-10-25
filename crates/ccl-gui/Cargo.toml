@@ -9,6 +9,7 @@ description = "Desktop adapter for CialloCraftLauncher"
 [features]
 default = []
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
+gui-validation = ["desktop"]
 
 [dependencies]
 ccl-core = { path = "../ccl-core" }
@@ -33,6 +34,10 @@ tauri-build = { version = "2", optional = true }
 name = "ccl-gui"
 path = "src/main.rs"
 required-features = ["desktop"]
+
+[[example]]
+name = "gui-update-driver"
+required-features = ["gui-validation"]
 
 [dev-dependencies]
 sha1.workspace = true

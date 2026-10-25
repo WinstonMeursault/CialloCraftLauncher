@@ -9,8 +9,11 @@ pub mod maintenance;
 pub mod online_service;
 pub mod operations;
 mod preferences;
+pub mod self_update;
 mod tasks;
 pub mod update_service;
+#[cfg(feature = "gui-validation")]
+pub mod validation;
 
 pub use library::{Bootstrap, LibraryEntry, bootstrap, initialize_root};
 pub use preferences::{Preferences, PreferencesStore, Theme};
