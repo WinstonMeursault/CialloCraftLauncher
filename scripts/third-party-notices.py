@@ -16,6 +16,39 @@ LICENSE_NAME = re.compile(
     r"THIRD[-_ ]PARTY(?:[-_ ](?:LICENSES?|NOTICES?))?)(?:[._ -].*)?$",
     re.IGNORECASE,
 )
+LICENSE_SOURCE_ROOT = Path(__file__).resolve().parent / "license-sources"
+LICENSE_SOURCE_MANIFEST = LICENSE_SOURCE_ROOT / "manifest.json"
+
+
+def pinned_license_sources(package):
+    """Return checksum-verified license copies for exact pinned crate sources."""
+    if not LICENSE_SOURCE_MANIFEST.is_file():
+        return []
+    manifest = json.loads(LICENSE_SOURCE_MANIFEST.read_text(encoding="utf-8"))
+    key = f"{package['name']}@{package['version']}"
+    entry = manifest.get("packages", {}).get(key)
+    if not entry:
+        return []
+    vcs_path = Path(package["manifest_path"]).parent / ".cargo_vcs_info.json"
+    try:
+        vcs = json.loads(vcs_path.read_text(encoding="utf-8"))
+        commit = vcs["git"]["sha1"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f"{key}: cannot verify pinned upstream source commit: {error}") from error
+    if commit != entry["crate_commit"]:
+        raise RuntimeError(f"{key}: license fallback commit {entry['crate_commit']} does not match crate source {commit}")
+    result = []
+    for source in entry["files"]:
+        path = LICENSE_SOURCE_ROOT / source["local_path"]
+        try:
+            contents = path.read_bytes()
+        except OSError as error:
+            raise RuntimeError(f"{key}: missing tracked license source {path}: {error}") from error
+        digest = hashlib.sha256(contents).hexdigest()
+        if digest != source["sha256"]:
+            raise RuntimeError(f"{key}: license source checksum mismatch for {path}")
+        result.append((path, source["source_path"]))
+    return result
 
 
 def command_output(command, cwd):
@@ -26,16 +59,16 @@ def command_output(command, cwd):
     return result.stdout.strip()
 
 
-def dependency_packages(metadata):
+def dependency_packages(metadata, package_name="ccl-cli"):
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     workspace_members = set(metadata["workspace_members"])
     root = next(
-        (package for package in metadata["packages"] if package["name"] == "ccl-cli"),
+        (package for package in metadata["packages"] if package["name"] == package_name),
         None,
     )
     if root is None or root["id"] not in nodes:
-        raise RuntimeError("Cargo metadata did not resolve the ccl-cli package")
+        raise RuntimeError(f"Cargo metadata did not resolve the {package_name} package")
 
     reached = {root["id"]}
     pending = [root["id"]]
@@ -82,7 +115,10 @@ def license_files(package):
             non_text.append(path)
             continue
         usable.append(path)
-    return root, usable, non_text, missing_declared
+    upstream_files = [(path, path.relative_to(root).as_posix()) for path in usable]
+    if not usable:
+        upstream_files = pinned_license_sources(package)
+    return root, upstream_files, non_text, missing_declared
 
 
 def package_identity(package, workspace):
@@ -209,18 +245,19 @@ def main():
     parser.add_argument("--target", required=True, help="Rust target triple for the packaged executable")
     parser.add_argument("--output-dir", required=True, type=Path, help="Package staging directory")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--package", default="ccl-cli", choices=("ccl-cli", "ccl-gui"))
     args = parser.parse_args()
     repo = args.repo.resolve()
     output_dir = args.output_dir.resolve()
 
     metadata_json = command_output(
         ["cargo", "metadata", "--locked", "--offline", "--format-version", "1",
-         "--filter-platform", args.target],
+         "--filter-platform", args.target] + (["--features", "ccl-gui/desktop"] if args.package == "ccl-gui" else []),
         repo,
     )
     metadata = json.loads(metadata_json)
-    packages = dependency_packages(metadata)
-    root_package = next(package for package in metadata["packages"] if package["name"] == "ccl-cli")
+    packages = dependency_packages(metadata, args.package)
+    root_package = next(package for package in metadata["packages"] if package["name"] == args.package)
     toolchain_cargo = command_output(["cargo", "--version"], repo)
     toolchain_rustc = command_output(["rustc", "--version"], repo)
     lock_path = repo / "Cargo.lock"
@@ -260,12 +297,7 @@ def main():
 
         identity = package_identity(package, repo)
         source_texts = []
-        for file_path in files:
-            try:
-                relative = file_path.relative_to(root)
-            except ValueError:
-                relative = Path("declared") / file_path.name
-            source_path = relative.as_posix()
+        for file_path, source_path in files:
             anchor = "license-" + hashlib.sha256(
                 f"{name}@{version}|{identity}|{source_path}".encode("utf-8")
             ).hexdigest()[:20]
