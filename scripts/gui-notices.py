@@ -21,7 +21,7 @@ def production_packages(root):
 
     def walk(manifest):
         manifest = manifest.resolve()
-        data = json.loads(manifest.read_text())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
         key = (data["name"], data["version"])
         if key in result:
             return
@@ -29,7 +29,7 @@ def production_packages(root):
         for name in data.get("dependencies", {}):
             walk(resolve(name, manifest.parent))
 
-    for name in json.loads((root / "package.json").read_text())["dependencies"]:
+    for name in json.loads((root / "package.json").read_text(encoding="utf-8"))["dependencies"]:
         walk(resolve(name, root))
     return result
 
@@ -51,7 +51,7 @@ def main():
             listing.write(f"\n## {title}\n\n")
             texts.write(f"\n## {title}\n\n")
             for (name, version), directory in sorted(packages.items()):
-                data = json.loads((directory / "package.json").read_text())
+                data = json.loads((directory / "package.json").read_text(encoding="utf-8"))
                 files = [p for p in directory.iterdir() if p.is_file() and re.match(r"^(LICENSE|LICENCE|COPYING|NOTICE)([.-].*)?$", p.name, re.I)]
                 if not files:
                     raise RuntimeError(f"Missing original license text for {name}@{version}")
