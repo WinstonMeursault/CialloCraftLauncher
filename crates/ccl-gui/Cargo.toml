@@ -1,0 +1,44 @@
+[package]
+name = "ccl-gui"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Desktop adapter for CialloCraftLauncher"
+
+[features]
+default = []
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
+gui-validation = ["desktop"]
+
+[dependencies]
+ccl-core = { path = "../ccl-core" }
+fs2.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile = "3"
+tokio.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+semver = "1"
+flate2 = "1"
+tar = "0.4"
+tauri = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true }
+
+[[bin]]
+name = "ccl-gui"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "gui-update-driver"
+required-features = ["gui-validation"]
+
+[dev-dependencies]
+sha1.workspace = true
+zip.workspace = true

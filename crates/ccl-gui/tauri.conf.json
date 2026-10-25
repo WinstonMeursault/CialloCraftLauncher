@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CialloCraftLauncher",
+  "version": "0.2.0",
+  "identifier": "io.github.winstonmeursault.ccl.gui",
+  "build": {
+    "frontendDist": "../../apps/ccl-gui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "CialloCraftLauncher",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "category": "Game",
+    "shortDescription": "Lightweight Minecraft launcher",
+    "license": "AGPL-3.0-or-later",
+    "licenseFile": "../../LICENSE",
+    "resources": {
+      "../../target/gui-notices/": "notices/"
+    },
+    "publisher": "WinstonMeursault"
+  }
+}

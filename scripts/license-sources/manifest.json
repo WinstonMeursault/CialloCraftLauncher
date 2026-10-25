@@ -1,0 +1,408 @@
+{
+  "schema": 1,
+  "purpose": "Checksum-pinned copies of upstream license texts omitted from published crate archives. Package mappings require exact crate version and .cargo_vcs_info commit. Canonical license texts are included only where the pinned source declares/references that license.",
+  "packages": {
+    "alloc-stdlib@0.3.0": {
+      "crate_commit": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012",
+      "files": [
+        {
+          "local_path": "files/alloc-stdlib-0.3.0/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "61e3229180ea789440b65cf2b97855c8bf2c1962a1681873e2601d9a2fc7a83c",
+          "source_url": "https://github.com/dropbox/rust-alloc-no-stdlib/blob/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "dlopen2@0.8.2": {
+      "crate_commit": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+      "files": [
+        {
+          "local_path": "files/dlopen2-0.8.2/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "48b7cc6873f787f24dd1ca7e84cbf30f3dfae288db80ca178faf775cc1200784",
+          "source_url": "https://github.com/OpenByteDev/dlopen2/blob/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "dlopen2_derive@0.4.3": {
+      "crate_commit": "cc80e4a0a90d499b677fdf7743699b4b3a43a989",
+      "files": [
+        {
+          "local_path": "files/dlopen2-0.8.2/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "48b7cc6873f787f24dd1ca7e84cbf30f3dfae288db80ca178faf775cc1200784",
+          "source_url": "https://github.com/OpenByteDev/dlopen2/blob/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "libappindicator-sys@0.9.0": {
+      "crate_commit": "eafd1e3682a1247f595410266091e9684021cb6f",
+      "files": [
+        {
+          "local_path": "files/libappindicator-sys-0.9.0/LICENSE-APACHE",
+          "source_path": "LICENSE-APACHE",
+          "sha256": "b58af850792f8093260ca0c3915ba7231cd461d7f289b6675f1de197c438e15b",
+          "source_url": "https://github.com/tauri-apps/libappindicator-rs/blob/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-APACHE"
+        },
+        {
+          "local_path": "files/libappindicator-sys-0.9.0/LICENSE-MIT",
+          "source_path": "LICENSE-MIT",
+          "sha256": "c6b095e1e17f392780f8879588f7c328f8281396954503c746b69e116bc8c045",
+          "source_url": "https://github.com/tauri-apps/libappindicator-rs/blob/eafd1e3682a1247f595410266091e9684021cb6f/LICENSE-MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "tauri-plugin@2.7.2": {
+      "crate_commit": "59b63ab500da9859f12d8888c3298bc29bba0b92",
+      "files": [
+        {
+          "local_path": "files/tauri-plugin-2.7.2/LICENSE-APACHE-2.0",
+          "source_path": "LICENSE-APACHE-2.0",
+          "sha256": "e4a4e5181833a8562fc94b5df9e7faa4e58d7cc4782dea4217edd062c741d87c",
+          "source_url": "https://github.com/tauri-apps/tauri/blob/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-APACHE-2.0"
+        },
+        {
+          "local_path": "files/tauri-plugin-2.7.2/LICENSE-MIT",
+          "source_path": "LICENSE-MIT",
+          "sha256": "b309f725ee9e84f7b8606a58477cad7504a5581bc4ab9c7c25602d9196e7241a",
+          "source_url": "https://github.com/tauri-apps/tauri/blob/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "webview2-com@0.39.1": {
+      "crate_commit": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "files": [
+        {
+          "local_path": "files/webview2-com-0.39.1/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "49eef2524ddf5014eaf4ee48d716029eb5cc28d34c0b17f528f5bbe00ed1a733",
+          "source_url": "https://github.com/wravery/webview2-rs/blob/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "webview2-com-sys@0.39.1": {
+      "crate_commit": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "files": [
+        {
+          "local_path": "files/webview2-com-0.39.1/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "49eef2524ddf5014eaf4ee48d716029eb5cc28d34c0b17f528f5bbe00ed1a733",
+          "source_url": "https://github.com/wravery/webview2-rs/blob/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "webview2-com-macros@0.8.1": {
+      "crate_commit": "dffa41a8a46d3f5565eefbff2de57d38d399f158",
+      "files": [
+        {
+          "local_path": "files/webview2-com-macros-0.8.1/LICENSE",
+          "source_path": "LICENSE",
+          "sha256": "49eef2524ddf5014eaf4ee48d716029eb5cc28d34c0b17f528f5bbe00ed1a733",
+          "source_url": "https://github.com/wravery/webview2-rs/blob/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2@0.6.5": {
+      "crate_commit": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "block2@0.6.2": {
+      "crate_commit": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-encode@4.1.0": {
+      "crate_commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-app-kit@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-core-foundation@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-core-graphics@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-io-surface@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-quartz-core@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-web-kit@0.3.2": {
+      "crate_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "objc2-exception-helper@0.1.1": {
+      "crate_commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        },
+        {
+          "local_path": "files/canonical/ZLIB.txt",
+          "source_path": "zlib canonical license text",
+          "sha256": "a15575fb6436aae463ed7b5dcf46c11d0b8435242db08e2464a1c83d5c887882",
+          "source_url": "https://zlib.net/zlib_license.html"
+        },
+        {
+          "local_path": "files/canonical/APACHE-2.0.txt",
+          "source_path": "Apache-2.0 canonical license text",
+          "sha256": "3a0b32a74c46bdda3499ec9f39ab4f2a98fc2b239a1c1c1592086d26fdf76159",
+          "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "selectors@0.38.0": {
+      "crate_commit": "572ecba2d1600e7c3d490586692a209faf703baa",
+      "files": [
+        {
+          "local_path": "files/canonical/MPL-2.0.txt",
+          "source_path": "Mozilla MPL-2.0 canonical license text",
+          "sha256": "2892966ff5d6e07f78903e31e89a786426dc083182f336532d514c3c2ed596f2",
+          "source_url": "https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt"
+        }
+      ],
+      "path_in_vcs": ""
+    },
+    "dispatch2@0.3.1": {
+      "crate_commit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "files": [
+        {
+          "local_path": "files/objc2/LICENSE.md",
+          "source_path": "LICENSE.md",
+          "sha256": "5a912781fb797693eb97b3f108feec19ae5622a5b7b3de19fe79999722d0a9a4",
+          "source_url": "https://github.com/madsmtm/objc2/blob/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md"
+        },
+        {
+          "local_path": "files/canonical/MIT.html.extract",
+          "source_path": "OSI MIT license text (canonical template; placeholders retained)",
+          "sha256": "2b1587239d7bb922cd376b31062eac6cb56e7aaf4418f530aae477b7dad1e07b",
+          "source_url": "https://opensource.org/license/MIT"
+        }
+      ],
+      "path_in_vcs": ""
+    }
+  }
+}

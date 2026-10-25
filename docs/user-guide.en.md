@@ -3,6 +3,7 @@
 [API reference](api.en.md) · [Development guide](development.en.md) · [简体中文](user-guide.zh-CN.md)
 
 - [Quick start](#quickstart)
+- [Desktop app and self-update](#desktop-alpha)
 - [Installation and prerequisites](#installation)
 - [Game directory](#directories)
 - [Settings and configuration](#configuration)
@@ -37,17 +38,47 @@ Java matching the version and host architecture is detected or installed automat
 
 `versions`, `loaders`, and `online search` return up to 20 entries by default. For `versions` and `loaders`, `--limit 0` returns all available entries; online search is capped by the provider. `logs` shows the latest 100 lines by default.
 
+<a id="desktop-alpha"></a>
+
+## Desktop app and self-update
+
+Stable v0.2.0 includes the desktop app, CLI and shared core. Download its desktop installer from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases/tag/v0.2.0). The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
+
+The desktop app asks you to confirm a game directory before it creates a missing one. It can install vanilla versions, create managed loader instances, import supported local archives, launch with an offline player name or saved Microsoft account, and inspect live or saved game logs. Microsoft sign-in remains experimental and requires the OS credential vault. Enter a public Microsoft application client ID in Accounts, or configure `auth.microsoft_client_id` in the shared core config. The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
+
+One install, import, login, refresh, or launch task can run at a time. Work continues when you switch pages. Installation and import tasks can be cancelled; stopping a game asks for confirmation. The task view retains up to eight completed tasks and displays at most the latest 100 task log lines. Closing the app during active work asks whether to cancel the task or stop the game and exit. A second launch focuses the existing window.
+
+Drop one `.zip` or `.mrpack` onto the ready window to inspect it and open the import dialog. Choose or edit the instance name and import options, review the summary, then explicitly start the import. An existing instance ID is rejected; the app does not automatically replace it. You can also use the native archive picker. For content files, backup/export destinations, diagnostics, and a CLI installation, use the corresponding native picker so the app can grant access to that selected path.
+
+The Advanced page manages managed instances. Select an instance to install/update/remove its loader, inspect history and storage, preview or apply revision cleanup, restore or roll back a revision, manage content, create or restore a userdata backup, and inspect/export a Modrinth pack receipt. Shared vanilla entries are read-only on this page. In Discover, choose Modrinth or CurseForge, search, select a project and version, then inspect versions or resolve dependencies before installing. Mod installs target the selected managed instance; pack installs ask for confirmation because they can create or update the named instance. Optional pack files are excluded unless selected.
+
+Settings separates appearance and game-root choices from shared core settings. The Maintenance panel exposes ten core values: version-list source, file source, mirror root, proxy, parallel downloads, network-offline, Microsoft client ID, default Java path, default memory, and automatic Java installation. Save each field separately. If CLI or another process changes the config, reload before saving; stale edits are rejected. You can select a local JSON config unless `CCL_GUI_CONFIG_PATH` pins the config. CurseForge keys are entered in a password field and stored in the OS credential vault. `CCL_CURSEFORGE_API_KEY` overrides the saved value; status reveals only whether a saved key or override exists. Maintenance has separate controls for the installed GUI package and a standalone CLI installation.
+
+Health checks make network or temporary-write probes only when their checkboxes are selected. Diagnostic export is local. Raw log preview is an explicit option and may contain private data despite best-effort redaction; review the file before sharing. The CLI updater operates on the standalone CLI in the folder you select. GUI update controls act only on the currently installed desktop package. Both support stable (`main`) and dev (`dev`) channels and persist the selected channel.
+
 <a id="installation"></a>
 
 ## Installation and prerequisites
 
-Download the archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable and developer release archives use these names:
+Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable GUI/CLI/core is currently v0.2.0; developer releases are published separately. CLI archives use these names:
 
 | System | Archive |
 | --- | --- |
 | Windows x86_64 | `ccl-x86_64-pc-windows-msvc.zip` |
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
+
+Desktop packages use separate names and installers. Choose the stable v0.2.0 release for the desktop app:
+
+| System | Install package | In-app update package |
+| --- | --- | --- |
+| Windows x86_64 | `ccl-gui-x86_64-pc-windows-msvc.exe` (per-user NSIS) | NSIS EXE; install in a writable user location |
+| macOS arm64 | `ccl-gui-aarch64-apple-darwin.dmg` | `.app.tar.gz`; keep the installed `.app` in a writable location |
+| Linux x86_64 | `ccl-gui-x86_64-unknown-linux-gnu.AppImage` or `.deb` | AppImage supports in-app updates; update DEB through the package manager |
+
+GUI installer names and CLI ZIP names stay separate. The Windows self-updater supports the per-user installer, not a portable executable. macOS and Linux application-package updates need write access to the installed bundle or AppImage location. An installation in a protected or package-managed location should be updated by reinstalling through that installation method.
+
+CLI ZIP release assets include `.sha256` checksum files. A checksum can detect a damaged download, but it does not authenticate the publisher. The GUI in-app updater verifies a detached signed manifest and its bound package digest. Directly installed GUI packages are not OS-signed; the public key signature is separate from Authenticode and macOS notarization.
 
 Download the adjacent `.sha256` checksum file too, then verify the archive before extracting it. In PowerShell, run these commands from the download directory:
 
@@ -60,11 +91,11 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
 
-Extract the whole archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, `THIRD-PARTY.en.md`, `THIRD-PARTY.zh-CN.md`, and `THIRD-PARTY-LICENSES.en.md` / `THIRD-PARTY-LICENSES.zh-CN.md` together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the updater stores its transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CCL is a command-line program; it does not include a graphical launcher or an installer wizard. See [launcher updates](#maintenance) for update integrity limits.
+Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. Choose the stable v0.2.0 release for the desktop app. See [launcher updates](#maintenance) for update integrity limits.
 
 You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
 
-The targets above describe build and package coverage. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
+The targets above describe build and package coverage, not certification of each OS minimum. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
 
 ### First run
 
@@ -247,7 +278,7 @@ Commits retain the immediate previous revision for `rollback`; older previous re
 
 ## Packs, local content and backups
 
-CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). A GUI is not provided.
+CCL can inspect, import and export Modrinth .mrpack v1 archives, including Quilt dependencies, and manage isolated instance content. CurseForge and MultiMC/Prism exports are supported through [additional import converters](user-guide.en.md#imports). The desktop app can inspect supported local archives through its file picker; see [Desktop app and self-update](#desktop-alpha).
 
 The validated sample uses Minecraft `1.21.1`, Fabric Loader `0.20.1`, and Fabric API `0.116.17+1.21.1`. It reached the main menu on macOS arm64 and on Linux x86_64 using CPU rendering. An exported and re-imported macOS instance also reached the menu with matching mod hashes and override files. This does not certify other packs or third-party mod combinations. Windows is checked through compilation and automated tests.
 
@@ -411,9 +442,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## Launcher updates and diagnostics
 
-The first P7 installation is a one-time bootstrap step: pre-P7 CCL builds do not have an update command, so install a P7-enabled binary manually using the project's release or installation instructions. P7 reuses the existing settings, account metadata and credentials, and instances; sanitized files written by the older `2edbf0e` config and account writers are covered by compatibility checks. After that first replacement, P7-enabled builds can update and roll back through the updater.
+Stable v0.2.0 includes the desktop app and signed-manifest updates for both GUI and CLI; select the stable channel for this release. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
 
-CCL checks for its own updates only when you run an update command. Stable follows the `main` branch; developer builds follow `dev`. Stable releases use version tags such as `v0.1.0`. A developer release is published for a `dev` commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
+CCL checks for its own updates only when you run an update command. The stable channel follows main and provides v0.2.0 GUI/CLI/core; the dev channel follows dev and carries developer prereleases. Stable releases use version tags such as v0.1.0. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
 
 ```sh
 ccl update check
@@ -425,7 +456,17 @@ ccl update recover
 ccl update recover --installation /path/to/ccl
 ```
 
-Selecting a channel with `--channel` saves that choice. `check` reports whether a compatible published package is available. `apply` downloads and validates its target-specific archive, then starts a helper to replace the executable asynchronously. On Windows, temporary executable-sharing failures are retried for up to 30 seconds. Check `update status` after the command returns. If the helper still holds the update lock, wait briefly and retry; a busy response is not a failed transaction. Use `recover` after an interrupted helper or replacement; if the normal executable is unavailable, run recovery from the retained helper with `--installation` pointing to the original executable path. `rollback` uses the retained previous executable only when the current config/account metadata, instances and receipts are readable by that older binary. A binary rollback never restores your game directory, saves or content. Launcher update packages are unsigned: HTTPS, size checks and SHA-256 detect transport or file corruption, but do not independently verify who published a package. `--network-offline` blocks update checks and downloads. Package-manager or read-only installs should be updated through their installation method.
+Selecting a channel with `--channel` saves that choice. `check` reports whether a compatible published package is available. `apply` downloads and validates the target-specific archive, then starts a helper to replace the executable asynchronously. CLI manifests are named `manifest-<target>.json`; each has a matching `.json.sig` asset. The signature covers the exact manifest bytes and binds the product, version, channel, branch, commit, target and package digest. The updater verifies it with the public key embedded in the application, then checks the package size, SHA-256 and archive paths before staging. The CLI ZIP itself is not OS-signed. On Windows, temporary executable-sharing failures are retried for up to 30 seconds. Check `update status` after the command returns. If the helper still holds the update lock, wait briefly and retry; a busy response is not a failed transaction. Use `recover` after an interrupted helper or replacement; if the normal executable is unavailable, run recovery from the retained helper with `--installation` pointing to the original executable path. `rollback` uses the retained previous executable only when the current config/account metadata, instances and receipts are readable by that older binary. A binary rollback never restores your game directory, saves or content.
+
+The GUI Maintenance panel has its own `Check for updates`, `Download and install`, `Roll back GUI update`, and `Recover interrupted update` controls. GUI manifests use `gui-manifest-<target>.json` plus a detached `.json.sig` asset signed by the same embedded updater key. The signature binds the product/version/channel/commit/target and the updater payload digest; operating-system publisher signing is separate and is not provided. GUI packages are not Authenticode-signed, and macOS packages are not notarized.
+
+Self-update applies only to an installed per-user Windows NSIS application, a writable macOS `.app`, or a writable Linux AppImage. A Linux DEB installation is updated through its package manager. The helper retains a checked copy of the previous application, installs the verified package, starts the new application and waits up to 60 seconds for its startup health acknowledgment. If the app exits early or does not acknowledge startup, the helper restores and restarts the previous application. Use the GUI rollback control after an applied update while the backup is available. Use recovery after an interrupted transaction; recovery returns to the known previous application when possible. The journal and update payload live outside the installed application. Game files, saves, accounts and credentials are not part of the application rollback.
+
+Keep game directories, saves and configuration outside the application package. Self-update refuses overlapping selected data/configuration paths. Manual rollback also refuses to overwrite application files modified after the update; preserve those changes first. On Windows, rollback restores the checked current-user uninstall/product registry metadata as well as application files.
+
+If an interruption leaves the application entry missing, use the retained helper directly. Its default directory is `~/Library/Application Support/CialloCraftLauncher/gui/update` on macOS, `%APPDATA%\CialloCraftLauncher\gui\update` on Windows, or `${XDG_CONFIG_HOME:-$HOME/.config}/ciallocraftlauncher/gui/update` on Linux; an explicit `CCL_GUI_DATA_DIR` uses its `update` subdirectory. Set `GUI_UPDATE_DIR` to that directory, then run `"$GUI_UPDATE_DIR/helper" --ccl-gui-update-helper "$GUI_UPDATE_DIR" recover` on macOS, or use `helper.AppImage` on Linux. In PowerShell, run `& "$GUI_UPDATE_DIR\helper.exe" --ccl-gui-update-helper "$GUI_UPDATE_DIR" recover`. Retain the journal, payload and backups until recovery completes. These commands recover the recorded installation; they do not select a different application.
+
+Only one GUI instance or updater helper can operate on an installation at a time. If a status or update operation reports that the installation is busy, close the other instance or let the helper finish, then retry. `--network-offline` blocks CLI and GUI update checks and downloads. Package-manager or read-only installations should be updated through their installation method.
 
 `doctor` checks Java candidates, launcher/game directory access and whether a system credential-store adapter is present. It does not log in or test whether the vault is unlocked. Add `--network-probe` to contact Mojang's version metadata endpoint, or `--write-probe` to create and remove a temporary empty file under CCL-owned data. Both probes are explicit.
 
@@ -441,7 +482,7 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 Run diagnosis uses the saved run record, a bounded game-log prefix and timestamp-correlated crash reports to recognize a small set of common failure patterns. It reports evidence and suggestions; an unknown failure is not forced into a category. Structured diagnostic export uses allowlisted fields and replaces local paths. It excludes account databases, credential stores, worlds and server lists. The optional raw preview includes up to 16 KiB of game output and applies best-effort redaction, but may still contain account names, tokens or other content written by the game or mods. Review the file before sharing it. CCL does not upload diagnostic reports.
 
-The agreed P7 maintenance scope passed acceptance, including three-platform CI and packaging and live GitHub update/rollback checks on macOS and Linux. Windows CI and package validation do not establish physical Windows game-launch behavior. The release is unsigned, and the compatibility checks cover defined historical samples rather than every data set produced by every older build. See the [API reference](api.en.md#maintenance) for data compatibility limits and the [development guide](development.en.md#maintenance) for validation details.
+Updater compatibility checks cover defined historical samples, not every old configuration, account database or instance. GUI packages use signed update manifests, while the application files themselves are not Authenticode-signed or notarized. Hosted-runner startup checks and package targets do not certify the planned minimum OS versions. Physical Windows Minecraft game-launch validation is not available in the current evidence. See the API reference for manifest details and the development guide for release requirements.
 
 <a id="accounts"></a>
 

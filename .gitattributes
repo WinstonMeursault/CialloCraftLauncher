@@ -1,0 +1,2 @@
+# Preserve the upstream license bytes verified by license-sources/manifest.json.
+scripts/license-sources/files/** -text

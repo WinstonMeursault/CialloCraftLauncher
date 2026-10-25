@@ -1,0 +1,120 @@
+name: GUI Prototype
+
+on:
+  push:
+    branches: ['codex/gui-*']
+  pull_request:
+    paths: ['apps/ccl-gui/**', 'crates/ccl-gui/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/gui.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: Windows x64, os: windows-2025, target: x86_64-pc-windows-msvc }
+          - { label: macOS arm64, os: macos-15, target: aarch64-apple-darwin }
+          - { label: Linux x86_64, os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install frontend package manager
+        run: npm install --global pnpm@11.25.0
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: rustfmt, clippy
+      - name: Install Tauri CLI
+        run: npm install --global @tauri-apps/cli@2.12.4
+      - name: Install Linux WebView development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb libfuse2t64
+      - name: Install frontend dependencies
+        working-directory: apps/ccl-gui
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        working-directory: apps/ccl-gui
+        run: |
+          pnpm test
+          pnpm build
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Test adapter without desktop runtime
+        run: cargo test -p ccl-gui --locked
+      - name: Generate bundled GUI notices
+        run: |
+          cargo fetch --locked --target ${{ matrix.target }}
+          python3 scripts/gui-notices.py --target ${{ matrix.target }}
+      - name: Lint desktop
+        run: cargo clippy -p ccl-gui --features desktop --all-targets --locked -- -D warnings
+      - name: Build desktop GUI bundles
+        working-directory: crates/ccl-gui
+        env:
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_CHANNEL: dev
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: tauri build --features desktop
+      - name: Verify rendered GUI readiness on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 python3 scripts/gui-smoke.py --executable target/release/ccl-gui --output target/gui-smoke.json
+      - name: Verify rendered GUI readiness on Windows
+        if: runner.os == 'Windows'
+        run: python3 scripts/gui-smoke.py --executable target/release/ccl-gui.exe --output target/gui-smoke.json
+      - name: Verify rendered GUI readiness on macOS
+        if: runner.os == 'macOS'
+        run: python3 scripts/gui-smoke.py --executable target/release/bundle/macos/CialloCraftLauncher.app/Contents/MacOS/ccl-gui --output target/gui-smoke.json
+      - name: Normalize acceptance packages
+        run: python3 scripts/package-gui-release.py --target ${{ matrix.target }} --bundle-root target/release/bundle --dist target/gui-validation-packages
+      - name: Build isolated update acceptance driver
+        env:
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_CHANNEL: dev
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: cargo build -p ccl-gui --example gui-update-driver --features gui-validation --release --locked
+      - name: Prepare signed update scenarios
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          case "$RUNNER_OS" in
+            macOS) package="target/gui-validation-packages/ccl-gui-$target.app.tar.gz"; bundle="target/release/bundle/macos/CialloCraftLauncher.app" ;;
+            Windows) package="target/gui-validation-packages/ccl-gui-$target.exe"; bundle="$package" ;;
+            Linux) package="target/gui-validation-packages/ccl-gui-$target.AppImage"; bundle="$package" ;;
+          esac
+          python3 scripts/gui-update-acceptance.py prepare --root target/gui-update-acceptance --target "$target" --bundle "$bundle" --package "$package" --version 0.2.0 --commit "$GITHUB_SHA"
+      - name: Sign isolated acceptance manifests
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CCL_UPDATE_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.CCL_UPDATE_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          for manifest in target/gui-update-acceptance/*/gui-manifest-*.json; do
+            tauri signer sign --app-version 0.2.0 "$manifest" > /dev/null
+          done
+      - name: Verify full GUI update and recovery under Linux software rendering
+        if: github.event_name != 'pull_request' && runner.os == 'Linux'
+        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 APPIMAGE_EXTRACT_AND_RUN=1 python3 scripts/gui-update-acceptance.py run --root target/gui-update-acceptance --target ${{ matrix.target }} --driver target/release/examples/gui-update-driver --output target/gui-update-result.json
+      - name: Verify full GUI update and recovery on macOS
+        if: github.event_name != 'pull_request' && runner.os == 'macOS'
+        run: python3 scripts/gui-update-acceptance.py run --root target/gui-update-acceptance --target ${{ matrix.target }} --driver target/release/examples/gui-update-driver --output target/gui-update-result.json
+      - name: Verify full GUI update and recovery on Windows
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        run: python3 scripts/gui-update-acceptance.py run --root target/gui-update-acceptance --target ${{ matrix.target }} --driver target/release/examples/gui-update-driver.exe --output target/gui-update-result.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gui-packages-${{ matrix.target }}
+          path: |
+            target/release/bundle/**
+            target/gui-smoke.json
+            target/gui-update-result.json
+          if-no-files-found: error

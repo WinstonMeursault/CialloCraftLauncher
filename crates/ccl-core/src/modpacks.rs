@@ -123,6 +123,29 @@ impl ModpackService {
         options: &ImportOptions,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ModpackError> {
+        self.import_inner(id, archive, options, context, false)
+            .await
+    }
+
+    /// Import a pack into a new managed instance, rejecting existing IDs under the instance lock.
+    pub async fn import_new(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptions,
+        context: Option<TaskContext>,
+    ) -> Result<InstanceMetadata, ModpackError> {
+        self.import_inner(id, archive, options, context, true).await
+    }
+
+    async fn import_inner(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptions,
+        context: Option<TaskContext>,
+        create_only: bool,
+    ) -> Result<InstanceMetadata, ModpackError> {
         check(&context)?;
         let pack = modpack_format::read_pack(archive)?;
         for value in pack.manifest.dependencies.values() {
@@ -170,7 +193,7 @@ impl ModpackService {
         ))?);
         let config = self.config.clone();
         self.instances
-            .transact_pack(id, &fingerprint, |stage, current| async move {
+            .transact_pack(id, &fingerprint, create_only, |stage, current| async move {
                 check(&context)?;
                 if let Some(current) = &current {
                     let old = read_receipt(&current.game_directory)?;

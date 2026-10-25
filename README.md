@@ -4,41 +4,43 @@ A libre, open-source Minecraft: Java Edition launcher written in Rust for Window
 
 ## Project status
 
-CCL currently provides a command-line interface and a reusable core independent of the interface. A GUI is planned for later. Version 0.1.0 is the first stable CLI release. Developer releases remain prereleases.
+CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. Version v0.2.0 is the stable desktop release, including the GUI, CLI, shared core and signed-manifest update protocol. Developer releases remain prereleases.
 
 | Area | Available functionality |
 | --- | --- |
 | Installation and launch | Vanilla versions, Java discovery/managed runtimes, verified downloads/cache reuse, process logs and explicit network offline mode |
 | Instances and loaders | Isolated instances; Fabric, Quilt, Legacy Fabric, Forge, NeoForge and OptiFine; revision rollback, rename/copy/delete/history and cleanup |
 | Packs and content | Modrinth packs, supported CurseForge/MultiMC/Prism imports, online search/dependencies/updates/conflict analysis, local content and userdata backups |
-| Maintenance | Stable/dev update channels, transactional executable replacement/recovery/rollback, local diagnostics and continuous regression workflows |
+| Maintenance | Signed stable/dev updates for CLI and GUI, transactional install/recovery/rollback, local diagnostics and regression workflows |
 
-Support follows the tested samples and boundaries in the guides, rather than every Minecraft version, loader combination or operating-system release. Builds and automated tests cover these targets:
+Support follows the samples and boundaries in the guides, rather than every Minecraft version, loader combination or operating-system release. The configured CI and release targets are:
 
 | Platform | Archive target | Validation boundary |
 | --- | --- | --- |
-| Windows x64 | `x86_64-pc-windows-msvc` | Windows runner builds/tests, credential-vault and update-process tests; no physical Windows game-launch acceptance |
-| macOS Apple silicon | `aarch64-apple-darwin` | Automated checks and physical installation/game-launch/update samples |
-| Linux x64 | `x86_64-unknown-linux-gnu` | Automated checks and physical samples; headless validation used a virtual display/software rendering for selected games |
+| Windows x64 | `x86_64-pc-windows-msvc` | Workflow target: Windows 2025; no physical Windows game-launch acceptance |
+| macOS Apple silicon | `aarch64-apple-darwin` | Workflow target: macOS 15; historical samples do not establish the minimum OS |
+| Linux x64 | `x86_64-unknown-linux-gnu` | Workflow target: Ubuntu 24.04; historical samples do not establish compatibility with every Linux distribution |
+
+Desktop release workflows are configured for Windows x64 per-user NSIS EXE, macOS arm64 DMG, and Linux x64 AppImage and DEB packages. The separate GUI validation workflow exercises update and manual rollback, bad-package automatic rollback, and interrupted-replacement recovery; release workflows check rendered startup readiness. GUI self-update accepts the Windows installer, macOS `.app.tar.gz`, and Linux AppImage. DEB installations update through the package manager. CI smoke launches on hosted runners do not establish behavior on the oldest planned OS versions or physical game-launch acceptance.
 
 Microsoft device login, refresh, OS credential storage and browser authorization are implemented. Online account integration remains experimental; the owner has deferred full entitled-account acceptance for this release. Offline identities remain supported. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
 
 ## Install and get started
 
-1. Open [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases), choose a release and download the archive matching the target above, with its `.sha256` file. Developer tags start with `dev-`; stable tags use `v<VERSION>`. GitHub's automatic source archives are not executable packages.
-2. Follow the checksum and platform setup instructions in the [user guide](docs/user-guide.en.md#installation), extract the entire archive and run the binary from its extracted directory, or add that directory to `PATH`.
-3. Run `ccl --help` and `ccl doctor` (`./ccl` on Unix or `.\ccl.exe` in PowerShell before adding it to `PATH`), then follow the guide for configuration, account setup and installation.
+1. Open [GitHub Releases](https://github.com/WinstonMeursault/CialloCraftLauncher/releases), choose a release and download the CLI ZIP or GUI installer for your target. CLI ZIPs include `.sha256` files; developer tags start with `dev-`, and stable tags use `v<VERSION>`. GitHub's automatic source archives are not executable packages.
+2. Follow the platform installation instructions in the [user guide](docs/user-guide.en.md#installation). Install GUI packages in a writable user location if you want in-app updates. Use the system package manager to update a DEB installation.
+3. CLI and GUI updaters verify detached signatures for their release manifests and then verify the named package hash. The installer files themselves are not Authenticode-signed or notarized, so operating systems may show publisher warnings.
 
-Packages are unsigned and not notarized. HTTPS and checksums detect corruption but do not independently authenticate the publisher. Minimum OS versions and additional architectures have not been certified. Linux Microsoft-account/provider-key storage requires an available, unlocked Secret Service/D-Bus session; there is no plaintext credential fallback.
+CLI and GUI update manifests are signed with the shared Tauri updater key, binding product, version, channel, commit, target and package digest. Older CLI binaries need a manual bootstrap to the first release using signed manifests. GUI installer files remain OS-unsigned and macOS packages are not notarized; cryptographic update signatures are separate from OS publisher identity. Planned support floors are Windows 10 with WebView2, macOS 13, and Linux with glibc 2.39; they have not been physically verified. Linux Microsoft-account/provider-key storage requires an available, unlocked Secret Service/D-Bus session; there is no plaintext credential fallback.
 
-To build from this checkout:
+To build the CLI from this checkout:
 
 ```sh
 cargo build --release --locked -p ccl-cli
 cargo run --release --locked -p ccl-cli -- --help
 ```
 
-See the [development guide](docs/development.en.md#environment) for toolchain and native prerequisites. Builds do not bundle Minecraft, Java runtimes, mods or user credentials. Java can be downloaded later by the launcher when needed.
+For the desktop GUI, follow the [desktop build instructions](docs/development.en.md#gui-g3), including frontend and notice generation. See the [development guide](docs/development.en.md#environment) for toolchain and native prerequisites. Builds do not bundle Minecraft, Java runtimes, mods or user credentials. Java can be downloaded later by the launcher when needed.
 
 ## Documentation
 
@@ -53,7 +55,7 @@ Report reproducible problems through [GitHub Issues](https://github.com/WinstonM
 
 ## Acknowledgements
 
-We thank the developers and contributors of Hello Minecraft! Launcher (HMCL) for their work on open-source Minecraft launchers. CialloCraftLauncher is independently developed; a graphical interface is planned for the future and is not available yet.
+We thank the developers and contributors of Hello Minecraft! Launcher (HMCL) for their work on open-source Minecraft launchers. CialloCraftLauncher is independently developed; its GUI and CLI are separate applications that share the Rust core.
 
 ## License
 
