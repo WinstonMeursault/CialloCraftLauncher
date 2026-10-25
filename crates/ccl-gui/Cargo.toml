@@ -1,10 +1,10 @@
 [package]
 name = "ccl-gui"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Desktop adapter and G2 preview for CialloCraftLauncher"
+description = "Desktop adapter for CialloCraftLauncher"
 
 [features]
 default = []
@@ -18,6 +18,10 @@ serde_json.workspace = true
 tempfile = "3"
 tokio.workspace = true
 reqwest.workspace = true
+sha2.workspace = true
+semver = "1"
+flate2 = "1"
+tar = "0.4"
 tauri = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
