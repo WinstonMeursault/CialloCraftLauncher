@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { boundLogLines, boundLogText } from './types'
 import type {
   AccountListing, AccountStorage, Bootstrap, GameVersion, ImportPreview, ImportRequest, Language,
   LaunchRequest, LibraryEntry, LoaderVersion, Preferences, RunRecord, TaskSnapshot, Theme,
@@ -141,7 +142,7 @@ export default function App() {
   const applyTask = useCallback((incoming: TaskSnapshot, refreshTerminalHistory = true) => {
     const accepted = acceptTaskSnapshot(taskCursor.current, incoming)
     if (accepted === taskCursor.current) return
-    const bounded = accepted ? { ...accepted, logs: accepted.logs.slice(-100) } : null
+    const bounded = accepted ? { ...accepted, logs: boundLogLines(accepted.logs, 100, 256 * 1024) } : null
     taskCursor.current = bounded
     setTask(bounded)
     if (bounded?.kind === 'launch') setLaunchPending(false)
@@ -188,9 +189,29 @@ export default function App() {
     if (!desktop) { setLoading(false); return }
     let disposed = false
     let unlisten: (() => void) | undefined
+    let pendingSnapshot: TaskSnapshot | null = null
+    let publishTimer: ReturnType<typeof setTimeout> | undefined
+    const publish = (incoming: TaskSnapshot) => {
+      pendingSnapshot = incoming
+      if (document.hidden) return
+      if (isTerminal(incoming)) {
+        if (publishTimer) clearTimeout(publishTimer)
+        publishTimer = undefined
+        pendingSnapshot = null
+        applyTask(incoming)
+        return
+      }
+      if (publishTimer) return
+      publishTimer = setTimeout(() => {
+        publishTimer = undefined
+        const latest = pendingSnapshot
+        pendingSnapshot = null
+        if (!disposed && !document.hidden && latest) applyTask(latest)
+      }, 100)
+    }
     void (async () => {
       try {
-        const stopListening = await listen<TaskSnapshot>('gui-task', event => { if (!disposed) applyTask(event.payload) })
+        const stopListening = await listen<TaskSnapshot>('gui-task', event => { if (!disposed) publish(event.payload) })
         if (disposed) { stopListening(); return }
         unlisten = stopListening
         await loadBootstrap()
@@ -201,13 +222,18 @@ export default function App() {
         if (!document.hidden) {
           const snapshot = await invoke<TaskSnapshot | null>('task_snapshot')
           if (disposed) return
-          if (snapshot) applyTask(snapshot)
+          if (publishTimer) clearTimeout(publishTimer)
+          publishTimer = undefined
+          const latest = snapshot ?? pendingSnapshot
+          pendingSnapshot = null
+          if (latest) applyTask(latest)
           else { taskCursor.current = null; setTask(null) }
         }
       }).catch(captureError)
     }
     document.addEventListener('visibilitychange', onVisibility)
-    return () => { disposed = true; unlisten?.(); document.removeEventListener('visibilitychange', onVisibility) }
+    onVisibility()
+    return () => { disposed = true; if (publishTimer) clearTimeout(publishTimer); unlisten?.(); document.removeEventListener('visibilitychange', onVisibility) }
   }, [desktop, loadBootstrap, applyTask, captureError])
 
 
@@ -244,6 +270,14 @@ export default function App() {
     update(); media.addEventListener('change', update)
     return () => media.removeEventListener('change', update)
   }, [theme])
+
+  const guiReadySent = useRef(false)
+  const hasRenderedBootstrap = !!bootstrap
+  useEffect(() => {
+    if (!desktop || loading || !hasRenderedBootstrap || guiReadySent.current) return
+    const frame = requestAnimationFrame(() => { guiReadySent.current = true; void invoke('gui_ready').catch(captureError) })
+    return () => cancelAnimationFrame(frame)
+  }, [desktop, loading, hasRenderedBootstrap, captureError])
 
   const entries = (bootstrap?.entries ?? []).filter(entry => {
     const matchesFilter = filter === 'all' || (filter === 'managed' ? entry.kind === 'managed' : entry.kind === 'vanilla')
@@ -461,7 +495,7 @@ export default function App() {
     setLogLoading(true)
     try {
       const result = await invoke<{ text: string }>('read_run_log', { key, runId, lines })
-      if (sequence === logReadSequence.current) setRunLog(logTail(result.text, Math.max(1, Math.min(lines, 1000))))
+      if (sequence === logReadSequence.current) setRunLog(boundLogText(logTail(result.text, Math.max(1, Math.min(lines, 1000))), 1000))
     } catch (cause) {
       const payload = asRecord(cause)
       if (sequence === logReadSequence.current) {
@@ -682,7 +716,7 @@ function TasksPage({ t, task, history, selectedHistory, selectHistory, working, 
       {focus && <div className="task-progress"><div className="progress-label"><span>{t.progress}: {progress === null ? t.totalUnknown : `${Math.round(progress)}%`}</span><span>{focus.total === null ? t.totalUnknown : `${focus.completed.toLocaleString()} / ${focus.total.toLocaleString()}`}</span></div>{progress !== null && <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }}/></div>}{focus.error && <p className="task-error">{focus.error_code ? `${focus.error_code}: ` : ''}{focus.error}</p>}{focus.pid !== null && <p className="task-meta">{t.pid}: {focus.pid}</p>}{focus.authorization && <div className="authorization-inline"><strong>{t.userCode}: {focus.authorization.user_code}</strong><button className="button secondary" onClick={() => { void navigator.clipboard.writeText(focus.authorization?.user_code ?? '').catch(() => window.alert(t.userCode + ': ' + (focus.authorization?.user_code ?? ''))) }}>{t.userCode} ⧉</button><span>{t.verification}: {focus.authorization.verification_uri} · {focus.authorization.expires_in}s</span><button className="button secondary" onClick={() => openVerification(focus.id)} disabled={working || focus.kind !== 'login' || focus.state !== 'running'}>{t.openVerification}</button></div>}</div>}
       {prepared && <section className="prepared-plan"><strong>{t.dryRun}</strong><pre>{JSON.stringify(redactSensitive(prepared), null, 2)}</pre></section>}
       {focus && focus.result !== null && !prepared && <details className="task-result"><summary>{t.result}</summary><pre>{JSON.stringify(redactSensitive(focus.result), null, 2)}</pre></details>}
-      {focus && <div className="log-wrap"><div className="log-heading"><strong>{t.logHeading}</strong><span>{logs.length} / 100</span></div><pre className="log-view">{logs.length ? logs.join('\n') : t.noLogs}</pre></div>}
+      {focus && <div className="log-wrap"><div className="log-heading"><strong>{t.logHeading}</strong><span>{logs.length} / 100</span></div><pre className="log-view" tabIndex={0} aria-label={t.logHeading}>{logs.length ? logs.join('\n') : t.noLogs}</pre></div>}
     </section>
     <section className="history-panel"><div className="panel-heading"><h2>{t.taskHistory}</h2><span>{history.length} / 8</span></div>{history.length === 0 ? <p className="muted-copy">{t.noHistory}</p> : <div className="history-list">{history.map(item => <button key={item.id} className={`history-row${selectedHistoryId(item, selectedHistory) ? ' selected' : ''}`} onClick={() => selectHistory(item.id)}><span>#{item.id} · {item.kind}</span><span>{item.phase}</span><span className={`state-tag state-${item.state}`}>{t.state[item.state]}</span></button>)}</div>}</section>
   </>

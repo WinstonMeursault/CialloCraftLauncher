@@ -232,6 +232,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .state-succeeded { color: var(--good); }
 .state-failed { color: var(--danger); }
 .logs-panel { padding: 14px; }
+.gui-update-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
+.gui-update-panel > label { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.gui-update-panel select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
 .live-launch-panel { border-color: var(--accent); }
 .saved-logs-paused { opacity: .88; }
 .saved-logs-note { margin: 10px 0 0; color: var(--muted); font-size: 10px; }
