@@ -1,9 +1,12 @@
 name: Stable Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_stable:
+        description: Type PUBLISH to authorize publishing this already validated stable tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,7 +14,11 @@ permissions:
 jobs:
   validate-package:
     name: Validate and package (${{ matrix.label }})
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && inputs.publish_stable == 'PUBLISH'
     runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      gui_version: ${{ steps.identity.outputs.gui_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +41,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install frontend package manager
+        run: npm install --global pnpm@11.25.0
+      - name: Install Tauri CLI
+        run: npm install --global @tauri-apps/cli@2.12.4
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb libfuse2t64
+      - name: Install frontend dependencies
+        working-directory: apps/ccl-gui
+        run: pnpm install --frozen-lockfile
+      - name: Build GUI frontend
+        working-directory: apps/ccl-gui
+        run: pnpm build
       - name: Verify stable tag is on main and matches crate version
         shell: bash
         env:
@@ -44,6 +67,8 @@ jobs:
           version="${RELEASE_TAG#v}"
           python3 scripts/check-package-versions.py --expected "$version"
           test "$RELEASE_TAG" = "v$version"
+          gui_version="$(python3 -c 'import tomllib; print(tomllib.load(open("crates/ccl-gui/Cargo.toml", "rb"))["package"]["version"])')"
+          test "$gui_version" = "$version"
       - name: Validate source
         run: |
           cargo fmt --all -- --check
@@ -63,12 +88,36 @@ jobs:
         run: |
           echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          gui_version="$(python3 -c 'import tomllib; print(tomllib.load(open("crates/ccl-gui/Cargo.toml", "rb"))["package"]["version"])')"
+          echo "gui_version=$gui_version" >> "$GITHUB_OUTPUT"
       - name: Build release executable
         env:
           CCL_BUILD_CHANNEL: stable
           CCL_BUILD_COMMIT: ${{ github.sha }}
           CCL_BUILD_TARGET: ${{ matrix.target }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p ccl-cli
+      - name: Generate bundled GUI notices
+        run: |
+          cargo fetch --locked --target ${{ matrix.target }}
+          python3 scripts/gui-notices.py --target ${{ matrix.target }}
+      - name: Build GUI installers
+        working-directory: crates/ccl-gui
+        env:
+          CCL_BUILD_CHANNEL: stable
+          CCL_BUILD_COMMIT: ${{ github.sha }}
+          CCL_BUILD_TARGET: ${{ matrix.target }}
+        run: tauri build --features desktop --target ${{ matrix.target }}
+      - name: Verify rendered GUI readiness on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 python3 scripts/gui-smoke.py --executable target/${{ matrix.target }}/release/ccl-gui --output dist/gui-smoke-${{ matrix.target }}.json
+      - name: Verify rendered GUI readiness on Windows
+        if: runner.os == 'Windows'
+        run: python3 scripts/gui-smoke.py --executable target/${{ matrix.target }}/release/ccl-gui.exe --output dist/gui-smoke-${{ matrix.target }}.json
+      - name: Verify rendered GUI readiness on macOS
+        if: runner.os == 'macOS'
+        run: python3 scripts/gui-smoke.py --executable target/${{ matrix.target }}/release/bundle/macos/CialloCraftLauncher.app/Contents/MacOS/ccl-gui --output dist/gui-smoke-${{ matrix.target }}.json
+      - name: Normalize GUI release bundles
+        run: python3 scripts/package-gui-release.py --target ${{ matrix.target }} --bundle-root target/${{ matrix.target }}/release/bundle --dist dist
       - name: Assemble ZIP and checksum
         if: runner.os != 'Windows'
         env:
@@ -94,12 +143,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ccl-release-${{ matrix.target }}
-          path: dist/*.zip*
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish stable release
+    if: inputs.publish_stable == 'PUBLISH' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     needs: validate-package
     runs-on: ubuntu-24.04
     permissions:
@@ -114,31 +164,61 @@ jobs:
           pattern: ccl-release-*
           path: dist
           merge-multiple: true
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install Tauri CLI
+        run: npm install --global @tauri-apps/cli@2.12.4
       - name: Build per-platform updater manifests
         env:
           CCL_BUILD_CHANNEL: stable
           CCL_BUILD_BRANCH: main
           CCL_BUILD_COMMIT: ${{ github.sha }}
-          CCL_BUILD_VERSION: ${{ github.ref_name }}
+          CCL_BUILD_VERSION: ${{ needs.validate-package.outputs.version }}
           CCL_RELEASE_TAG: ${{ github.ref_name }}
+          GUI_BUILD_VERSION: ${{ needs.validate-package.outputs.gui_version }}
         run: |
-          python3 scripts/check-package-versions.py --expected "${CCL_BUILD_VERSION#v}"
-          CCL_BUILD_VERSION="${CCL_BUILD_VERSION#v}" python3 - <<'PY'
+          python3 scripts/check-package-versions.py --expected "$CCL_BUILD_VERSION"
+          python3 - <<'PY'
           import os, subprocess
           targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
           for target in targets:
               subprocess.run(["python3", "scripts/release-manifest.py", "--target", target,
                               "--archive", f"dist/ccl-{target}.zip"], check=True, env=os.environ)
+              gui_format = {"x86_64-pc-windows-msvc": "exe", "aarch64-apple-darwin": "app.tar.gz", "x86_64-unknown-linux-gnu": "AppImage"}[target]
+              gui_env = dict(os.environ, CCL_BUILD_VERSION=os.environ["GUI_BUILD_VERSION"])
+              subprocess.run(["python3", "scripts/gui-release-manifest.py", "--target", target,
+                              "--asset", f"dist/ccl-gui-{target}.{gui_format}"], check=True, env=gui_env)
           PY
+      - name: Sign CLI and GUI manifests with the Tauri updater key
+        env:
+          CCL_UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.CCL_UPDATE_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.CCL_UPDATE_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CLI_BUILD_VERSION: ${{ needs.validate-package.outputs.version }}
+          GUI_BUILD_VERSION: ${{ needs.validate-package.outputs.gui_version }}
+        run: |
+          test -n "$CCL_UPDATE_SIGNING_PRIVATE_KEY"
+          export TAURI_SIGNING_PRIVATE_KEY="$CCL_UPDATE_SIGNING_PRIVATE_KEY"
+          for manifest in dist/manifest-*.json; do
+            tauri signer sign --app-version "$CLI_BUILD_VERSION" "$manifest"
+          done
+          for manifest in dist/gui-manifest-*.json; do
+            tauri signer sign --app-version "$GUI_BUILD_VERSION" "$manifest"
+          done
       - name: Create draft, verify uploaded assets, and publish version release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
+          GUI_RELEASE_VERSION: ${{ needs.validate-package.outputs.gui_version }}
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "$(find dist -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
           test "$(find dist -maxdepth 1 -name 'manifest-*.json' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name 'manifest-*.json.sig' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name 'gui-manifest-*.json' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name 'gui-manifest-*.json.sig' | wc -l)" -eq 3
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Refusing to reuse existing release $RELEASE_TAG" >&2
             exit 1
@@ -146,12 +226,38 @@ jobs:
           cleanup_draft() { gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true; }
           trap cleanup_draft ERR
           python3 scripts/release-notes.py --version "${RELEASE_TAG#v}" --output release-notes.md
-          gh release create "$RELEASE_TAG" --draft dist/*.zip dist/*.sha256 dist/manifest-*.json \
+          printf '\n\nGUI packages are unsigned by an operating system publisher certificate. CLI and GUI updater manifests are signed with the release key.\n' >> release-notes.md
+          gh release create "$RELEASE_TAG" --draft dist/*.zip dist/*.sha256 dist/manifest-*.json dist/manifest-*.json.sig dist/ccl-gui-*.dmg dist/ccl-gui-*.exe dist/ccl-gui-*.AppImage dist/ccl-gui-*.deb dist/ccl-gui-*.app.tar.gz dist/gui-manifest-*.json dist/gui-manifest-*.json.sig \
             --verify-tag --title "CCL ${RELEASE_TAG}" \
             --notes-file release-notes.md
           mkdir -p verify
           gh release download "$RELEASE_TAG" --dir verify
           (cd verify && sha256sum -c *.sha256)
+          sudo apt-get update && sudo apt-get install -y minisign
+          base64 --decode crates/ccl-core/src/update-public-key.pub > verify/update-public-key.minisign
+          for manifest in verify/manifest-*.json verify/gui-manifest-*.json; do
+            signature="$manifest.sig"
+            decoded="${signature}.minisig"
+            base64 --decode "$signature" > "$decoded"
+            minisign -Vm "$manifest" -x "$decoded" -p verify/update-public-key.minisign
+            rm "$decoded"
+          done
+          python3 - <<'PY'
+          import base64, json, pathlib
+          root = pathlib.Path("verify")
+          for manifest_path in root.glob("manifest-*.json"):
+              manifest = json.loads(manifest_path.read_text())
+              encoded = (root / (manifest_path.name + ".sig")).read_text(encoding="ascii").strip()
+              signature = base64.b64decode(encoded, validate=True).decode("ascii")
+              comments = [line.removeprefix("trusted comment: ") for line in signature.splitlines()
+                          if line.startswith("trusted comment: ")]
+              versions = [field.removeprefix("version:") for comment in comments
+                          for field in comment.split("\t") if field.startswith("version:")]
+              if len(comments) != 1 or versions != [manifest["version"]]:
+                  raise SystemExit(f"CLI manifest signature version mismatch: {manifest_path.name}")
+          PY
+          python3 scripts/verify-gui-release.py --directory verify --channel stable \
+            --version "$GUI_RELEASE_VERSION" --commit "$GITHUB_SHA" --branch main --tag "$RELEASE_TAG"
           python3 - <<'PY'
           import hashlib, json, pathlib, zipfile
           root = pathlib.Path("verify")
@@ -169,6 +275,7 @@ jobs:
               executable = zipfile.ZipFile(archive).read(f"ccl-{target}/{binary}")
               assert len(executable) == manifest["executable_size"]
               assert hashlib.sha256(executable).hexdigest() == manifest["executable_sha256"]
+              assert manifest["product"] == "ccl-cli"
               assert manifest["commit"] == "${{ github.sha }}"
               assert manifest["channel"] == "stable" and manifest["branch"] == "main"
           PY
