@@ -21,7 +21,7 @@ CCL 提供 Rust 核心、命令行界面和 Tauri 桌面 GUI。G3 增加独立�
 | macOS Apple 芯片 | `aarch64-apple-darwin` | 工作流目标：macOS 15；历史样本不能证明最低系统版本 |
 | Linux x64 | `x86_64-unknown-linux-gnu` | 工作流目标：Ubuntu 24.04；历史样本不能证明兼容所有 Linux 发行版 |
 
-G3 发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。发行验收门覆盖更新并手动回退、坏程序包自动回退及替换中断后的恢复。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
+G3 发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。独立 GUI 验证工作流检查更新并手动回退、坏程序包自动回退及替换中断后的恢复；发行工作流检查渲染后的启动就绪状态。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
 
 Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实现。在线账户集成仍属实验性功能；所有者已暂缓本次发行的真实正版账户完整验收。继续支持离线身份。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
 

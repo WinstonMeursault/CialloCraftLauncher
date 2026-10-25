@@ -79,14 +79,21 @@ GUI 外观偏好（`theme`、`language` 和所选根目录）保存在独立的 
 ```sh
 cd apps/ccl-gui
 pnpm install --frozen-lockfile
+pnpm test
 pnpm build
-node --test tests/task-snapshot.test.ts
 cd ../..
+target="$(rustc -vV | sed -n 's/^host: //p')"
+cargo fetch --locked --target "$target"
+python3 scripts/gui-notices.py --target "$target"
 cargo test -p ccl-gui --locked
 cargo run -p ccl-gui --features desktop --release --locked
-cargo install tauri-cli --version 2.12.4 --locked
-cargo tauri build --config crates/ccl-gui/tauri.conf.json --features desktop
+# 打包前先退出开发窗口。
+cd crates/ccl-gui
+pnpm --package=@tauri-apps/cli@2.12.4 dlx tauri build --features desktop
 ```
+
+上述示例使用 Bash（macOS/Linux 或 Git Bash）。PowerShell 中可用 `$target = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')` 设置目标，再将 `$target` 传给相同的 fetch/通知生成命令。前端命令在 `apps/ccl-gui` 执行，原生 Cargo 命令从仓库根目录执行，`tauri build` 在 `crates/ccl-gui` 执行。桌面构建前需生成通知：Tauri 资源包含 `target/gui-notices`，涵盖 Rust、生产 JavaScript、项目许可证及双语公开文档。`pnpm` 仅用于构建打包，不是运行时依赖。
+
 
 Node 测试检查任务快照排序；`.github/workflows/gui.yml` 会在构建前端前运行该测试。工作流还运行格式检查、适配器测试、桌面版 Clippy、打包应用，并配置在 Windows x64、macOS arm64 和 Linux x86_64 上启动 UI 并确认前端就绪标记。发行工作流还会生成分发程序包和更新负载。独立发行验收门会检查成功更新后手动回退、坏程序包触发自动回退，以及替换中断后的恢复，并确认游戏数据标记文件仍完好。验收证据以对应精确提交的工作流结果为准。Linux 需要 WebKitGTK 4.1 开发库、Xvfb 和 FUSE，用于打包/启动检查。Tauri 使用系统 WebView：Windows 为 WebView2，macOS 为 WKWebView，Linux 为 WebKitGTK 4.1；参见 [Tauri v2 前置要求](https://v2.tauri.app/start/prerequisites/)。
 

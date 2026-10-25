@@ -462,6 +462,10 @@ GUI 维护面板有独立的“检查更新”“下载并安装”“回滚 GUI
 
 自更新只支持按用户安装的 Windows NSIS 应用、可写的 macOS `.app` 和可写的 Linux AppImage。Linux DEB 安装使用包管理器更新。助手会保留经过检查的旧应用副本，安装已验证程序包、启动新版，并等待最多 60 秒以取得启动健康确认。如果应用提前退出或未确认启动，助手会恢复并重新启动旧应用。更新成功后且备份仍可用时，可使用 GUI 回滚控制。若事务中断，可用恢复控制；条件允许时恢复到已知的旧应用。事务日志和更新数据保存在已安装应用之外。应用回滚不触及游戏文件、存档、账户和凭据。
 
+游戏目录、存档和配置应保存在应用程序包之外。所选数据/配置路径与应用重叠时，自更新会拒绝执行。手动回滚也会拒绝覆盖更新后改动的应用文件；请先保留这些改动。Windows 回滚除恢复应用文件外，还会恢复经过检查的当前用户卸载/产品注册表信息。
+
+若中断导致应用入口缺失，可直接运行保留的助手。默认目录为 macOS 的 `~/Library/Application Support/CialloCraftLauncher/gui/update`、Windows 的 `%APPDATA%\CialloCraftLauncher\gui\update`，或 Linux 的 `${XDG_CONFIG_HOME:-$HOME/.config}/ciallocraftlauncher/gui/update`；显式设置 `CCL_GUI_DATA_DIR` 时使用其 `update` 子目录。将 `GUI_UPDATE_DIR` 设为该目录后，macOS 执行 `"$GUI_UPDATE_DIR/helper" --ccl-gui-update-helper "$GUI_UPDATE_DIR" recover`；Linux 将程序名换为 `helper.AppImage`。PowerShell 执行 `& "$GUI_UPDATE_DIR\helper.exe" --ccl-gui-update-helper "$GUI_UPDATE_DIR" recover`。恢复完成前保留事务日志、更新负载和备份。这些命令恢复记录中的安装，不用于选择另一份应用。
+
 同一 GUI 安装一次只允许一个应用实例或更新助手操作。如果状态或更新操作提示安装正忙，请关闭其他实例或等待助手完成后再试。`--network-offline` 会阻止 CLI 和 GUI 更新检查与下载。通过包管理器或只读方式安装的程序应通过原安装方式更新。
 
 `doctor` 检查 Java 候选、启动器/游戏目录访问情况以及是否编译了系统凭据库适配器。它不会登录，也不验证凭据库是否解锁。添加 `--network-probe` 可访问 Mojang 版本元数据端点；添加 `--write-probe` 会在 CCL 数据目录创建并删除临时空文件。这两种探测都需显式启用。

@@ -79,16 +79,23 @@ From the repository root, with Node 24, pnpm 11.25.0, Rust, and the target's nat
 ```sh
 cd apps/ccl-gui
 pnpm install --frozen-lockfile
+pnpm test
 pnpm build
-node --test tests/task-snapshot.test.ts
 cd ../..
+target="$(rustc -vV | sed -n 's/^host: //p')"
+cargo fetch --locked --target "$target"
+python3 scripts/gui-notices.py --target "$target"
 cargo test -p ccl-gui --locked
 cargo run -p ccl-gui --features desktop --release --locked
-cargo install tauri-cli --version 2.12.4 --locked
-cargo tauri build --config crates/ccl-gui/tauri.conf.json --features desktop
+# Quit the development window before bundling.
+cd crates/ccl-gui
+pnpm --package=@tauri-apps/cli@2.12.4 dlx tauri build --features desktop
 ```
 
-The Node test covers task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs formatting, adapter tests, desktop Clippy, bundles the application, and is configured to launch the UI and confirm its frontend-ready marker on Windows x64, macOS arm64 and Linux x86_64. Release workflows additionally create the distribution packages and updater payloads. A separate acceptance gate exercises a successful update followed by manual rollback, automatic rollback after a bad package, and recovery after an interrupted replacement; it also checks that a game-data sentinel remains intact. G3 validation remains in progress; these gates are configured, but no claim is made here that they have passed. Linux needs WebKitGTK 4.1 development libraries, Xvfb and FUSE for packaging/smoke launch. Tauri uses WebView2 on Windows, WKWebView on macOS and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+The example uses Bash (macOS/Linux or Git Bash). In PowerShell, set `$target = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')`, then pass `$target` to the same fetch/notice commands. Run frontend commands in `apps/ccl-gui`, native Cargo commands from the repository root, and `tauri build` in `crates/ccl-gui`. Generate notices before a desktop build: the Tauri resources include `target/gui-notices`, covering Rust, production JavaScript, project licenses and both public document editions. `pnpm` is used only to build/package, and is not a runtime dependency.
+
+
+The Node test covers task snapshot ordering; `.github/workflows/gui.yml` runs it before building the frontend. The workflow also runs formatting, adapter tests, desktop Clippy, bundles the application, and is configured to launch the UI and confirm its frontend-ready marker on Windows x64, macOS arm64 and Linux x86_64. Release workflows additionally create the distribution packages and updater payloads. A separate acceptance gate exercises a successful update followed by manual rollback, automatic rollback after a bad package, and recovery after an interrupted replacement; it also checks that a game-data sentinel remains intact. Inspect the exact commit’s workflow results for acceptance evidence. Linux needs WebKitGTK 4.1 development libraries, Xvfb and FUSE for packaging/smoke launch. Tauri uses WebView2 on Windows, WKWebView on macOS and WebKitGTK 4.1 on Linux; see [Tauri's v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 Both updaters consume a detached signature asset named `<manifest>.sig`, produced by Tauri CLI 2.12.4. CLI manifests are `manifest-<target>.json` with `product: "ccl-cli"`; GUI manifests are `gui-manifest-<target>.json` with `product: "ccl-gui"`. Each signature covers the exact manifest bytes and carries Tauri's signed version trusted comment. The manifests bind repository, product, channel, version, branch, full commit, target, data-schema range and package SHA-256/size/URL. The verifier public key is embedded in `ccl-core`; the `.sig` is not a signature of the OS installer itself. GUI `os_signed: false` explicitly records the absence of OS publisher signing.
 
