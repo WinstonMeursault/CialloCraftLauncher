@@ -6,7 +6,7 @@ import type {
   AccountListing, Bootstrap, GameVersion, ImportPreview, ImportRequest, Language,
   LaunchRequest, LibraryEntry, LoaderVersion, Preferences, RunRecord, TaskSnapshot, Theme,
 } from './types'
-import { acceptTaskSnapshot, formatGuiError, retainBusyManagedEntries, taskIsActive } from './types'
+import { acceptTaskSnapshot, formatGuiError, retainBusyEntries, taskIsActive } from './types'
 import { getMessages } from './i18n'
 import { InstanceDetails, Discover, ResultView } from './Advanced'
 import { MaintenancePanel } from './Maintenance'
@@ -16,7 +16,6 @@ import { ProgressDialog } from './ProgressDialog'
 import { LauncherLogs } from './LauncherLogs'
 
 type Page = 'library' | 'discover' | 'accounts' | 'logs' | 'settings'
-type Filter = 'all' | 'managed' | 'vanilla'
 type Modal = 'create' | 'import' | null
 type IconName = 'library' | 'compass' | 'user' | 'logs' | 'settings' | 'folder' | 'search'
 type LaunchForm = { accountId: string; java: string; memory: string; autoInstallJava: boolean; dryRun: boolean }
@@ -74,7 +73,6 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [currentLaunchKey, setCurrentLaunchKey] = useState<string | null>(null)
@@ -83,7 +81,6 @@ export default function App() {
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [versionId, setVersionId] = useState('')
   const [instanceId, setInstanceId] = useState('')
-  const [shared, setShared] = useState(false)
   const [loader, setLoader] = useState('')
   const [loaderVersions, setLoaderVersions] = useState<LoaderVersion[]>([])
   const [loaderLoading, setLoaderLoading] = useState(false)
@@ -110,7 +107,7 @@ export default function App() {
   const runListSequence = useRef(0)
 
   const t = getMessages(language)
-  const hasUnsavedPreferences = !!savedPreferences && (theme !== savedPreferences.theme || language !== savedPreferences.language)
+  const hasUnsavedPreferences = !savedPreferences || theme !== savedPreferences.theme || language !== savedPreferences.language
   const activeTask = taskIsActive(task) ? task : null
   const liveLaunchActive = task?.kind === 'launch' && taskIsActive(task)
   const activeLaunch = liveLaunchActive ? task : null
@@ -125,7 +122,7 @@ export default function App() {
     try {
       const result = await invoke<Bootstrap>('bootstrap')
       if (!result.setup_required) {
-        const merged = bootstrapRef.current ? retainBusyManagedEntries(bootstrapRef.current, result) : result
+        const merged = bootstrapRef.current ? retainBusyEntries(bootstrapRef.current, result) : result
         setBootstrap(merged)
         setSelectedKey(current => merged.entries.some(entry => entry.key === current) ? current : merged.entries[0]?.key ?? null)
       }
@@ -305,9 +302,9 @@ export default function App() {
   }, [desktop, loading, hasRenderedBootstrap, captureError])
 
   const entries = (bootstrap?.entries ?? []).filter(entry => {
-    const matchesFilter = filter === 'all' || (filter === 'managed' ? entry.kind === 'managed' : entry.kind === 'vanilla')
-    const haystack = `${entry.id} ${entry.minecraft} ${entry.loader ?? ''} ${entry.game_directory}`.toLocaleLowerCase()
-    return matchesFilter && haystack.includes(query.toLocaleLowerCase().trim())
+    const displayName = entry.display_name
+    const haystack = `${displayName} ${entry.id} ${entry.minecraft} ${entry.loader ?? ''} ${entry.game_directory}`.toLocaleLowerCase()
+    return haystack.includes(query.toLocaleLowerCase().trim())
   })
   const selected = (bootstrap?.entries ?? []).find(entry => entry.key === selectedKey) ?? entries[0] ?? null
 
@@ -375,9 +372,9 @@ export default function App() {
 
   const installInstance = async (event: FormEvent) => {
     event.preventDefault()
-    const id = shared ? versionId : instanceId.trim()
-    if (!id || !versionId || working || activeTask || (!shared && loader && !loaderVersion)) return
-    const request = { id, minecraft: versionId, loader: shared ? null : loader || null, loader_version: shared ? null : loaderVersion || null, shared }
+    const id = instanceId.trim()
+    if (!id || !versionId || working || activeTask || (loader && !loaderVersion)) return
+    const request = { id, minecraft: versionId, loader: loader || null, loader_version: loaderVersion || null }
     const result = await startTask(() => invoke<TaskSnapshot>('install_instance', { request }))
     if (result) setModal(null)
   }
@@ -457,6 +454,17 @@ export default function App() {
     try {
       const result = await invoke<Preferences>('save_preferences', { preferences: { theme, language } })
       setTheme(result.theme); setLanguage(result.language); setSavedPreferences(result); setPageNotice(t.saved)
+    } catch (cause) { captureError(cause) }
+    finally { setWorking(false) }
+  }
+
+  const restoreHidden = async () => {
+    if (!bootstrap || bootstrap.setup_required || working || activeTask) return
+    setWorking(true); setError(null); setPageNotice(null)
+    try {
+      await invoke('library_update', { request: { operation: 'restore_all' } })
+      await refreshBootstrap()
+      setPageNotice(t.hiddenRestored)
     } catch (cause) { captureError(cause) }
     finally { setWorking(false) }
   }
@@ -564,24 +572,24 @@ export default function App() {
     </aside>
 
     <main className="main">
-      <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span><div className="top-actions"><span className="edition-badge">{t.edition}</span><button className="locale-switch" onClick={() => setLanguage(language === 'en' ? 'zh-CN' : 'en')}>{language === 'en' ? '简体中文' : 'English'}</button></div></header>
+      <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span></header>
       {error && <div className="alert" role="alert"><strong>{t.error}</strong><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError(null)}>×</button></div>}
       {pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label="Dismiss" onClick={() => setPageNotice(null)}>×</button></div>}
-      {page === 'logs' && (!bootstrap || bootstrap.setup_required) ? <LauncherLogs language={language}/> : loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
-        ? <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot} />
+      {page === 'logs' && (!bootstrap || bootstrap.setup_required) ? <LauncherLogs language={language}/> : loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && page === 'settings' && <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={false} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={false} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root="" chooseRoot={chooseRoot} setupOnly />}{!loading && page !== 'settings' && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
+        ? page === 'settings' ? <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={!!savedPreferences && !hasUnsavedPreferences} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={false} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root={bootstrap.root} chooseRoot={chooseRoot} setupOnly /> : <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot} />
         : <>
-          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} filter={filter} query={query} setFilter={setFilter} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false);setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} selectAccount={accountSelect} openAccounts={() => enterPage('accounts')} />}
+          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} query={query} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false);setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} selectAccount={accountSelect} openAccounts={() => enterPage('accounts')} />}
           {page === 'library' && <InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} onChanged={() => void refreshBootstrap()} />}
           {page === 'discover' && <Discover entries={bootstrap.entries} onSelectEntry={setSelectedKey} language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} onChanged={() => void refreshBootstrap()} />}
           {page === 'accounts' && <AccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout} />}
           {page === 'logs' && <><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? '启动器日志' : 'Launcher logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} /> : <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={setSelectedKey} runs={runs} selectedRunId={selectedRunId} selectRun={(runId) => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.id ?? null} />}</>}
-          {page === 'settings' && <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={!!savedPreferences && !hasUnsavedPreferences} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={bootstrap.launch_defaults.network_offline} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root={bootstrap.root} chooseRoot={chooseRoot} />}
+          {page === 'settings' && <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={!!savedPreferences && !hasUnsavedPreferences} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={bootstrap.launch_defaults.network_offline} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root={bootstrap.root} chooseRoot={chooseRoot} hiddenEntries={bootstrap.hidden_entries} restoreHidden={restoreHidden} />}
           {page === 'settings' && <MaintenancePanel language={language} busy={working || !!activeTask} entry={selected} onChanged={() => void loadBootstrap()} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} />}
         </>}
     </main>
 
     {task && !modal && !pendingCancel && <ProgressDialog task={task} language={language} visible={progressVisible} onVisibility={setProgressVisible} onCancel={() => setPendingCancel(task)} onLogs={() => { setPage('logs'); setLogSource('game'); setProgressVisible(false) }} />}
-    {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={chooseVersion} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} shared={shared} setShared={setShared} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
+    {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={chooseVersion} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
     {modal === 'import' && <ImportModal language={language} updateExisting={updateExisting} setUpdateExisting={setUpdateExisting} t={t} preview={importPreview} inspect={inspectImport} id={importId} setId={setImportId} includeOptional={includeOptional} setIncludeOptional={setIncludeOptional} replaceModified={replaceModified} setReplaceModified={setReplaceModified} allowedHosts={allowedHosts} setAllowedHosts={setAllowedHosts} manualHosts={manualHosts} setManualHosts={setManualHosts} working={working || !!activeTask} close={() => setModal(null)} submit={importInstance} />}
     {pendingCancel && <ConfirmDialog t={t} task={pendingCancel} working={working} cancel={() => setPendingCancel(null)} confirm={confirmCancel} />}
   </div>
@@ -601,8 +609,8 @@ function SetupPage({ t, bootstrap, working, chooseRoot, initializeRoot }: { t: R
   </section>
 }
 
-function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter, setQuery, setSelectedKey, openCreate, openImport, launchForm, setLaunchForm, launch, activeTask, working, accountListing, selectAccount, openAccounts }: {
-  t: ReturnType<typeof getMessages>; entries: LibraryEntry[]; selected: LibraryEntry | null; bootstrap: Bootstrap; filter: Filter; query: string; setFilter: (value: Filter) => void; setQuery: (value: string) => void; setSelectedKey: (value: string) => void;
+function LibraryPage({ t, entries, selected, bootstrap, query, setQuery, setSelectedKey, openCreate, openImport, launchForm, setLaunchForm, launch, activeTask, working, accountListing, selectAccount, openAccounts }: {
+  t: ReturnType<typeof getMessages>; entries: LibraryEntry[]; selected: LibraryEntry | null; bootstrap: Bootstrap; query: string; setQuery: (value: string) => void; setSelectedKey: (value: string) => void;
   openCreate: () => void; openImport: () => void; launchForm: LaunchForm; setLaunchForm: (form: LaunchForm) => void; launch: (event: FormEvent) => void; activeTask: boolean; working: boolean; accountListing: AccountListing; selectAccount: (id: string) => void; openAccounts: () => void
 }) {
   return <>
@@ -611,15 +619,14 @@ function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter
     <div className="library-layout">
       <section className="library-list" aria-label={t.instances}>
         <label className="search-field"><Icon name="search"/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={t.search}/></label>
-        <div className="filters" role="group" aria-label={t.instances}>{(['all', 'managed', 'vanilla'] as const).map(item => <button key={item} className={filter === item ? 'selected' : ''} aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === 'all' ? t.all : item === 'managed' ? t.managed : t.vanilla}</button>)}</div>
         <div className="entry-list">{entries.map((entry, index) => <EntryCard key={entry.key} entry={entry} selected={entry.key === selected?.key} index={index} t={t} onClick={() => setSelectedKey(entry.key)}/>)}{entries.length === 0 && <div className="empty-state"><div>⌕</div><strong>{t.empty}</strong><p>{t.emptyHint}</p></div>}</div>
         <div className="root-info"><span className="root-info-icon"><Icon name="folder"/></span><div><strong>{t.root}</strong><span title={bootstrap.root}>{bootstrap.root}</span></div></div>
       </section>
       <section className="detail-card" aria-label={t.selected}>
         {selected ? <>
-          <div className="detail-head"><span>{t.selected}</span><span className="badge">{selected.kind === 'managed' ? t.managed : t.vanilla}</span></div>
-          <h2>{selected.id}</h2><p className="detail-subtitle">Minecraft {selected.minecraft}</p>
-          <dl className="metadata"><Meta label={t.id} value={selected.id}/><Meta label={t.gameVersion} value={selected.minecraft}/><Meta label={t.loader} value={selected.loader ?? 'Vanilla'}/><Meta label={t.kind} value={selected.kind === 'managed' ? t.managed : t.vanilla}/></dl>
+          <div className="detail-head"><span>{t.selected}</span></div>
+          <h2>{selected.display_name}</h2><p className="detail-subtitle">Minecraft {selected.minecraft}</p>
+          <dl className="metadata"><Meta label={t.id} value={selected.id}/><Meta label={t.gameVersion} value={selected.minecraft}/><Meta label={t.softwareType} value={selected.loader ?? t.vanillaSoftware}/></dl>
           <div className="path-box"><span>{t.gameDirectory}</span><code title={selected.game_directory}>{selected.game_directory}</code></div>
           <form className="launch-form" onSubmit={launch}>
             <label className="field"><span>{t.account}</span><select value={launchForm.accountId} onChange={event => selectAccount(event.target.value)} disabled={working || activeTask}><option value="">{t.selectAccount}</option>{accountListing.accounts.map(account => <option key={account.id} value={account.id}>{account.username} · {account.account_type === 'offline' ? t.offlineIdentity : 'Microsoft'}</option>)}</select></label>
@@ -636,29 +643,28 @@ function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter
 }
 
 function EntryCard({ entry, selected, index, t, onClick }: { entry: LibraryEntry; selected: boolean; index: number; t: ReturnType<typeof getMessages>; onClick: () => void }) {
+  const displayName = entry.display_name
   return <button className={`entry-card${selected ? ' selected' : ''}`} onClick={onClick} aria-pressed={selected}>
-    <span className={`entry-tile tile-${index % 3}`} aria-hidden="true">{entry.kind === 'vanilla' ? '▧' : entry.loader ? '✧' : '◈'}</span>
-    <span className="entry-copy"><strong>{entry.id}</strong><span>{entry.kind === 'managed' ? t.managed : t.vanilla}</span><span className="tags"><i>{entry.minecraft}</i><i>{entry.loader ?? 'Vanilla'}</i></span></span>{selected && <span className="selected-check" aria-label="Selected">✓</span>}
+    <span className={`entry-tile tile-${index % 3}`} aria-hidden="true">{entry.loader ? '✧' : '▧'}</span>
+    <span className="entry-copy"><strong>{displayName}</strong><span className="tags"><i>{entry.minecraft}</i><i>{entry.loader ?? t.vanillaSoftware}</i></span></span>{selected && <span className="selected-check" aria-label="Selected">✓</span>}
   </button>
 }
 function Meta({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div> }
 
-function CreateModal({ t, versions, versionsLoading, versionId, setVersionId, versionKind, setVersionKind, instanceId, setInstanceId, shared, setShared, loader, changeLoader, loaderLoading, loaderVersions, loaderVersion, setLoaderVersion, working, close, submit }: {
-  t: ReturnType<typeof getMessages>; versions: GameVersion[]; versionsLoading: boolean; versionId: string; setVersionId: (value: string) => void; versionKind: string; setVersionKind: (value: string) => void; instanceId: string; setInstanceId: (value: string) => void; shared: boolean; setShared: (value: boolean) => void;
+function CreateModal({ t, versions, versionsLoading, versionId, setVersionId, versionKind, setVersionKind, instanceId, setInstanceId, loader, changeLoader, loaderLoading, loaderVersions, loaderVersion, setLoaderVersion, working, close, submit }: {
+  t: ReturnType<typeof getMessages>; versions: GameVersion[]; versionsLoading: boolean; versionId: string; setVersionId: (value: string) => void; versionKind: string; setVersionKind: (value: string) => void; instanceId: string; setInstanceId: (value: string) => void;
   loader: string; changeLoader: (value: string, minecraft?: string) => void; loaderLoading: boolean; loaderVersions: LoaderVersion[]; loaderVersion: string; setLoaderVersion: (value: string) => void; working: boolean; close: () => void; submit: (event: FormEvent) => void
 }) {
   const kinds = [...new Set(versions.map(version => version.kind))]
   const visibleVersions = versionKind === 'all' ? versions : versions.filter(version => version.kind === versionKind)
   return <ModalFrame closeLabel={t.close} title={t.newInstance} close={close}>
     <form className="modal-form" onSubmit={submit}>
-      <label className="field"><span>{t.name}</span><input required={!shared} disabled={shared} value={shared ? versionId : instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
+      <label className="field"><span>{t.name}</span><input required value={instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
       <label className="field"><span>{t.version}</span><select required value={versionId} disabled={versionsLoading || !versions.length} onChange={event => setVersionId(event.target.value)}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</select></label>
       <label className="field"><span>{t.versionKind}</span><select value={versionKind} onChange={event => { const kind = event.target.value; setVersionKind(kind); if (kind !== 'all' && !versions.some(item => item.id === versionId && item.kind === kind)) setVersionId(versions.find(item => item.kind === kind)?.id ?? '') }}><option value="all">{t.all}</option>{kinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}</select></label>
-      <label className="check-row"><input type="checkbox" checked={shared} onChange={event => setShared(event.target.checked)}/>{t.sharedVanilla}</label>
-      <label className="field"><span>{t.loader}</span><select value={loader} disabled={shared} onChange={event => changeLoader(event.target.value)}><option value="">Vanilla</option>{LOADERS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
-      {loader && !shared && <label className="field"><span>{t.loaderVersion}</span><select value={loaderVersion} disabled={loaderLoading || !loaderVersions.length} onChange={event => setLoaderVersion(event.target.value)}><option value="">{loaderLoading ? t.loadingVersions : t.noVersions}</option>{loaderVersions.map(item => <option key={item.version} value={item.version}>{item.version}{item.stable ? '' : ' · preview'}</option>)}</select></label>}
-      <p className="form-hint">{shared ? t.sharedVanilla : t.managedInstance}</p>
-      <div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t.keepRunning}</button><button className="button primary" disabled={working || versionsLoading || !versionId || (!!loader && !shared && (!loaderVersion || loaderLoading))}>{working ? t.starting : t.install}</button></div>
+      <label className="field"><span>{t.softwareType}</span><select value={loader} onChange={event => changeLoader(event.target.value)}><option value="">Vanilla</option>{LOADERS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      {loader && <label className="field"><span>{t.loaderVersion}</span><select value={loaderVersion} disabled={loaderLoading || !loaderVersions.length} onChange={event => setLoaderVersion(event.target.value)}><option value="">{loaderLoading ? t.loadingVersions : t.noVersions}</option>{loaderVersions.map(item => <option key={item.version} value={item.version}>{item.version}{item.stable ? '' : ' · preview'}</option>)}</select></label>}
+      <div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t.keepRunning}</button><button className="button primary" disabled={working || versionsLoading || !versionId || (!!loader && (!loaderVersion || loaderLoading))}>{working ? t.starting : t.install}</button></div>
     </form>
   </ModalFrame>
 }
@@ -710,8 +716,8 @@ function LogsPage({ t, entries, selectedKey, setSelectedKey, runs, selectedRunId
   </>
 }
 
-function SettingsPage({ t, theme, language, setTheme, setLanguage, savePreferences, working, hasUnsaved, saved, offlineDraft, setOfflineDraft, offlineSaved, saveNetworkOffline, busy, root, chooseRoot }: {
-  t: ReturnType<typeof getMessages>; theme: Theme; language: Language; setTheme: (theme: Theme) => void; setLanguage: (language: Language) => void; savePreferences: () => void; working: boolean; hasUnsaved: boolean; saved: boolean; offlineDraft: boolean; setOfflineDraft: (offline: boolean) => void; offlineSaved: boolean; saveNetworkOffline: () => void; busy: boolean; root: string; chooseRoot: () => void
+function SettingsPage({ t, theme, language, setTheme, setLanguage, savePreferences, working, hasUnsaved, saved, offlineDraft, setOfflineDraft, offlineSaved, saveNetworkOffline, busy, root, chooseRoot, setupOnly = false, hiddenEntries = 0, restoreHidden }: {
+  t: ReturnType<typeof getMessages>; theme: Theme; language: Language; setTheme: (theme: Theme) => void; setLanguage: (language: Language) => void; savePreferences: () => void; working: boolean; hasUnsaved: boolean; saved: boolean; offlineDraft: boolean; setOfflineDraft: (offline: boolean) => void; offlineSaved: boolean; saveNetworkOffline: () => void; busy: boolean; root: string; chooseRoot: () => void; setupOnly?: boolean; hiddenEntries?: number; restoreHidden?: () => void
 }) {
   return <>
     <PageHeading eyebrow={t.settings} title={t.appearance} description={t.appearanceCopy}/>
@@ -719,9 +725,10 @@ function SettingsPage({ t, theme, language, setTheme, setLanguage, savePreferenc
       <div className="setting-row"><div><h2>{t.theme}</h2><p>{t.appearanceCopy}</p></div><div className="segmented" role="group" aria-label={t.theme}>{(['system', 'light', 'dark'] as const).map(value => <button key={value} aria-pressed={theme === value} className={theme === value ? 'selected' : ''} onClick={() => setTheme(value)}>{value === 'system' ? t.system : value === 'light' ? t.light : t.dark}</button>)}</div></div>
       <div className="setting-row"><div><h2>{t.language}</h2><p>{t.language}</p></div><div className="segmented" role="group" aria-label={t.language}><button className={language === 'en' ? 'selected' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>{t.english}</button><button className={language === 'zh-CN' ? 'selected' : ''} aria-pressed={language === 'zh-CN'} onClick={() => setLanguage('zh-CN')}>{t.chinese}</button></div></div>
       <div className="settings-actions"><span role="status">{hasUnsaved ? t.unsaved : saved ? t.saved : ''}</span><button className="button primary" onClick={savePreferences} disabled={working || !hasUnsaved}>{working ? t.starting : t.save}</button></div>
-      <div className="setting-row"><div><h2>{t.root}</h2><p>{t.rootPath}</p><code className="settings-path">{root}</code></div><button className="button secondary" onClick={chooseRoot} disabled={working || busy}>{t.changeRoot}</button></div>
+      {!setupOnly && hiddenEntries > 0 && <div className="setting-row"><div><h2>{t.hiddenInstances}</h2><p>{hiddenEntries}</p></div><button className="button secondary" onClick={restoreHidden} disabled={working || busy}>{t.restoreHidden}</button></div>}
+      {!setupOnly && <><div className="setting-row"><div><h2>{t.root}</h2><p>{t.rootPath}</p><code className="settings-path">{root}</code></div><button className="button secondary" onClick={chooseRoot} disabled={working || busy}>{t.changeRoot}</button></div>
       <div className="setting-row"><div><h2>{t.offlineNetwork}</h2><p>{t.offlineNetworkCopy}</p></div><label className="check-row"><input type="checkbox" checked={offlineDraft} onChange={event => setOfflineDraft(event.target.checked)}/>{t.offlineNetwork}</label></div>
-      <div className="settings-actions"><span role="status">{offlineDraft === offlineSaved ? '' : t.unsaved}</span><button className="button primary" onClick={saveNetworkOffline} disabled={working || busy || offlineDraft === offlineSaved}>{working ? t.starting : t.saveOffline}</button></div>
+      <div className="settings-actions"><span role="status">{offlineDraft === offlineSaved ? '' : t.unsaved}</span><button className="button primary" onClick={saveNetworkOffline} disabled={working || busy || offlineDraft === offlineSaved}>{working ? t.starting : t.saveOffline}</button></div></>}
     </section>
   </>
 }
