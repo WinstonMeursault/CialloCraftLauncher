@@ -249,3 +249,5 @@ summary { cursor: pointer; }
   .home-account select, .home-page .home-launch { width: 100%; }
   .is-home .operation-chip { max-width: calc(100vw - 232px); }
 }
+.sidebar nav, .nav-item, .nav-label { min-width: 0; }
+.nav-item { overflow: hidden; }
