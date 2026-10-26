@@ -246,6 +246,7 @@ impl TaskRegistry {
             });
         }
         let id = initial.id;
+        crate::launcher_log::record("INFO", "task.started", Some(kind), Some(id));
         let sink = self.clone();
         let context = TaskContext::new(
             token.clone(),
@@ -382,6 +383,21 @@ impl TaskRegistry {
             guard.history.push_back(snapshot.clone());
             snapshot
         };
+        crate::launcher_log::record(
+            if snapshot.state == TaskState::Failed {
+                "ERROR"
+            } else {
+                "INFO"
+            },
+            match snapshot.state {
+                TaskState::Succeeded => "task.succeeded",
+                TaskState::Failed => "task.failed",
+                TaskState::Cancelled => "task.cancelled",
+                _ => "task.finished",
+            },
+            snapshot.error_code.as_deref(),
+            Some(id),
+        );
         self.publish_snapshot(snapshot);
     }
     #[cfg(test)]

@@ -3,6 +3,7 @@
 pub mod account_service;
 pub mod browser;
 pub mod instance_service;
+pub mod launcher_log;
 mod library;
 pub mod lifecycle;
 pub mod maintenance;
@@ -28,6 +29,7 @@ pub struct GuiError {
 }
 impl GuiError {
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        launcher_log::record("ERROR", "operation.failed", Some(code), None);
         Self {
             code,
             message: message.into(),
