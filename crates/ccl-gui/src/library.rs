@@ -1,8 +1,11 @@
 use crate::catalog::{CatalogRequest, LibraryCatalog};
 use crate::{GuiError, GuiResult, Preferences, PreferencesStore};
 use ccl_core::{
-    compatibility::inspect_compatibility, config::LauncherConfig, directory::DirectoryInputs,
-    instances::InstanceService, launch::list_installed_versions,
+    compatibility::inspect_compatibility,
+    config::LauncherConfig,
+    directory::DirectoryInputs,
+    instances::InstanceService,
+    launch::{list_installed_versions, load_installed_metadata},
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -149,13 +152,14 @@ fn discover_entries_state(
             .get(&key)
             .map(|record| record.display_name.clone())
             .unwrap_or_else(|| id.clone());
+        let (minecraft, loader) = root_profile_identity(&root, &id);
         entries.push(LibraryEntry {
             key,
             id: id.clone(),
             display_name,
             has_revision_storage: false,
-            minecraft: id,
-            loader: None,
+            minecraft,
+            loader,
             game_directory: directory,
             launch_version,
         });
@@ -200,6 +204,131 @@ fn discover_entries_state(
             .then_with(|| left.key.cmp(&right.key))
     });
     Ok((entries, busy))
+}
+
+/// Derive the descriptive identity from version metadata while leaving `id` as the launch target.
+/// A custom profile name is never treated as a Minecraft version unless it is a version-like ID.
+fn root_profile_identity(root: &Path, id: &str) -> (String, Option<ccl_core::loaders::LoaderKind>) {
+    let Ok(metadata) = load_installed_metadata(root, id) else {
+        return ("Unknown".into(), None);
+    };
+    let raw_path = root.join("versions").join(id).join(format!("{id}.json"));
+    let raw: serde_json::Value = std::fs::read(&raw_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+
+    let libraries = metadata
+        .libraries
+        .iter()
+        .map(|library| library.name.as_str())
+        .collect::<Vec<_>>();
+    let loader = if libraries.iter().any(|name| {
+        name.starts_with("net.minecraftforge:fmlloader:")
+            || name.starts_with("net.minecraftforge:forge:")
+    }) {
+        Some(ccl_core::loaders::LoaderKind::Forge)
+    } else if libraries
+        .iter()
+        .any(|name| name.starts_with("net.neoforged:neoforge:"))
+    {
+        Some(ccl_core::loaders::LoaderKind::NeoForge)
+    } else if libraries
+        .iter()
+        .any(|name| name.starts_with("net.fabricmc:fabric-loader:"))
+    {
+        Some(ccl_core::loaders::LoaderKind::Fabric)
+    } else if libraries
+        .iter()
+        .any(|name| name.starts_with("org.quiltmc:quilt-loader:"))
+    {
+        Some(ccl_core::loaders::LoaderKind::Quilt)
+    } else if libraries
+        .iter()
+        .any(|name| name.starts_with("net.legacyfabric:legacy-fabric-loader:"))
+    {
+        Some(ccl_core::loaders::LoaderKind::LegacyFabric)
+    } else if libraries
+        .iter()
+        .any(|name| name.starts_with("optifine:OptiFine:"))
+    {
+        Some(ccl_core::loaders::LoaderKind::OptiFine)
+    } else {
+        None
+    };
+
+    let inherited = raw
+        .get("inheritsFrom")
+        .and_then(serde_json::Value::as_str)
+        .or(metadata.inherits_from.as_deref());
+    let minecraft = inherited
+        .and_then(version_like)
+        .or_else(|| {
+            raw.get("minecraftVersion")
+                .or_else(|| raw.get("clientVersion"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(version_like)
+        })
+        .or_else(|| loader.and_then(|kind| loader_minecraft_version(kind, &libraries)))
+        .or_else(|| version_like(id))
+        .unwrap_or_else(|| "Unknown".into());
+    (minecraft, loader)
+}
+
+fn version_like(value: &str) -> Option<String> {
+    let candidate = value.strip_prefix("minecraft:").unwrap_or(value);
+    let bytes = candidate.as_bytes();
+    if bytes.len() == 6
+        && bytes[2] == b'w'
+        && bytes[5].is_ascii_lowercase()
+        && [0, 1, 3, 4].iter().all(|&i| bytes[i].is_ascii_digit())
+    {
+        return Some(candidate.to_owned());
+    }
+    let numeric = if let Some((base, suffix)) = candidate.split_once('-') {
+        let number = suffix
+            .strip_prefix("pre")
+            .or_else(|| suffix.strip_prefix("rc"))?;
+        if number.is_empty() || !number.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        base
+    } else {
+        candidate
+    };
+    let mut parts = numeric.split('.');
+    let first = parts.next()?;
+    if first.is_empty() || !first.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let rest = parts.collect::<Vec<_>>();
+    if rest.is_empty()
+        || rest
+            .iter()
+            .any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some(candidate.to_owned())
+}
+
+fn loader_minecraft_version(
+    kind: ccl_core::loaders::LoaderKind,
+    libraries: &[&str],
+) -> Option<String> {
+    let prefixes: &[&str] = match kind {
+        ccl_core::loaders::LoaderKind::Forge => {
+            &["net.minecraftforge:fmlloader:", "net.minecraftforge:forge:"]
+        }
+        ccl_core::loaders::LoaderKind::NeoForge => &["net.neoforged:neoforge:"],
+        _ => return None,
+    };
+    libraries.iter().find_map(|name| {
+        prefixes.iter().find_map(|prefix| {
+            name.strip_prefix(prefix)
+                .and_then(|version| version_like(version.split_once('-')?.0))
+        })
+    })
 }
 
 fn descriptor_key(directory: &Path, id: &str) -> String {
@@ -288,6 +417,70 @@ mod tests {
     use crate::PreferencesStore;
     use serde_json::json;
     use std::fs;
+
+    fn write_root_version(root: &Path, id: &str, metadata: serde_json::Value) {
+        let directory = root.join("versions").join(id);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("{id}.json")),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn root_profile_identity_uses_inheritance_and_loader_metadata() {
+        assert_eq!(version_like("24w14a").as_deref(), Some("24w14a"));
+        assert_eq!(version_like("1.21-pre1").as_deref(), Some("1.21-pre1"));
+        assert!(version_like("1.20.1-custom").is_none());
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_root_version(
+            root,
+            "1.20.1",
+            json!({"id":"1.20.1", "type":"release", "mainClass":"net.minecraft.client.main.Main", "libraries":[]}),
+        );
+        write_root_version(
+            root,
+            "BMC4 + Maid Integrations",
+            json!({
+                "id":"BMC4 + Maid Integrations", "mainClass":"cpw.mods.bootstraplauncher.BootstrapLauncher",
+                "libraries":[{"name":"net.minecraftforge:fmlloader:1.20.1-47.4.20"}]
+            }),
+        );
+        write_root_version(
+            root,
+            "Closing Song 1.6.6.1",
+            json!({
+                "id":"Closing Song 1.6.6.1", "inheritsFrom":"1.20.1",
+                "mainClass":"cpw.mods.bootstraplauncher.BootstrapLauncher", "libraries":[]
+            }),
+        );
+        write_root_version(
+            root,
+            "Plain Custom Profile",
+            json!({
+                "id":"Plain Custom Profile", "mainClass":"net.minecraft.client.main.Main", "libraries":[]
+            }),
+        );
+
+        assert_eq!(
+            root_profile_identity(root, "BMC4 + Maid Integrations"),
+            ("1.20.1".into(), Some(ccl_core::loaders::LoaderKind::Forge))
+        );
+        assert_eq!(
+            root_profile_identity(root, "Closing Song 1.6.6.1"),
+            ("1.20.1".into(), None)
+        );
+        assert_eq!(
+            root_profile_identity(root, "1.20.1"),
+            ("1.20.1".into(), None)
+        );
+        assert_eq!(
+            root_profile_identity(root, "Plain Custom Profile"),
+            ("Unknown".into(), None)
+        );
+    }
 
     #[test]
     fn rename_and_hide_are_catalog_only_for_an_existing_root_version() {

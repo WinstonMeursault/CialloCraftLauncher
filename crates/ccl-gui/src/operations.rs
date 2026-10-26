@@ -241,6 +241,7 @@ impl GuiOperations {
         };
         let launch_request = CoreLaunchRequest {
             game_directory: game_directory.clone(),
+            working_directory: None,
             version: version.clone(),
             username,
             java: request.java.or(self.config.launch.java.clone()),
@@ -544,7 +545,15 @@ fn launch_error(error: ccl_core::launch::LaunchError) -> GuiError {
         if cancelled {
             "cancelled"
         } else {
-            "launch_failed"
+            // Keep useful, non-sensitive failure categories in launcher.log.
+            match &error {
+                ccl_core::launch::LaunchError::Plan(
+                    ccl_core::launch_plan::PlanError::UnknownPlaceholder(_),
+                ) => "launch_unsupported_placeholder",
+                ccl_core::launch::LaunchError::Plan(_) => "launch_plan_failed",
+                ccl_core::launch::LaunchError::Java(_) => "launch_java_failed",
+                _ => "launch_failed",
+            }
         },
         error.to_string(),
     )
@@ -556,6 +565,19 @@ fn account_error(error: ccl_core::accounts::AccountError) -> GuiError {
 #[cfg(test)]
 mod launch_key_tests {
     use super::*;
+
+    #[test]
+    fn launch_errors_keep_safe_diagnostic_categories() {
+        use ccl_core::{launch::LaunchError, launch_plan::PlanError};
+        let error = launch_error(LaunchError::Plan(PlanError::UnknownPlaceholder(
+            "private-placeholder-value".into(),
+        )));
+        assert_eq!(error.code, "launch_unsupported_placeholder");
+        assert_eq!(
+            launch_error(LaunchError::Plan(PlanError::InvalidVersion)).code,
+            "launch_plan_failed"
+        );
+    }
 
     #[test]
     fn launch_keys_must_resolve_to_a_discovered_instance() {

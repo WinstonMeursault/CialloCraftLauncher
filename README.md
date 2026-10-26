@@ -4,7 +4,7 @@ A libre, open-source Minecraft: Java Edition launcher written in Rust for Window
 
 ## Project status
 
-CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. This documentation targets v0.2.2, including the CLI, core, desktop GUI and signed-manifest updater. The v0.2.2 release is not published yet; GitHub Releases is authoritative for package availability. The v0.2.1 macOS bundle correction and the original v0.2.0 asset limitation are documented in the user guide.
+CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. This documentation targets v0.2.3, including the CLI, core, desktop GUI and signed-manifest updater. GitHub Releases is authoritative for package availability. The v0.2.1 macOS bundle correction and the original v0.2.0 asset limitation are documented in the user guide.
 
 | Area | Available functionality |
 | --- | --- |

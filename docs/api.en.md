@@ -78,7 +78,7 @@ The `launch` record includes `run_id`, `version`, `pid`, `exit_code`, `cancelled
 
 ## Desktop application
 
-The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. This API reference targets v0.2.2; GitHub Releases is authoritative for package availability. The original v0.2.0 macOS signature limitation and the v0.2.1 bundle-signing fix remain documented in the user guide. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
+The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. This API reference targets v0.2.3; GitHub Releases is authoritative for package availability. The original v0.2.0 macOS signature limitation and the v0.2.1 bundle-signing fix remain documented in the user guide. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
 
 Common GUI error codes include `setup_required` (confirm a game root), `library_unavailable` (metadata cannot safely be read), `configuration_error`, `task_busy`, `task_not_found`, `task_not_cancellable`, `path_not_selected`, `cancelled`, and `update_error`. Commands may return additional operation-specific codes; consumers should branch on `code`, not localized message text.
 
@@ -162,6 +162,8 @@ cargo doc -p ccl-core --no-deps --open
 | `compatibility::inspect_compatibility` | `inspect_compatibility(config_path, game_root)` | Read-only compatibility report for config, account metadata, instances and receipts; no credential access |
 | `update::UpdateService / update::Installation` | `check / stage; channel / set_channel / status / prepare_rollback / launch_helper / for_recovery` | Release checks and executable update transaction |
 | `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | Local health checks, bounded run classification and allowlisted exports |
+
+`LaunchRequest.game_directory` and `PlanOptions.game_directory` identify the resource root. Their optional `working_directory` selects the game runtime directory without relocating client JARs, libraries, assets, or launch logs. `LaunchService` resolves an omitted directory with `launch::installed_working_directory`; direct plan construction defaults to the resource root. The plan uses the resolved directory for both `${game_directory}` and process working directory. The service can select a verified hash-specific asset index in memory to avoid overwriting an index required by another profile; on-disk version metadata is unchanged.
 
 <a id="tasks"></a>
 

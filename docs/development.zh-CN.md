@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.2.2 发行说明](#release-notes)
+- [v0.2.3 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -323,7 +323,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-本文档对应 v0.2.2 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.2.3 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -347,12 +347,29 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.2.2 发行说明
+## v0.2.3 发行说明
 
-以下说明对应 v0.2.2，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.2.3，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.2
+# CialloCraftLauncher 0.2.3
+
+本次补丁修复已有 Forge 整合包的启动，并保留各配置的运行数据。
+
+- 支持 HMCL 的 `${primary_jar_name}` 占位符，按实际客户端 JAR 文件名展开，包括继承的 JAR 指定值、Unicode 名称和空格。
+- 分离共享资源查找目录和游戏运行目录。已有配置若包含独立模组、配置或存档，会在自己的目录运行；显式的独立 HMCL 目录设置优先。不会移动游戏数据。
+- 对同编号但内容不同的资源索引，单独下载并校验按哈希区分的副本。离线启动复用准确的已验证缓存，保留已有共享索引和版本元数据。
+- 从元数据识别外部配置的 Minecraft 版本及加载器，不再将自定义 Forge 配置全部显示为原版。
+- 启动器日志为不支持的占位符、其他启动计划错误和 Java 错误记录不同且不含敏感数据的类别。
+
+发布前验证：工作区测试 378 项通过、9 项忽略，桌面特性编译和将警告视为错误的 Clippy 检查通过。四个真实 macOS Forge 配置通过联网和离线启动准备（共八次成功）。这些检查未进入游戏世界，也不代表已确认每个配置成功进入 Minecraft 主菜单。稳定版工作流还会验证并打包 Windows x64、macOS arm64 和 Linux x64。
+
+CLI 和 GUI 更新清单具有发行密钥的独立签名。安装程序不具备操作系统发布者证书签名；macOS 应用包继续验证 ad-hoc 签名。Microsoft 登录可用状态和 CurseForge 自备密钥要求保持不变。
+<!-- release-notes:end -->
+
+### v0.2.2 历史发行说明
+
+#### CialloCraftLauncher 0.2.2
 
 本次补丁统一桌面游戏库，并将显示名称和隐藏状态保存在独立元数据中。
 
@@ -366,7 +383,7 @@ git push origin dev
 程序包目标为 Windows x86_64（CLI ZIP / GUI NSIS）、macOS arm64（CLI ZIP / GUI DMG 及更新归档）和 Linux x86_64（CLI ZIP / GUI AppImage 及 DEB）。CLI 和 GUI 更新清单分别使用独立签名认证各自负载；程序包没有操作系统发布者证书签名。Linux DEB 由包管理器更新。
 
 新 GUI 显示名称和隐藏状态由 sidecar 元数据保存，不迁移或改写现有游戏文件。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
-<!-- release-notes:end -->
+
 
 ### v0.2.1 历史发行说明
 
@@ -386,7 +403,7 @@ git push origin dev
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.2.2；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.2.3；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 
