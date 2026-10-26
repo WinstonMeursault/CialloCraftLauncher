@@ -110,6 +110,17 @@ jobs:
       - name: Verify full GUI update and recovery on Windows
         if: github.event_name != 'pull_request' && runner.os == 'Windows'
         run: python3 scripts/gui-update-acceptance.py run --root target/gui-update-acceptance --target ${{ matrix.target }} --driver target/release/examples/gui-update-driver.exe --output target/gui-update-result.json
+      - name: Preserve isolated update diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-diagnostics-${{ matrix.target }}
+          path: |
+            target/gui-smoke.json
+            target/gui-update-result.json
+            target/gui-update-acceptance/*/gui/update/journal.json
+            target/gui-update-acceptance/*/gui/logs/*.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v7
         with:
           name: gui-packages-${{ matrix.target }}
