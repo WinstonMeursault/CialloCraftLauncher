@@ -160,6 +160,52 @@ impl<S: SecretStore> AccountStore<S> {
         let refresh_lock = self.lock_refresh(&metadata.id, None)?;
         self.upsert_with_refresh_lock(metadata, secrets, &refresh_lock)
     }
+    /// Adds a local offline identity without touching the operating-system credential vault.
+    pub fn add_offline(&self, username: &str) -> Result<AccountMetadata, AccountError> {
+        let username = username.trim();
+        if username.is_empty()
+            || username.len() > 16
+            || !username
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(AccountError::Invalid);
+        }
+        use md5::{Digest, Md5};
+        let digest = Md5::digest(format!("OfflinePlayer:{username}"));
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest);
+        bytes[6] = (bytes[6] & 0x0f) | 0x30;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let uuid = format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        );
+        let metadata = AccountMetadata {
+            id: format!("offline-{hex}"),
+            username: username.to_owned(),
+            uuid,
+            xuid: None,
+            account_type: "offline".into(),
+            oauth_client_id: None,
+            last_used_unix: None,
+        };
+        validate(&metadata)?;
+        let _g = self.lock.lock().unwrap();
+        let _file_lock = self.file_lock()?;
+        let mut index = self.read()?;
+        if let Some(existing) = index.accounts.iter().find(|a| a.id == metadata.id) {
+            return Ok(existing.clone());
+        }
+        index.accounts.push(metadata.clone());
+        self.write(&index)?;
+        Ok(metadata)
+    }
     pub fn upsert_cancellable(
         &self,
         metadata: AccountMetadata,
@@ -286,11 +332,27 @@ impl<S: SecretStore> AccountStore<S> {
         id: &str,
         cancel: Option<&crate::task::CancellationToken>,
     ) -> Result<(), AccountError> {
-        let _refresh_lock = self.lock_refresh(id, cancel)?;
+        let is_offline = {
+            let _g = self.lock.lock().unwrap();
+            self.read()?
+                .accounts
+                .iter()
+                .any(|a| a.id == id && a.account_type == "offline")
+        };
+        let _refresh_lock = if !is_offline {
+            Some(self.lock_refresh(id, cancel)?)
+        } else {
+            None
+        };
         let _g = self.lock.lock().unwrap();
         let _file_lock = self.file_lock()?;
         let mut i = self.read()?;
-        self.secrets.remove(id)?;
+        if i.accounts
+            .iter()
+            .any(|a| a.id == id && a.account_type != "offline")
+        {
+            self.secrets.remove(id)?;
+        }
         i.accounts.retain(|a| a.id != id);
         if i.selected.as_deref() == Some(id) {
             i.selected = None;

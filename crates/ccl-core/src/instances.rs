@@ -620,23 +620,29 @@ impl InstanceLaunchGuard {
 }
 
 fn validate_id(id: &str) -> InstanceResult<()> {
-    let upper = id.to_ascii_uppercase();
+    if !is_valid_id(id) {
+        return Err(InstanceError::InvalidId(id.into()));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_valid_id(id: &str) -> bool {
+    let stem = id.split('.').next().unwrap_or(id).trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
     let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || (upper.len() == 4
             && (upper.starts_with("COM") || upper.starts_with("LPT"))
             && matches!(upper.as_bytes()[3], b'1'..=b'9'));
-    if reserved
-        || id.is_empty()
-        || id.len() > 64
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        || id == "."
-        || id == ".."
-    {
-        return Err(InstanceError::InvalidId(id.into()));
-    }
-    Ok(())
+    !reserved
+        && !id.is_empty()
+        && id.chars().count() <= 64
+        && id.len() <= 240
+        && !id.ends_with(['.', ' '])
+        && !id
+            .chars()
+            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+        && id != "."
+        && id != ".."
 }
 
 fn absolute_path(path: PathBuf) -> InstanceResult<PathBuf> {
@@ -2122,5 +2128,27 @@ mod tests {
             fs::canonicalize(active.join(".ccl/runtimes/jre/bin/current-java")).unwrap(),
             fs::canonicalize(active.join(".ccl/runtimes/jre/bin/java")).unwrap()
         );
+    }
+
+    #[test]
+    fn instance_ids_allow_unicode_spaces_and_safe_punctuation() {
+        for id in ["我的整合包", "日本語 pack", "Pack! (1.2)"] {
+            assert!(validate_id(id).is_ok(), "{id}");
+        }
+        for id in [
+            "../outside",
+            "a/b",
+            "a\\b",
+            "name:",
+            "trailing.",
+            "NUL",
+            "CON.txt",
+            "COM1.save",
+        ] {
+            assert!(validate_id(id).is_err(), "{id}");
+        }
+        assert!(validate_id(&"界".repeat(64)).is_ok());
+        assert!(validate_id(&"a".repeat(65)).is_err());
+        assert!(validate_id(&"😀".repeat(61)).is_err());
     }
 }

@@ -258,3 +258,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .setting-field label {flex:1;justify-content:space-between}
 .maintenance-panel code {display:block;overflow-wrap:anywhere;font-size:11px}
 .maintenance-panel pre {max-height:420px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+
+/* Operation progress stays available without a separate task page. */
+.operation-chip { position: fixed; right: 22px; bottom: 20px; z-index: 30; display: flex; align-items: center; gap: 16px; max-width: calc(100vw - 44px); padding: 12px 18px; background: var(--panel); color: var(--text); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 6px 24px #0002; cursor: pointer; }
+.log-source-switch { margin-bottom: 18px; width: fit-content; }
+.progress-track .indeterminate-progress { width: 30%; opacity: .7; animation: ccl-progress 1.6s ease-in-out infinite alternate; }
+@keyframes ccl-progress { from { transform: translateX(0); } to { transform: translateX(230%); } }
+@media (prefers-reduced-motion: reduce) { .progress-track .indeterminate-progress { animation: none; width: 100%; opacity: .35; } }

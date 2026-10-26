@@ -283,6 +283,57 @@ async fn account_select(
     .map_err(|_| GuiError::new("worker_error", "Account worker stopped"))?
 }
 #[tauri::command]
+async fn account_add_offline(
+    state: State<'_, DesktopState>,
+    username: String,
+) -> Result<AccountListing, GuiError> {
+    ensure_idle(&state)?;
+    let config = state.config_path();
+    let gate = state.operation_gate.clone();
+    let closing = state.closing.clone();
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_idle_gate(&gate, &closing, &tasks, || {
+            let service = account_service(&config)?;
+            service.add_offline(&username)?;
+            service.list()
+        })
+    }).await.map_err(|_| GuiError::new("worker_error", "Account worker stopped"))?
+}
+
+#[tauri::command]
+async fn launcher_logs(state: State<'_, DesktopState>, index: usize) -> Result<ccl_gui::launcher_log::LogSnapshot, GuiError> {
+    let log = state.launcher_log.clone().ok_or_else(|| GuiError::new("launcher_log", "Launcher log storage is unavailable"))?;
+    tauri::async_runtime::spawn_blocking(move || log.snapshot(index).map_err(|_| GuiError::new("launcher_log", "Cannot read launcher logs")))
+        .await.map_err(|_| GuiError::new("worker_error", "Log worker stopped"))?
+}
+#[tauri::command]
+async fn launcher_log_debug(state: State<'_, DesktopState>, enabled: bool) -> Result<(), GuiError> {
+    let log = state.launcher_log.clone().ok_or_else(|| GuiError::new("launcher_log", "Launcher log storage is unavailable"))?;
+    tauri::async_runtime::spawn_blocking(move || log.set_debug(enabled).map_err(|_| GuiError::new("launcher_log", "Cannot save log preferences")))
+        .await.map_err(|_| GuiError::new("worker_error", "Log worker stopped"))?
+}
+#[tauri::command]
+fn frontend_diagnostic(event: String) {
+    // Only fixed categories cross into persistent logs, never JS exceptions or input values.
+    if matches!(event.as_str(), "render_error" | "unhandled_rejection" | "operation_error" | "navigation") {
+        ccl_gui::launcher_log::record(if event == "navigation" { "DEBUG" } else { "ERROR" }, &format!("frontend.{event}"), None, None);
+    }
+}
+#[tauri::command]
+async fn launcher_log_export(app: tauri::AppHandle, state: State<'_, DesktopState>, index: usize) -> Result<bool, GuiError> {
+    let log = state.launcher_log.clone().ok_or_else(|| GuiError::new("launcher_log", "Launcher log storage is unavailable"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected) = app.dialog().file().add_filter("Launcher log", &["log"]).blocking_save_file() else { return Ok(false); };
+        let path = selected.into_path().map_err(|_| GuiError::new("invalid_path", "Choose a local output file"))?;
+        let snapshot = log.snapshot(index).map_err(|_| GuiError::new("launcher_log", "Cannot read launcher logs"))?;
+        if path == snapshot.path { return Err(GuiError::new("invalid_path", "Choose a separate export file")); }
+        // Copy the bounded, allowlisted text without embedding the user's local path.
+        std::fs::write(path, snapshot.text).map_err(|_| GuiError::new("launcher_log", "Cannot export launcher logs"))?;
+        Ok(true)
+    }).await.map_err(|_| GuiError::new("worker_error", "Log worker stopped"))?
+}
+#[tauri::command]
 async fn account_logout(
     state: State<'_, DesktopState>,
     id: String,

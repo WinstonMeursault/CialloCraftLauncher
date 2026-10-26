@@ -28,6 +28,7 @@ struct DesktopState {
     path_grants: Arc<Mutex<std::collections::BTreeMap<String, PathBuf>>>,
     update_in_progress: AtomicBool,
     _update_process_guard: Option<std::fs::File>,
+    launcher_log: Option<ccl_gui::launcher_log::LauncherLog>,
 }
 
 impl DesktopState {
@@ -178,6 +179,12 @@ fn main() {
                         .join("gui")
                 });
             let store = PreferencesStore::new(directory);
+            let launcher_log = ccl_gui::launcher_log::LauncherLog::new(store.directory().join("logs")).ok();
+            if let Some(log) = &launcher_log { ccl_gui::launcher_log::initialize(log.clone()); }
+            ccl_gui::launcher_log::record("INFO", "launcher.start", Some(env!("CARGO_PKG_VERSION")), None);
+            ccl_gui::launcher_log::record("INFO", "launcher.platform", Some(std::env::consts::OS), None);
+            let build = ccl_core::update::BuildIdentity::current();
+            ccl_gui::launcher_log::record("INFO", "launcher.build", Some(&build.commit), None);
             let update_process_guard = ccl_gui::self_update::Installation::current(&store.directory().join("update"))
                 .ok().map(|install| install.process_guard()).transpose()?;
             let handle = app.handle().clone();
@@ -197,6 +204,7 @@ fn main() {
                 path_grants: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
                 update_in_progress: AtomicBool::new(false),
                 _update_process_guard: update_process_guard,
+                launcher_log,
             });
             Ok(())
         })
@@ -216,6 +224,7 @@ fn main() {
             launch_game,
             task_history,
             account_list,
+            account_add_offline,
             account_select,
             account_logout,
             account_login,
@@ -224,6 +233,10 @@ fn main() {
             open_login_browser,
             log_runs,
             read_run_log,
+            launcher_logs,
+            launcher_log_debug,
+            launcher_log_export,
+            frontend_diagnostic,
             set_network_offline,
             choose_path, instance_query, instance_mutate, online_query, online_mutate, maintenance, inspect_dropped, update_installation, select_config,
             gui_self_update, gui_ready,

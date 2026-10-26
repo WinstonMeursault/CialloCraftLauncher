@@ -274,10 +274,8 @@ fn build_plan(
     if options.version.is_empty()
         || options.version == "."
         || options.version == ".."
-        || !options
-            .version
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        || options.version.contains(['/', '\\', ':'])
+        || options.version.chars().any(char::is_control)
     {
         return Err(PlanError::InvalidVersion);
     }

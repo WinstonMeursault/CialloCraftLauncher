@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包更新器的 Tauri 桌面 GUI。v0.2.0 为桌面稳定版，包含 GUI、CLI、共享核心和签名清单更新协议。开发版仍属于预发行。
+CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包更新器的 Tauri 桌面 GUI。本文档对应 v0.2.1，包含 CLI、核心、桌面 GUI 和签名清单更新器，以及下述 GUI 流程和 macOS 应用包修正；已发布程序包的可用状态请查看 GitHub Releases。
 
 | 方面 | 已提供的功能 |
 | --- | --- |
@@ -23,7 +23,7 @@ CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包�
 
 桌面发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。独立 GUI 验证工作流检查更新并手动回退、坏程序包自动回退及替换中断后的恢复；发行工作流检查渲染后的启动就绪状态。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
 
-Microsoft 设备码登录、刷新、系统凭据存储与浏览器授权已实现。在线账户集成仍属实验性功能；所有者已暂缓本次发行的真实正版账户完整验收。继续支持离线身份。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
+GUI 可添加、选择和移除已保存的离线账户，且不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用；实验性的 CLI 流程仍保留，正版账户完整验收仍已暂缓。GUI 中的 Microsoft 客户端 ID 仅在设置的高级部分配置。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
 
 ## 安装与开始使用
 

@@ -42,17 +42,17 @@ Java matching the version and host architecture is detected or installed automat
 
 ## Desktop app and self-update
 
-Stable v0.2.0 includes the desktop app, CLI and shared core. Download its desktop installer from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases/tag/v0.2.0). The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
+This guide targets v0.2.1, including the CLI, core, desktop app and signed-manifest updater. Check the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) for published packages. The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
 
-The desktop app asks you to confirm a game directory before it creates a missing one. It can install vanilla versions, create managed loader instances, import supported local archives, launch with an offline player name or saved Microsoft account, and inspect live or saved game logs. Microsoft sign-in remains experimental and requires the OS credential vault. Enter a public Microsoft application client ID in Accounts, or configure `auth.microsoft_client_id` in the shared core config. The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
+The desktop app asks you to confirm a game directory before it creates a missing one. It can install vanilla versions, create managed loader instances, import supported local archives, launch with a saved offline account, and inspect live or saved game logs. Multiple offline accounts can be added, selected and removed; they are local profile names and do not use the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI. The experimental CLI sign-in flow remains available. Configure the public Microsoft application client ID only in Settings → Advanced settings (`auth.microsoft_client_id`). The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
 
-One install, import, login, refresh, or launch task can run at a time. Work continues when you switch pages. Installation and import tasks can be cancelled; stopping a game asks for confirmation. The task view retains up to eight completed tasks and displays at most the latest 100 task log lines. Closing the app during active work asks whether to cancel the task or stop the game and exit. A second launch focuses the existing window.
+One install, import, or launch task can run at a time. Work continues when you switch pages. A collapsible progress dialog shows task progress and can be reopened from the bottom-right task entry; it collapses automatically after the game process starts. Installation and import tasks can be cancelled; stopping a game asks for confirmation. The task registry retains up to eight completed snapshots, and the dialog displays at most the latest 30 task log lines. Closing the app during active work asks whether to cancel the task or stop the game and exit. A second launch focuses the existing window.
 
 Drop one `.zip` or `.mrpack` onto the ready window to inspect it and open the import dialog. Choose or edit the instance name and import options, review the summary, then explicitly start the import. An existing instance ID is rejected; the app does not automatically replace it. You can also use the native archive picker. For content files, backup/export destinations, diagnostics, and a CLI installation, use the corresponding native picker so the app can grant access to that selected path.
 
 The Advanced page manages managed instances. Select an instance to install/update/remove its loader, inspect history and storage, preview or apply revision cleanup, restore or roll back a revision, manage content, create or restore a userdata backup, and inspect/export a Modrinth pack receipt. Shared vanilla entries are read-only on this page. In Discover, choose Modrinth or CurseForge, search, select a project and version, then inspect versions or resolve dependencies before installing. Mod installs target the selected managed instance; pack installs ask for confirmation because they can create or update the named instance. Optional pack files are excluded unless selected.
 
-Settings separates appearance and game-root choices from shared core settings. The Maintenance panel exposes ten core values: version-list source, file source, mirror root, proxy, parallel downloads, network-offline, Microsoft client ID, default Java path, default memory, and automatic Java installation. Save each field separately. If CLI or another process changes the config, reload before saving; stale edits are rejected. You can select a local JSON config unless `CCL_GUI_CONFIG_PATH` pins the config. CurseForge keys are entered in a password field and stored in the OS credential vault. `CCL_CURSEFORGE_API_KEY` overrides the saved value; status reveals only whether a saved key or override exists. Maintenance has separate controls for the installed GUI package and a standalone CLI installation.
+Settings separates appearance and game-root choices from shared core settings. The Maintenance panel exposes the core download and launch settings. The Microsoft client ID is available only under the Settings advanced disclosure; GUI sign-in is temporarily unavailable. Save each field separately. If CLI or another process changes the config, reload before saving; stale edits are rejected. You can select a local JSON config unless `CCL_GUI_CONFIG_PATH` pins the config. CurseForge keys are entered in a password field and stored in the OS credential vault. `CCL_CURSEFORGE_API_KEY` overrides the saved value; status reveals only whether a saved key or override exists. Maintenance has separate controls for the installed GUI package and a standalone CLI installation.
 
 Health checks make network or temporary-write probes only when their checkboxes are selected. Diagnostic export is local. Raw log preview is an explicit option and may contain private data despite best-effort redaction; review the file before sharing. The CLI updater operates on the standalone CLI in the folder you select. GUI update controls act only on the currently installed desktop package. Both support stable (`main`) and dev (`dev`) channels and persist the selected channel.
 
@@ -60,7 +60,7 @@ Health checks make network or temporary-write probes only when their checkboxes 
 
 ## Installation and prerequisites
 
-Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Stable GUI/CLI/core is currently v0.2.0; developer releases are published separately. CLI archives use these names:
+Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). Choose v0.2.1 for the behavior documented here; developer releases are published separately. CLI archives use these names:
 
 | System | Archive |
 | --- | --- |
@@ -68,7 +68,7 @@ Download the CLI archive for your system from the [GitHub Releases page](https:/
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
 
-Desktop packages use separate names and installers. Choose the stable v0.2.0 release for the desktop app:
+Desktop packages use separate names and installers. The v0.2.1 desktop app uses the following package formats:
 
 | System | Install package | In-app update package |
 | --- | --- | --- |
@@ -91,11 +91,23 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
 
-Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. Choose the stable v0.2.0 release for the desktop app. See [launcher updates](#maintenance) for update integrity limits.
+Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. The v0.2.1 release also ships a desktop app; dev prereleases may contain newer GUI changes. See [launcher updates](#maintenance) for update integrity limits.
 
 You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
 
 The targets above describe build and package coverage, not certification of each OS minimum. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
+
+
+### macOS signature checks and first launch
+
+The macOS build configuration uses an ad-hoc signature over the complete `.app`, including its Info.plist and resources. This is not a Developer ID signature or Apple notarization. After installing a trusted package, macOS may still require **System Settings → Privacy & Security → Open Anyway**; see [Apple's instructions](https://support.apple.com/en-us/102445). The updater manifest signature does not replace this OS check.
+
+The original v0.2.0 macOS DMG and updater archive have an incomplete linker-only signature and can display “app is damaged”. A matching download checksum does not repair that signature. The v0.2.1 build configuration corrects this and packaging verifies the full bundle, DMG and update archive; existing v0.2.0 assets are unchanged. Install v0.2.1 to obtain the corrected package. For an already downloaded copy whose checksum you have verified against that release, you can repair its bundle signature locally with the commands below, substituting the actual installed path. This creates a local ad-hoc signature; it does not establish Apple publisher trust. If verification fails, stop and replace the copy. Then use Apple's per-app approval if offered; do not disable Gatekeeper globally.
+
+```sh
+codesign --force --sign - "/Applications/CialloCraftLauncher.app"
+codesign --verify --deep --strict --verbose=2 "/Applications/CialloCraftLauncher.app"
+```
 
 ### First run
 
@@ -179,7 +191,7 @@ You can omit fields; omitted fields use these defaults. `--memory` overrides `la
 
 CurseForge API requests require a user-provided key authorized for the relevant API and file downloads. [CurseForge's API documentation](https://docs.curseforge.com/rest-api/) describes its key process; access depends on provider authorization. Run `ccl credentials curseforge set` to enter an issued key through a hidden terminal prompt. CCL saves it in the OS credential vault, scoped to the selected configuration path, never in `config.json`. `ccl credentials curseforge status` shows whether a key is saved and whether an environment override is active; `ccl credentials curseforge remove` deletes the saved key. `CCL_CURSEFORGE_API_KEY` remains a temporary environment override and takes precedence over the saved key. Avoid command arguments, shell history, logs, and repository files for secrets. The OS vault must be available (on Linux, this generally requires a running Secret Service session); CCL does not fall back to plaintext storage. CurseForge archive import requires a key only when selected remote files must be resolved; overrides-only archives without selected remote files need no key. The key is sent only to approved provider API/CDN requests. Fixture coverage of header scoping does not establish live provider authorization. See [imports](user-guide.en.md#imports) and [online content](user-guide.en.md#online).
 
-Launch settings are `launch.java` (optional executable or Java home), `launch.max_memory_mb` (default `2048`), and `launch.auto_install_java` (default `true`). The selected Java setting can be overridden with `--java`; `--no-java-download` skips managed Java installation for that run. Managed Java runtimes are installed under `<game-directory>/.ccl/runtimes` from official runtime manifests and verified artifacts. `auth.microsoft_client_id` is an optional public OAuth application ID, not a client secret. See [Microsoft account setup](user-guide.en.md#accounts).
+Launch settings are `launch.java` (optional executable or Java home), `launch.max_memory_mb` (default `2048`), and `launch.auto_install_java` (default `true`). The selected Java setting can be overridden with `--java`; `--no-java-download` skips managed Java installation for that run. Managed Java runtimes are installed under `<game-directory>/.ccl/runtimes` from official runtime manifests and verified artifacts. `auth.microsoft_client_id` is an optional public OAuth application ID, not a client secret. It is shown in the GUI only under Settings → Advanced settings; GUI sign-in is temporarily unavailable. The experimental CLI flow still uses it. See [account setup](user-guide.en.md#accounts).
 
 `settings get` and `settings show` redact proxy username/password. The config file stores the configured proxy URL for network use; keep that file private. On Unix, files written by the launcher use owner-only permissions. Configuration updates are validated and written atomically, with a lock to coordinate simultaneous CLI processes. `settings reset --all` also recovers a malformed configuration by replacing it with defaults.
 
@@ -233,6 +245,8 @@ ccl instance rollback my-world
 ccl instance uninstall-loader my-world
 ```
 
+Instance IDs accept UTF-8 names, including Chinese/Japanese text, spaces and safe punctuation. `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, and `|`, control characters, trailing dots/spaces, `.`/`..`, and Windows reserved device names are rejected. Validation changes only which IDs are accepted; it does not move existing game directories or add metadata fields.
+
 Each managed instance has its own game directory, version metadata, mods, configuration, and saves. It does not share the selected vanilla game directory with another instance. Installing or updating builds a staging revision and switches to it after a successful install. Updates retain the previous successful revision for `rollback`. Rollback switches to that revision. Loader removal returns the instance to vanilla while retaining user game data. These operations preserve mods, configuration, and saves across revisions.
 
 The `loader_version` field shown by `instance show` records the resolved installed profile ID, such as `fabric-loader-0.20.1-1.21.1`; it is not necessarily the exact release string supplied on the command line. Instance launch uses the selected installed profile and its separate game directory.
@@ -264,7 +278,7 @@ ccl instance clean renamed --keep 2 --apply
 ccl instance delete renamed --yes
 ```
 
-Copy preserves the active instance, previous revision and archived revisions. Mutable files, worlds and configuration are independent copies. Verified asset files may share hard links. Copy does not copy unfinished stages. Rename changes the instance ID and rebases metadata paths; the operation records recovery information before moving the directory. IDs are ASCII letters, digits, `_` or `-`, up to 64 characters; case-only renames and case-insensitive destination collisions are refused.
+Copy preserves the active instance, previous revision and archived revisions. Mutable files, worlds and configuration are independent copies. Verified asset files may share hard links. Copy does not copy unfinished stages. Rename changes the instance ID and rebases metadata paths; the operation records recovery information before moving the directory. IDs support UTF-8, spaces and safe punctuation, up to 64 characters and 240 UTF-8 bytes. Control characters, `<>:"/\|?*`, `.`/`..`, trailing dots/spaces and Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, including names with extensions) are rejected; case-only renames and case-insensitive destination collisions are refused.
 
 Commits retain the immediate previous revision for `rollback`; older previous revisions are archived under `history/`. `history` lists `current`, `previous` (when available), and archive IDs. `restore ID REVISION` creates a new active revision from a complete retained snapshot, including its worlds and configuration, and retains the former active revision for rollback. `restore` accepts `previous` or an archive ID from `history`. Back up recent worlds before restoring. Loader rollback stages current saves, settings and other user data into the prior generation before swapping it into place; interruption recovery preserves a consistent active and rollback generation. Rollback after a full content edit or pack update swaps the complete snapshots.
 
@@ -442,9 +456,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## Launcher updates and diagnostics
 
-Stable v0.2.0 includes the desktop app and signed-manifest updates for both GUI and CLI; select the stable channel for this release. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
+The v0.2.1 release includes the GUI workflow fixes, macOS bundle sealing and signed-manifest updater. CLI builds predating signed manifests still require a manual bootstrap. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
 
-CCL checks for its own updates only when you run an update command. The stable channel follows main and provides v0.2.0 GUI/CLI/core; the dev channel follows dev and carries developer prereleases. Stable releases use version tags such as v0.1.0. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
+CCL checks for its own updates only when you run an update command. The stable channel follows `main`; v0.2.1 is this guide’s target version. The dev channel follows `dev` and may include newer GUI changes not yet in stable. Stable releases use version tags such as `v0.2.1`. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
 
 ```sh
 ccl update check
@@ -486,15 +500,17 @@ Updater compatibility checks cover defined historical samples, not every old con
 
 <a id="accounts"></a>
 
-## Microsoft accounts
+## Accounts
 
-> **Experimental online integration:** Microsoft device login, Xbox Live/XSTS exchange, and Minecraft service integration are implemented. Full entitled-account acceptance is deferred for the first release; offline identity launch remains supported. Automated coverage and an OAuth device-flow check do not establish that every account can launch the game: service access, profile data, and Minecraft entitlement are evaluated separately. Check the reported authentication stage and machine error code if login or launch fails.
+The GUI Accounts page lets you add, select and remove multiple saved offline player names. Names are 1–16 ASCII letters, digits or underscores. These local profiles do not use the OS credential vault. The game library selects a saved account directly; it does not ask for a separate username. The CLI continues to support its default offline identity. `--account ACCOUNT-ID` takes the actual ID of a saved account (do not use `offline` as a placeholder ID); `--offline --username NAME` remains available for a one-off name.
+
+> **Experimental CLI online integration:** Microsoft device login, Xbox Live/XSTS exchange, and Minecraft service integration remain in the CLI. Microsoft sign-in is temporarily unavailable in the GUI. Full entitled-account acceptance is deferred; automated coverage and OAuth device-flow checks do not establish that every account can launch the game. Check the reported authentication stage and machine error code if CLI login or launch fails.
 
 Application owners: see [registration and acceptance](development.en.md#microsoft-application).
 
 ### Configure and sign in
 
-Save the client ID in the launcher's user configuration:
+For the experimental CLI flow, save the client ID in the launcher's user configuration. In the GUI, the public client ID belongs only in Settings → Advanced settings; GUI sign-in is currently unavailable:
 
 ```sh
 ccl settings set auth.microsoft_client_id YOUR-APPLICATION-CLIENT-ID
@@ -528,9 +544,15 @@ A recorded live retry completed Microsoft OAuth, Xbox Live and XSTS, then receiv
 
 Access and refresh tokens are stored only through the operating system credential store. Account names and IDs are kept separately in `accounts.json`; that metadata file contains no tokens. On macOS and Windows the operating system credential vault is used. On Linux, a Secret Service implementation reachable through the active D-Bus session must be installed and unlocked. A headless system without a persistent Secret Service cannot use Microsoft login. There is no plaintext credential fallback. A graphical desktop is not required if you provide and unlock a persistent Secret Service in your session.
 
-If secure storage is unavailable, login or refresh fails with an error. Start a desktop session with an unlocked keyring, or use offline launch until secure storage is available. Do not work around this by copying tokens into a file or shell command.
+If secure storage is unavailable, CLI login or refresh fails with an error. Start a desktop session with an unlocked keyring, or use a saved GUI offline profile until secure storage is available. Do not work around this by copying tokens into a file or shell command.
 
 <a id="troubleshooting"></a>
+
+## Launcher logs and diagnostics
+
+The GUI Logs page has separate views for game-run logs and CCL launcher logs. Launcher logs record startup build identity, task start/terminal outcomes, GUI error categories and optional navigation events. They do not contain arbitrary request data, account names, tokens, filesystem paths, JavaScript exception text or game output. Five files are retained at up to 5 MiB each; each view is limited to 1,000 lines and 256 KiB. Enable debug logging only when navigation events are useful. Export copies the displayed local log to a location you choose; CCL does not upload it.
+
+Diagnostic reports are a separate feature. Review any report before sharing, especially when the optional raw game-log preview is enabled.
 
 ## Troubleshooting
 
@@ -538,7 +560,7 @@ If secure storage is unavailable, login or refresh fails with an error. Start a 
 - **The game cannot find Java:** run `ccl doctor`, allow the managed runtime download, or pass a compatible Java executable/home with `--java PATH`. `--no-java-download` intentionally fails if no suitable runtime is installed.
 - **A launch exits immediately:** inspect `ccl logs --lines 200` or select a run with `ccl logs --run RUN-ID`; for a managed instance, add `--instance ID`. Run `ccl diagnose --run RUN-ID` to inspect the saved result and nearby crash report. The run record stores the game's actual exit code; the CLI returns `8` when the game exits unsuccessfully.
 - **Configuration is invalid:** check the JSON file and setting name. `ccl settings reset --all` replaces invalid configuration with defaults; use `--config PATH` when working with a non-default file.
-- **Microsoft login or launch fails:** inspect the service stage and allowlisted machine error code. Confirm the public client ID and credential vault, then distinguish Microsoft authorization, Xbox/XSTS access, Minecraft profile access, and entitlement errors. A generic HTTP 401/403 does not by itself prove that the account lacks ownership.
+- **CLI Microsoft login or launch fails:** inspect the service stage and allowlisted machine error code. Confirm the public client ID and credential vault, then distinguish Microsoft authorization, Xbox/XSTS access, Minecraft profile access, and entitlement errors. A generic HTTP 401/403 does not by itself prove that the account lacks ownership.
 - **CurseForge requests are denied:** confirm that the saved key or `CCL_CURSEFORGE_API_KEY` is active and authorized for the API and requested file. A key accepted for search may not authorize a restricted file download; follow the provider's authorization and distribution rules.
 - **A loader or pack install reports unsupported/conflicting content:** check the selected Minecraft/loader release, inspect pack metadata with `ccl pack inspect`, and review locally modified owned files before using `--replace-modified`.
 

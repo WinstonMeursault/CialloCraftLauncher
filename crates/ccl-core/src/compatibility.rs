@@ -600,18 +600,7 @@ fn inspect_generation(game: &Path, items: &mut Vec<CompatibilityItem>) {
 
 fn valid_instance_metadata(meta: &crate::instances::InstanceMetadata, path: &Path) -> bool {
     let expected_id = path.file_name().and_then(|name| name.to_str());
-    let upper = meta.id.to_ascii_uppercase();
-    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (upper.len() == 4
-            && (upper.starts_with("COM") || upper.starts_with("LPT"))
-            && matches!(upper.as_bytes()[3], b'1'..=b'9'));
-    let id_valid = !meta.id.is_empty()
-        && meta.id.len() <= 64
-        && !reserved
-        && meta
-            .id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    let id_valid = crate::instances::is_valid_id(&meta.id);
     let segment_valid = |value: &str| {
         !value.is_empty()
             && value != "."
