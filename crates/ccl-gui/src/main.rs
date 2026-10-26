@@ -216,6 +216,7 @@ fn main() {
             launch_game,
             task_history,
             account_list,
+            account_add_offline,
             account_select,
             account_logout,
             account_login,

@@ -79,6 +79,13 @@ impl<S: SecretStore> AccountService<S> {
         self.store.select(id).map_err(account_error)
     }
 
+    /// Persist a local offline identity. This path never reads or writes the credential vault.
+    pub fn add_offline(&self, username: &str) -> GuiResult<AccountMetadata> {
+        let account = self.store.add_offline(username).map_err(account_error)?;
+        self.store.select(&account.id).map_err(account_error)?;
+        Ok(account)
+    }
+
     pub fn logout(&self, id: &str) -> GuiResult<()> {
         self.store.remove(id).map_err(account_error)
     }

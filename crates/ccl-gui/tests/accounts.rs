@@ -192,6 +192,55 @@ async fn cancellation_and_configuration_errors_are_mapped_without_network_access
 }
 
 #[test]
+fn offline_accounts_persist_select_and_remove_without_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecretStore::default());
+    let service = AccountService::new(
+        dir.path().join("config.json"),
+        secrets.clone(),
+        config(true),
+    );
+    let first = service.add_offline("  Player_One  ").unwrap();
+    assert_eq!(first.account_type, "offline");
+    assert_eq!(first.username, "Player_One");
+    assert!(first.oauth_client_id.is_none());
+    assert_eq!(
+        service.list().unwrap().selected.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert!(secrets.get(&first.id).unwrap().is_none());
+
+    let duplicate = service.add_offline("Player_One").unwrap();
+    assert_eq!(duplicate, first);
+    let second = service.add_offline("PlayerTwo").unwrap();
+    assert_ne!(second.id, first.id);
+    assert_eq!(service.add_offline("Player_One").unwrap(), first);
+    assert_eq!(
+        service.list().unwrap().selected.as_deref(),
+        Some(first.id.as_str())
+    );
+    service.logout(&first.id).unwrap();
+    assert_eq!(service.list().unwrap().selected, None);
+    assert_eq!(service.list().unwrap().accounts, vec![second]);
+}
+
+#[test]
+fn offline_username_validation_matches_java_name_constraints() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = AccountService::new(
+        dir.path().join("config.json"),
+        Arc::new(MemorySecretStore::default()),
+        config(true),
+    );
+    for username in ["", "has space", "name-", "é", "abcdefghijklmnopq"] {
+        assert_eq!(
+            service.add_offline(username).unwrap_err().code,
+            "account_storage"
+        );
+    }
+}
+
+#[test]
 fn authorization_dto_contains_only_frontend_safe_fields() {
     let dto = DeviceAuthorization {
         user_code: "ABCD-EFGH".into(),

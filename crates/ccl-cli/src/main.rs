@@ -1221,38 +1221,43 @@ async fn run(cli: &Cli) -> Result<Value> {
             let service = LaunchService::new(config.downloads.clone());
             let token = signal_token();
             let store = account_store(&config_path)?;
-            if config.downloads.offline && account.is_some() {
-                return Err(Error::InvalidConfig("network offline mode cannot refresh a Microsoft account; launch with --offline identity, or disable --network-offline".into()));
-            }
-            let selected = if *offline || username.is_some() || config.downloads.offline {
+            let selected = if *offline || username.is_some() {
                 None
             } else {
                 account.clone().or(store.selected()?)
             };
-            let identity = if let Some(id) = selected {
+            let mut launch_username = username.clone().unwrap_or_else(|| "CCLPlayer".into());
+            let mut identity = None;
+            if let Some(id) = selected {
                 let metadata = store
                     .list()?
                     .into_iter()
                     .find(|a| a.id == id)
                     .ok_or(ccl_core::accounts::AccountError::Invalid)?;
-                Some(
-                    auth_service(
-                        metadata
-                            .oauth_client_id
-                            .as_deref()
-                            .ok_or(ccl_core::accounts::AccountError::Invalid)?,
-                        &config,
-                    )?
-                    .launch_identity(&store, &id, &token)
-                    .await?,
-                )
-            } else {
-                None
-            };
+                if metadata.account_type == "offline" {
+                    launch_username = metadata.username;
+                } else if config.downloads.offline {
+                    if account.is_some() {
+                        return Err(Error::InvalidConfig("network offline mode cannot refresh a Microsoft account; launch with --offline identity, or disable --network-offline".into()));
+                    }
+                } else {
+                    identity = Some(
+                        auth_service(
+                            metadata
+                                .oauth_client_id
+                                .as_deref()
+                                .ok_or(ccl_core::accounts::AccountError::Invalid)?,
+                            &config,
+                        )?
+                        .launch_identity(&store, &id, &token)
+                        .await?,
+                    );
+                }
+            }
             let request = LaunchRequest {
                 game_directory,
                 version,
-                username: username.clone().unwrap_or_else(|| "CCLPlayer".into()),
+                username: launch_username,
                 java: java.clone().or(config.launch.java.clone()),
                 max_memory_mb: memory.unwrap_or(config.launch.max_memory_mb),
                 identity,

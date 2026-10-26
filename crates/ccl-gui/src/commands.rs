@@ -283,6 +283,25 @@ async fn account_select(
     .map_err(|_| GuiError::new("worker_error", "Account worker stopped"))?
 }
 #[tauri::command]
+async fn account_add_offline(
+    state: State<'_, DesktopState>,
+    username: String,
+) -> Result<AccountListing, GuiError> {
+    ensure_idle(&state)?;
+    let config = state.config_path();
+    let gate = state.operation_gate.clone();
+    let closing = state.closing.clone();
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_idle_gate(&gate, &closing, &tasks, || {
+            let service = account_service(&config)?;
+            service.add_offline(&username)?;
+            service.list()
+        })
+    }).await.map_err(|_| GuiError::new("worker_error", "Account worker stopped"))?
+}
+
+#[tauri::command]
 async fn account_logout(
     state: State<'_, DesktopState>,
     id: String,

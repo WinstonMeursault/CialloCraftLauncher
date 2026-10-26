@@ -198,6 +198,52 @@ fn launch_requires_exactly_one_version_or_instance() {
 }
 
 #[test]
+fn launch_uses_saved_offline_account_by_default_and_with_network_offline() {
+    let root = sandbox();
+    let game = root.join("game");
+    fs::create_dir_all(&game).unwrap();
+    let config = root.join("config.json");
+    fs::write(&config, "{}").unwrap();
+    let id = "offline-playerfixture";
+    fs::write(
+        root.join("accounts.json"),
+        serde_json::json!({
+            "accounts": [{
+                "id": id,
+                "username": "PlayerFixture",
+                "uuid": "01234567-89ab-3cde-8fab-0123456789ab",
+                "xuid": null,
+                "account_type": "offline",
+                "oauth_client_id": null,
+                "last_used_unix": null
+            }],
+            "selected": id
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    for explicit in [false, true] {
+        let mut command = command(&root);
+        command
+            .args(["--json", "--network-offline", "--game-dir"])
+            .arg(&game)
+            .args(["--config"])
+            .arg(&config)
+            .args(["launch", "1.21.1", "--dry-run"]);
+        if explicit {
+            command.args(["--account", id]);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let result = json_output(&output);
+        assert_ne!(result["error"]["code"], "account_error", "{result}");
+        assert_ne!(result["error"]["code"], "configuration_error", "{result}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn instance_logs_select_the_isolated_game_directory() {
     let root = sandbox();
     let game = root.join("game");
