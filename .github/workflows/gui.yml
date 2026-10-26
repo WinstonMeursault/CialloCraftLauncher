@@ -2,7 +2,7 @@ name: GUI Prototype
 
 on:
   push:
-    branches: ['codex/gui-*']
+    branches: ['codex/gui-*', 'codex/ui-*']
   pull_request:
     paths: ['apps/ccl-gui/**', 'crates/ccl-gui/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/gui.yml']
   workflow_dispatch:
