@@ -163,6 +163,8 @@ cargo doc -p ccl-core --no-deps --open
 | `update::UpdateService / update::Installation` | `check / stage; channel / set_channel / status / prepare_rollback / launch_helper / for_recovery` | Release checks and executable update transaction |
 | `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | Local health checks, bounded run classification and allowlisted exports |
 
+`LaunchRequest.game_directory` and `PlanOptions.game_directory` identify the resource root. Their optional `working_directory` selects the game runtime directory without relocating client JARs, libraries, assets, or launch logs. `LaunchService` resolves an omitted directory with `launch::installed_working_directory`; direct plan construction defaults to the resource root. The plan uses the resolved directory for both `${game_directory}` and process working directory. The service can select a verified hash-specific asset index in memory to avoid overwriting an index required by another profile; on-disk version metadata is unchanged.
+
 <a id="tasks"></a>
 
 ## Events, cancellation and errors

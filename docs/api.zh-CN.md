@@ -163,6 +163,8 @@ cargo doc -p ccl-core --no-deps --open
 | `update::UpdateService / update::Installation` | `check / stage; channel / set_channel / status / prepare_rollback / launch_helper / for_recovery` | 发行检查和程序更新事务 |
 | `diagnostics::DiagnosticsService` | `doctor / diagnose_run / export` | 本地健康检查、有限日志分类和白名单导出 |
 
+`LaunchRequest.game_directory` 和 `PlanOptions.game_directory` 指定资源根目录。可选的 `working_directory` 选择游戏运行目录，不会迁移客户端 JAR、库、资源或启动日志。`LaunchService` 在未指定时通过 `launch::installed_working_directory` 选择目录；直接构建计划时默认使用资源根目录。计划将该目录同时用于 `${game_directory}` 和进程工作目录。服务可以在内存中选择按校验值区分的已验证资源索引，避免覆盖其他配置所需的索引；磁盘上的版本元数据保持不变。
+
 <a id="tasks"></a>
 
 ## 事件、取消与错误

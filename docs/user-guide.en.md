@@ -135,6 +135,10 @@ The default game directory is selected in this order:
 
 `doctor` checks configuration and directory state without creating or modifying the game directory. `init` selects and creates the game directory using this order.
 
+For existing profiles, resource files remain under the selected `.minecraft` root. If `versions/<profile>` contains `mods`, `config`, `saves`, or `options.txt`, CCL uses that profile directory for the game’s working directory and `--gameDir`; otherwise it uses the root. An explicit per-profile `hmclversion.cfg` directory choice (`usesGlobal: false`) takes precedence, including a custom directory. CCL does not move saves or settings. The game library reads loader and Minecraft version information from profile metadata rather than treating a custom profile name as a game version.
+
+Forge manifests normalized by HMCL can use `${primary_jar_name}`; CCL expands it to the actual client JAR filename. If two profiles require different asset indexes with the same ID, CCL downloads and verifies a separate `assets/indexes/ccl-<SHA1>.json` and selects it for that launch. The shared index is preserved. Offline launch requires the exact index to be cached.
+
 <a id="configuration"></a>
 
 ## Settings and configuration
@@ -550,7 +554,7 @@ If secure storage is unavailable, CLI login or refresh fails with an error. Star
 
 ## Launcher logs and diagnostics
 
-The GUI Logs page has separate views for game-run logs and CCL launcher logs. Launcher logs record startup build identity, task start/terminal outcomes, GUI error categories and optional navigation events. They do not contain arbitrary request data, account names, tokens, filesystem paths, JavaScript exception text or game output. Five files are retained at up to 5 MiB each; each view is limited to 1,000 lines and 256 KiB. Enable debug logging only when navigation events are useful. Export copies the displayed local log to a location you choose; CCL does not upload it.
+The GUI Logs page has separate views for game-run logs and CCL launcher logs. Launcher logs record startup build identity, task start/terminal outcomes, GUI error categories and optional navigation events. Launch failures distinguish unsupported placeholders (`launch_unsupported_placeholder`), other plan errors (`launch_plan_failed`), and Java errors (`launch_java_failed`). They do not contain arbitrary request data, account names, tokens, filesystem paths, JavaScript exception text or game output. Five files are retained at up to 5 MiB each; each view is limited to 1,000 lines and 256 KiB. Enable debug logging only when navigation events are useful. Export copies the displayed local log to a location you choose; CCL does not upload it.
 
 Diagnostic reports are a separate feature. Review any report before sharing, especially when the optional raw game-log preview is enabled.
 
