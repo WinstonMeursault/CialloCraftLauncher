@@ -42,17 +42,17 @@ ccl logs --lines 100
 
 ## 桌面应用与自更新
 
-当前正式稳定版 v0.1.0 包含 CLI 与核心；桌面应用及签名清单更新器目前通过 v0.2.0 dev 预发行版提供，尚无稳定版 v0.2.0 GUI。若要试用桌面应用，请在 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)选择最新 dev 预发行版（标签为 `dev-<commit>`）。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
+最新稳定版是 main 上的 v0.2.0，包含 CLI、核心、桌面应用和签名清单更新器。本指南所述 GUI 改动目前位于 dev，尚未包含在该稳定程序包中。若要试用这些改动，请按开发指南从当前 dev 源码构建；只有明确包含相应提交的 dev 预发行版才提供这些改动。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
 
-桌面程序会先让你确认游戏目录，再创建缺失的目录。它可以安装原版、创建托管加载器实例、导入受支持的本地归档、使用离线玩家名或已保存的 Microsoft 账户启动游戏，并查看实时或已保存的游戏日志。Microsoft 登录仍是实验功能，需要操作系统凭据库。请在“账户”页输入公开的 Microsoft 应用客户端 ID，或在共享核心配置中设置 `auth.microsoft_client_id`。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
+桌面程序会先让你确认游戏目录，再创建缺失的目录。它可以安装原版、创建托管加载器实例、导入受支持的本地归档、使用已保存的离线账户启动游戏，并查看实时或已保存的游戏日志。可添加、选择和移除多个离线账户；这些本地玩家名不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用，实验性的 CLI 登录流程仍保留。公开的 Microsoft 客户端 ID 仅在“设置 → 高级设置”中配置（`auth.microsoft_client_id`）。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
 
-同一时间只能运行一个安装、导入、登录、刷新或启动任务。切换页面时任务会继续运行。安装和导入任务可以取消；停止游戏前会请求确认。任务视图最多保留八个已完成任务，并显示最近 100 行任务日志。活动任务期间关闭程序时，会询问是否取消任务，或停止游戏并退出。再次启动时会聚焦已有窗口。
+同一时间只能运行一个安装、导入或启动任务。切换页面时任务会继续运行。可收起的进度弹窗显示任务进度，可通过右下角任务入口重新打开；游戏进程启动后会自动收起。安装和导入任务可以取消；停止游戏前会请求确认。任务注册表最多保留八个已完成快照，弹窗最多显示最近 30 行任务日志。活动任务期间关闭程序时，会询问是否取消任务，或停止游戏并退出。再次启动时会聚焦已有窗口。
 
 在就绪窗口中拖入一个 `.zip` 或 `.mrpack` 可检查归档并打开导入对话框。选择或编辑实例名称和导入选项，检查摘要后再明确开始导入。若实例 ID 已存在，操作会被拒绝；程序不会自动替换实例。也可使用原生归档选择器。内容文件、备份/导出目标、诊断文件和 CLI 安装目录都应通过相应的原生选择器选取，以授予程序访问所选路径的权限。
 
 高级页面用于管理托管实例。选中实例后，可安装/更新/移除加载器、查看历史和存储、预览或执行修订版本清理、还原或回滚修订版本、管理内容、创建或还原用户数据备份，以及检查/导出 Modrinth 整合包收据。共享原版条目在此页面为只读。在“发现”页选择 Modrinth 或 CurseForge，搜索并选择项目和版本，然后可查看版本或解析依赖后再安装。模组安装目标为当前选中的托管实例；整合包安装会先请求确认，因为它可能创建或更新指定实例。除非勾选，否则不会包含可选文件。
 
-设置页将外观和游戏根目录与共享核心设置分开。维护面板提供十项核心值：版本清单来源、文件来源、镜像地址、代理、并行下载数、网络离线、Microsoft 客户端 ID、默认 Java 路径、默认内存和自动安装 Java。每项分别保存。若 CLI 或其他进程修改了配置，请先重新加载；陈旧修改会被拒绝。除非 `CCL_GUI_CONFIG_PATH` 固定配置，否则可以选择本地 JSON 配置。CurseForge 密钥通过密码输入框录入并保存在系统凭据库。`CCL_CURSEFORGE_API_KEY` 会覆盖已保存值；状态只显示是否存在已保存密钥或环境变量覆盖。维护面板也分别提供 GUI 应用包更新和独立 CLI 更新控制。
+设置页将外观和游戏根目录与共享核心设置分开。维护面板提供核心下载和启动设置。Microsoft 客户端 ID 仅位于“设置”的高级折叠区；GUI 登录暂时不可用。每项分别保存。若 CLI 或其他进程修改了配置，请先重新加载；陈旧修改会被拒绝。除非 `CCL_GUI_CONFIG_PATH` 固定配置，否则可以选择本地 JSON 配置。CurseForge 密钥通过密码输入框录入并保存在系统凭据库。`CCL_CURSEFORGE_API_KEY` 会覆盖已保存值；状态只显示是否存在已保存密钥或环境变量覆盖。维护面板也分别提供 GUI 应用包更新和独立 CLI 更新控制。
 
 健康检查只有在勾选对应选项后才会执行网络或临时写入探测。诊断导出保存在本地。原始日志预览必须明确启用，尽管会尽力脱敏，仍可能含私人信息；分享前请检查文件。CLI 更新器作用于你选定目录中的独立 CLI；GUI 更新控制只作用于当前安装的桌面程序包。两者均支持 stable（`main`）和 dev（`dev`）渠道，并会保存所选渠道。
 
@@ -60,7 +60,7 @@ ccl logs --lines 100
 
 ## 安装与前置条件
 
-从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。当前正式稳定版 CLI/核心为 v0.1.0；开发版另行发布。CLI 归档名称如下：
+从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。最新稳定版为 v0.2.0；开发版另行发布。CLI 归档名称如下：
 
 | 系统 | 归档文件 |
 | --- | --- |
@@ -68,7 +68,7 @@ ccl logs --lines 100
 | macOS arm64 | `ccl-aarch64-apple-darwin.zip` |
 | Linux x86_64 | `ccl-x86_64-unknown-linux-gnu.zip` |
 
-桌面程序包使用独立名称和安装格式。当前正式稳定版 v0.1.0 仅包含 CLI 和核心；要安装 v0.2.0 桌面应用，请选择 dev 预发行版：
+桌面程序包使用独立名称和安装格式。稳定版 v0.2.0 已包含桌面应用；若要试用尚未进入稳定版的 GUI 改动，请构建当前 dev 源码或选择包含相应改动的预发行版：
 
 | 系统 | 安装程序包 | 应用内更新程序包 |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。当前 v0.2.0 桌面应用请从 dev 预发行版获取。更新完整性说明见[启动器更新](#maintenance)。
+解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。稳定版 v0.2.0 也提供桌面应用；dev 预发行版可能包含较新的 GUI 改动。更新完整性说明见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
@@ -191,7 +191,7 @@ ccl launch 1.21.1 --offline --dry-run
 
 CurseForge API 请求需要用户提供对相应 API 和文件下载有权限的密钥。[CurseForge API 文档](https://docs.curseforge.com/rest-api/)介绍密钥流程；实际访问取决于服务方授权。获得密钥后运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 会显示是否已保存密钥及是否启用环境变量覆盖；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
 
-启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。参阅[Microsoft 账户设置](user-guide.zh-CN.md#accounts)。
+启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。GUI 仅在“设置 → 高级设置”显示此项；GUI 登录暂时不可用。实验性的 CLI 流程仍使用该 ID。参阅[账户设置](user-guide.zh-CN.md#accounts)。
 
 `settings get` 和 `settings show` 会隐藏代理 URL 中的用户名和密码。为网络连接所需，配置文件仍会保存完整代理 URL，因此应保护该文件。在 Unix 系统上，启动器写入的配置文件仅允许文件所有者访问。设置会先校验，再通过原子替换写入；多个 CLI 进程之间使用锁协调更新。`settings reset --all` 也可将损坏的配置替换为默认值。
 
@@ -245,6 +245,8 @@ ccl instance rollback my-world
 ccl instance uninstall-loader my-world
 ```
 
+实例 ID 支持 UTF-8 名称，包括中文/日文、空格和安全标点。拒绝 `/`、`\`、`:`、`*`、`?`、`"`、`<`、`>`、`|`、控制字符、末尾点号/空格、`.`/`..` 以及 Windows 保留设备名。校验只改变允许使用的 ID，不会移动已有游戏目录，也不会新增元数据字段。
+
 每个托管实例都拥有独立的游戏目录、版本元数据、模组、配置和存档，不会与其他实例共用所选的原版游戏目录。安装或更新会先构建暂存版本，成功后再切换到该版本。更新会保留上一个成功版本，供 `rollback` 切换。移除加载器会让实例恢复为原版，同时保留用户游戏数据。这些操作会在不同版本间保留模组、配置和存档。
 
 `instance show` 中的 `loader_version` 记录最终安装配置文件的 ID，例如 `fabric-loader-0.20.1-1.21.1`；它不一定等于命令行传入的加载器发行版本字符串。启动实例时会使用其已安装配置文件和独立游戏目录。
@@ -276,7 +278,7 @@ ccl instance clean renamed --keep 2 --apply
 ccl instance delete renamed --yes
 ```
 
-复制保留当前实例、上一版本和归档版本。可变文件、存档、配置均为独立副本；已校验资源文件可能使用硬链接共享。不会复制未完成的暂存版本。重命名改变实例 ID 并更新元数据路径，移动目录前会记录恢复信息。ID 为 ASCII 字母、数字、`_` 或 `-`，最长 64 字符；拒绝仅大小写不同的重命名及不区分大小写的目标冲突。
+复制保留当前实例、上一版本和归档版本。可变文件、存档、配置均为独立副本；已校验资源文件可能使用硬链接共享。不会复制未完成的暂存版本。重命名改变实例 ID 并更新元数据路径，移动目录前会记录恢复信息。ID 可使用 UTF-8 字符（包括中日文）、空格和安全标点，最长 64 个字符且不超过 240 个 UTF-8 字节。拒绝控制字符、`<>:"/\|?*`、`.`/`..`、末尾点号/空格，以及 Windows 保留名 `CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9`（包括带扩展名的形式）；重命名还会拒绝仅大小写不同或不区分大小写的目标冲突。
 
 提交保留直接上一版本供 `rollback` 使用，更早的上一版本归档至 `history/`。`history` 列出 `current`、可用的 `previous` 及归档 ID。`restore ID REVISION` 从完整保留快照创建新的当前版本，包含快照中的存档和配置，并保留原当前版本供回滚。`restore` 接受 `previous` 或 `history` 输出的归档 ID。恢复前请备份较新的存档。加载器回滚会先将当前存档、设置和其他用户数据准备到上一版本，再执行交换；若操作中断，恢复流程会保留一致的当前版本和回滚版本。完整内容编辑或整合包更新后的回滚会交换完整快照。
 
@@ -454,9 +456,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## 启动器更新与诊断
 
-当前正式稳定版 v0.1.0 包含 CLI 与核心。v0.2.0 桌面应用及其签名清单更新器目前通过 dev 预发行版提供；要检查 GUI 更新，请选择 dev 渠道。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
+最新稳定版为 v0.2.0，包含 GUI 和签名清单更新器。当前位于 `dev` 的 GUI 改动尚未包含在该稳定版中；若要试用，请构建当前 dev 源码，或等待包含相应提交的 dev 发行版。早于签名清单协议的 CLI 程序仍需手动引导更新。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
 
-只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 main，当前正式提供 v0.1.0 CLI/核心；dev 渠道跟随 dev，并提供 v0.2.0 GUI 预发行版。稳定版使用 v0.1.0 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
+只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 `main`，最新版本为 v0.2.0。dev 渠道跟随 `dev`，可包含尚未进入稳定版的较新 GUI 改动。稳定版使用 `v0.2.0` 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
 
 ```sh
 ccl update check
@@ -498,15 +500,17 @@ ccl diagnose --run RUN-ID --export ./ccl-diagnostic.json --include-log-preview
 
 <a id="accounts"></a>
 
-## Microsoft 账户
+## 账户
 
-> **实验性在线集成：** 已实现 Microsoft 设备登录、Xbox Live/XSTS 交换和 Minecraft 服务集成。首版暂缓真实正版账户完整验收，继续支持离线身份启动。自动化覆盖及 OAuth 设备流程检查不能证明每个账户都能启动游戏：服务访问、用户档案和 Minecraft 权益会分别验证。登录或启动失败时，请检查报告的认证阶段和机器错误码。
+GUI“账户”页可添加、选择和移除多个已保存的离线玩家名。名称为 1–16 个 ASCII 字母、数字或下划线。这些本地档案不使用系统凭据库。游戏库直接选择已保存账户，不再要求另行输入用户名。CLI 继续支持默认离线身份；`--account ACCOUNT-ID` 使用实际已保存账户 ID（不要将 `offline` 当作占位 ID），一次性名称使用 `--offline --username NAME`。
+
+> **CLI 实验性在线集成：** Microsoft 设备登录、Xbox Live/XSTS 交换和 Minecraft 服务集成仍保留在 CLI 中。GUI 的 Microsoft 登录暂时不可用。正版账户完整验收仍已暂缓；自动化覆盖及 OAuth 设备流程检查不能证明每个账户都能启动游戏。若 CLI 登录或启动失败，请检查报告的认证阶段和机器错误码。
 
 应用所有者请参阅[注册及验收要求](development.zh-CN.md#microsoft-application)。
 
 ### 配置并登录
 
-将客户端 ID 保存到启动器的用户配置中：
+实验性的 CLI 流程可将客户端 ID 保存到启动器用户配置中。GUI 的公开客户端 ID 仅在“设置 → 高级设置”配置；GUI 登录目前不可用：
 
 ```sh
 ccl settings set auth.microsoft_client_id YOUR-APPLICATION-CLIENT-ID
@@ -540,9 +544,15 @@ ccl launch VERSION
 
 访问令牌和刷新令牌仅通过操作系统凭据库保存。账户名称和 ID 分开存储在 `accounts.json` 中，该元数据文件不包含令牌。macOS 和 Windows 使用系统凭据库。Linux 必须安装并解锁可通过当前 D-Bus 会话访问的 Secret Service。没有持久 Secret Service 的无头系统不能使用 Microsoft 登录；程序不会将凭据退回保存为明文。只要为会话提供并解锁持久的 Secret Service，无需图形桌面。
 
-如果安全存储不可用，登录或刷新会报错。请启动带有已解锁密钥环的桌面会话；在安全存储可用前，可使用离线启动。不要通过把令牌复制到文件或 shell 命令中来绕过限制。
+如果安全存储不可用，CLI 登录或刷新会报错。请启动带有已解锁密钥环的桌面会话；在安全存储可用前，可使用 GUI 已保存的离线档案。不要通过把令牌复制到文件或 shell 命令中来绕过限制。
 
 <a id="troubleshooting"></a>
+
+## 启动器日志与诊断
+
+GUI“日志”页分别展示游戏运行日志和 CCL 启动器日志。启动器日志记录启动构建身份、任务开始/终态、GUI 错误类别，以及可选的导航事件。不会记录任意请求内容、账户名、令牌、文件系统路径、JavaScript 异常原文或游戏输出。最多保留五个文件，每个不超过 5 MiB；每次查看最多显示 1,000 行和 256 KiB。仅在需要导航事件时启用调试日志。导出会将当前显示的本地日志复制到所选位置；CCL 不会上传日志。
+
+诊断报告是独立功能。分享前请检查报告，尤其是启用可选原始游戏日志预览时。
 
 ## 故障排查
 
@@ -550,7 +560,7 @@ ccl launch VERSION
 - **游戏找不到 Java：** 运行 `ccl doctor`，允许安装托管运行时，或用 `--java PATH` 指定兼容的 Java 可执行文件/主目录。若没有合适的已安装运行时，`--no-java-download` 会禁止下载并导致启动失败。
 - **游戏立即退出：** 查看 `ccl logs --lines 200`，或用 `ccl logs --run RUN-ID` 选择一次运行；托管实例需添加 `--instance ID`。运行 `ccl diagnose --run RUN-ID` 检查记录结果及附近的崩溃报告。运行记录保存游戏的实际退出码；游戏异常退出时 CLI 返回 `8`。
 - **配置无效：** 检查 JSON 文件和设置名称。`ccl settings reset --all` 会以默认值替换无效配置；使用 `--config PATH` 指定非默认文件。
-- **Microsoft 登录或启动失败：** 查看认证阶段和白名单机器错误码。确认公开客户端 ID 及凭据库可用，再区分 Microsoft 授权、Xbox/XSTS 访问、Minecraft 用户档案访问和账户权益错误。仅凭通用 HTTP 401/403 不能证明账户没有游戏权益。
+- **CLI Microsoft 登录或启动失败：** 查看认证阶段和白名单机器错误码。确认公开客户端 ID 及凭据库可用，再区分 Microsoft 授权、Xbox/XSTS 访问、Minecraft 用户档案访问和账户权益错误。仅凭通用 HTTP 401/403 不能证明账户没有游戏权益。
 - **CurseForge 请求被拒：** 确认已保存密钥或 `CCL_CURSEFORGE_API_KEY` 正在生效，并且该密钥获准访问 API 和指定文件。允许搜索的密钥不一定能下载受限文件；请遵守服务方授权及作者分发规则。
 - **加载器或整合包安装报告格式不支持/文件冲突：** 检查 Minecraft/加载器版本，用 `ccl pack inspect` 检查整合包元数据，并在使用 `--replace-modified` 前检查本地已修改的托管文件。
 

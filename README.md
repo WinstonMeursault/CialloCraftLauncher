@@ -4,7 +4,7 @@ A libre, open-source Minecraft: Java Edition launcher written in Rust for Window
 
 ## Project status
 
-CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. The current stable release, v0.1.0, contains the CLI and core; the GUI and signed-manifest update protocol are available in v0.2.0 developer prereleases. Stable v0.2.0 publishing requires the owner’s explicit approval.
+CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. The latest stable release is v0.2.0 on `main`, with the CLI, core, desktop GUI and signed-manifest updater. Current GUI changes described in the guides are on `dev` and are not part of that stable release.
 
 | Area | Available functionality |
 | --- | --- |
@@ -23,7 +23,7 @@ Support follows the samples and boundaries in the guides, rather than every Mine
 
 Desktop release workflows are configured for Windows x64 per-user NSIS EXE, macOS arm64 DMG, and Linux x64 AppImage and DEB packages. The separate GUI validation workflow exercises update and manual rollback, bad-package automatic rollback, and interrupted-replacement recovery; release workflows check rendered startup readiness. GUI self-update accepts the Windows installer, macOS `.app.tar.gz`, and Linux AppImage. DEB installations update through the package manager. CI smoke launches on hosted runners do not establish behavior on the oldest planned OS versions or physical game-launch acceptance.
 
-Microsoft device login, refresh, OS credential storage and browser authorization are implemented. Online account integration remains experimental; the owner has deferred full entitled-account acceptance for this release. Offline identities remain supported. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
+Saved offline accounts can be added, selected and removed in the GUI without using the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI; the experimental CLI flow remains available, with full entitled-account acceptance still deferred. In the GUI, the Microsoft client ID is configured only in the Settings advanced section. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
 
 ## Install and get started
 
