@@ -147,13 +147,14 @@ impl LibraryCatalog {
     }
 
     /// Hide an entry from the visible library. Game files and catalog identity remain intact.
-    pub fn hide(&self, key: &str) -> GuiResult<()> {
+    pub fn hide(&self, key: &str, default_name: &str) -> GuiResult<()> {
         validate_key(key)?;
+        validate_display_name(default_name)?;
         self.update(|file| {
             file.entries
                 .entry(key.to_owned())
                 .or_insert_with(|| CatalogRecord {
-                    display_name: key.rsplit(':').next().unwrap_or(key).to_owned(),
+                    display_name: default_name.to_owned(),
                     hidden: false,
                 })
                 .hidden = true;
@@ -312,7 +313,11 @@ mod tests {
             catalog.records().unwrap()[&key].display_name,
             "我的 existing world"
         );
-        catalog.hide(&key).unwrap();
+        catalog.hide(&key, "Original profile name").unwrap();
+        assert_eq!(
+            catalog.records().unwrap()[&key].display_name,
+            "我的 existing world"
+        );
         assert!(catalog.records().unwrap()[&key].hidden);
         catalog.restore_all().unwrap();
         assert!(!catalog.records().unwrap()[&key].hidden);
