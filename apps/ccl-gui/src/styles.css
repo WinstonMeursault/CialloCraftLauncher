@@ -242,3 +242,10 @@ summary { cursor: pointer; }
 .settings-tabs button { border:0; background:transparent; color:var(--muted); padding:8px 12px; border-radius:6px; font-size:13px; }
 .settings-tabs button.active { background:var(--accent-soft); color:var(--accent); }
 .brand-name { font-size: 14px; font-weight: 500; }
+@media (max-width: 680px) {
+  /* Reserve the overlay rail's footprint without shifting content on hover. */
+  .launch-cluster { width: min(420px, calc(100vw - 232px)); }
+  .home-launch-form { flex-direction: column; align-items: stretch; }
+  .home-account select, .home-page .home-launch { width: 100%; }
+  .is-home .operation-chip { max-width: calc(100vw - 232px); }
+}
