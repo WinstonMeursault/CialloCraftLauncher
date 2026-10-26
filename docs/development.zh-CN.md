@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.2 发行说明草稿](#release-notes)
+- [v0.2.1 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -347,7 +347,7 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.2 发行说明
+## v0.2.1 发行说明
 
 以下说明对应 v0.2.1，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
