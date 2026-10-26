@@ -508,16 +508,25 @@ fn latest_run_id(directory: &Path) -> GuiResult<String> {
         .ok_or_else(|| GuiError::new("log_read", "No launch logs found"))
 }
 fn validate_key_id(id: &str) -> GuiResult<()> {
+    let stem = id.split('.').next().unwrap_or(id).trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes()[3], b'1'..=b'9'));
     if id.is_empty()
         || matches!(id, "." | "..")
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        || reserved
+        || id.ends_with(['.', ' '])
+        || id
+            .chars()
+            .any(|character| character.is_control() || "<>:\"/\\|?*".contains(character))
     {
         return Err(invalid_launch_key());
     }
     Ok(())
 }
+
 fn install_error(error: ccl_core::install::InstallError) -> GuiError {
     let code = if matches!(
         &error,
@@ -595,4 +604,29 @@ fn launch_error(error: ccl_core::launch::LaunchError) -> GuiError {
 }
 fn account_error(error: ccl_core::accounts::AccountError) -> GuiError {
     GuiError::new("account_storage", error.to_string())
+}
+
+#[cfg(test)]
+mod launch_key_tests {
+    use super::validate_key_id;
+
+    #[test]
+    fn launch_path_components_accept_unicode_and_safe_punctuation() {
+        for id in ["1.20.1", "我的整合包", "日本語 pack! (1)"] {
+            assert!(validate_key_id(id).is_ok(), "{id}");
+        }
+        for id in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "a/b",
+            "a\\b",
+            "name:",
+            "CON.txt",
+            "COM1.save",
+        ] {
+            assert!(validate_key_id(id).is_err(), "{id}");
+        }
+    }
 }

@@ -7,6 +7,7 @@ use ccl_core::{
 use ccl_gui::operations::{
     GuiOperations, InstallRequest, LaunchIdentity, LaunchIdentityKind, LaunchRequest,
 };
+use ccl_gui::{PreferencesStore, bootstrap};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::{
@@ -465,7 +466,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
                     username: Some("FixturePlayer".into()),
                     account_id: None,
                 },
-                java: Some(java),
+                java: Some(java.clone()),
                 memory_mb: Some(1024),
                 auto_install_java: false,
                 dry_run: false,
@@ -514,6 +515,143 @@ async fn managed_vanilla_install_uses_verified_downloads_on_every_platform() {
         "instance_conflict"
     );
     assert_eq!(fs::read(client).unwrap(), b"GUI operations fixture client");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    fs::create_dir_all(&root).unwrap();
+    let config_path = temp.path().join("config.json");
+    let fixture = Fixture::new();
+    let installer = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(&fixture.url);
+    let operations = GuiOperations::new(root.clone(), config_path.clone())
+        .unwrap()
+        .with_install_service(installer);
+    let display_id = "我的整合包 日本語! (1)";
+    operations
+        .install(
+            InstallRequest {
+                id: display_id.into(),
+                minecraft: "fixture-1".into(),
+                loader: None,
+                loader_version: None,
+                shared: false,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+    operations
+        .install(
+            InstallRequest {
+                id: "ignored-for-shared-version".into(),
+                minecraft: "fixture-1".into(),
+                loader: None,
+                loader_version: None,
+                shared: true,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+
+    let preferences = PreferencesStore::new(temp.path().join("preferences"));
+    preferences.select_root(root.clone()).unwrap();
+    let library = bootstrap(&preferences, &config_path, None).unwrap();
+    let entry = library
+        .entries
+        .iter()
+        .find(|entry| entry.id == display_id)
+        .expect("managed instance is discovered in the library");
+    assert_eq!(entry.key, format!("managed:{display_id}"));
+    assert_eq!(
+        entry.game_directory,
+        fs::canonicalize(root.join(".ccl/instances").join(display_id).join("game")).unwrap()
+    );
+    let shared_entry = library
+        .entries
+        .iter()
+        .find(|entry| entry.key == "vanilla:fixture-1")
+        .expect("existing shared version remains in the library");
+    assert_eq!(
+        shared_entry.game_directory,
+        fs::canonicalize(&root).unwrap()
+    );
+
+    // Model an already-installed HMCL/shared profile with a Unicode and spaced ID.
+    let external_id = "HMCL 中文 1.20.1";
+    let source_version = root.join("versions/fixture-1");
+    let external_version = root.join("versions").join(external_id);
+    fs::create_dir_all(&external_version).unwrap();
+    let mut external_metadata: Value =
+        serde_json::from_slice(&fs::read(source_version.join("fixture-1.json")).unwrap()).unwrap();
+    external_metadata["id"] = json!(external_id);
+    fs::write(
+        external_version.join(format!("{external_id}.json")),
+        serde_json::to_vec(&external_metadata).unwrap(),
+    )
+    .unwrap();
+    fs::copy(
+        source_version.join("fixture-1.jar"),
+        external_version.join(format!("{external_id}.jar")),
+    )
+    .unwrap();
+    let library_with_external = bootstrap(&preferences, &config_path, None).unwrap();
+    let external_entry = library_with_external
+        .entries
+        .iter()
+        .find(|entry| entry.key == format!("vanilla:{external_id}"))
+        .expect("Unicode shared profile remains discoverable");
+    assert_eq!(
+        external_entry.game_directory,
+        fs::canonicalize(&root).unwrap()
+    );
+
+    let java = temp.path().join("fixture-java");
+    fixture_java(&java, false);
+    let launch = operations
+        .launch(
+            LaunchRequest {
+                key: entry.key.clone(),
+                identity: LaunchIdentity {
+                    kind: LaunchIdentityKind::Offline,
+                    username: Some("FixturePlayer".into()),
+                    account_id: None,
+                },
+                java: Some(java.clone()),
+                memory_mb: Some(1024),
+                auto_install_java: false,
+                dry_run: true,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(launch["ok"], true);
+
+    let external_launch = operations
+        .launch(
+            LaunchRequest {
+                key: external_entry.key.clone(),
+                identity: LaunchIdentity {
+                    kind: LaunchIdentityKind::Offline,
+                    username: Some("FixturePlayer".into()),
+                    account_id: None,
+                },
+                java: Some(java),
+                memory_mb: Some(1024),
+                auto_install_java: false,
+                dry_run: true,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(external_launch["ok"], true);
 }
 
 #[tokio::test]
