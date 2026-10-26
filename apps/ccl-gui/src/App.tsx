@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { boundLogLines, boundLogText } from './types'
 import type {
-  AccountListing, AccountStorage, Bootstrap, GameVersion, ImportPreview, ImportRequest, Language,
+  AccountListing, Bootstrap, GameVersion, ImportPreview, ImportRequest, Language,
   LaunchRequest, LibraryEntry, LoaderVersion, Preferences, RunRecord, TaskSnapshot, Theme,
 } from './types'
-import { acceptTaskSnapshot, formatGuiError, newestHistory, redactSensitive, retainBusyManagedEntries, taskIsActive, taskProgress } from './types'
+import { acceptTaskSnapshot, formatGuiError, retainBusyManagedEntries, taskIsActive } from './types'
 import { getMessages } from './i18n'
-import { InstanceDetails, Discover } from './Advanced'
+import { InstanceDetails, Discover, ResultView } from './Advanced'
 import { MaintenancePanel } from './Maintenance'
+import { AccountsPanel } from './AccountsPanel'
+import { ModalFrame } from './Dialog'
+import { ProgressDialog } from './ProgressDialog'
+import { LauncherLogs } from './LauncherLogs'
 
-type Page = 'library' | 'discover' | 'accounts' | 'tasks' | 'logs' | 'settings'
+type Page = 'library' | 'discover' | 'accounts' | 'logs' | 'settings'
 type Filter = 'all' | 'managed' | 'vanilla'
 type Modal = 'create' | 'import' | null
-type LaunchIdentityKind = 'offline' | 'microsoft'
-type IconName = 'library' | 'compass' | 'user' | 'tasks' | 'logs' | 'settings' | 'folder' | 'search'
-type LaunchForm = { identity: LaunchIdentityKind; username: string; accountId: string; java: string; memory: string; autoInstallJava: boolean; dryRun: boolean }
+type IconName = 'library' | 'compass' | 'user' | 'logs' | 'settings' | 'folder' | 'search'
+type LaunchForm = { accountId: string; java: string; memory: string; autoInstallJava: boolean; dryRun: boolean }
 
 const LOADERS = ['fabric', 'quilt', 'legacyfabric', 'optifine', 'forge', 'neoforge'] as const
 
@@ -32,8 +35,7 @@ function summaryString(summary: unknown, key: string): string | null {
 }
 function importIdFromPath(path: string) {
   const filename = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? 'imported-instance'
-  const safe = filename.normalize('NFKD').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
-  return safe || 'imported-instance'
+  return filename.trim() || 'imported-instance'
 }
 function logTail(text: string, lines: number) { return text.split(/\r?\n/).slice(-lines).join('\n') }
 function isTerminal(task: TaskSnapshot) { return ['succeeded', 'failed', 'cancelled'].includes(task.state) }
@@ -62,11 +64,7 @@ export default function App() {
   const [task, setTask] = useState<TaskSnapshot | null>(null)
   const taskCursor = useRef<TaskSnapshot | null>(null)
   const [launchPending, setLaunchPending] = useState(false)
-  const [history, setHistory] = useState<TaskSnapshot[]>([])
   const [accountListing, setAccountListing] = useState<AccountListing>({ accounts: [], selected: null })
-  const [accountStorage, setAccountStorage] = useState<AccountStorage | null>(null)
-  const [accountClientId, setAccountClientId] = useState('')
-  const [openBrowser, setOpenBrowser] = useState(true)
   const [pageNotice, setPageNotice] = useState<string | null>(null)
   const [theme, setTheme] = useState<Theme>('system')
   const [language, setLanguage] = useState<Language>('zh-CN')
@@ -99,10 +97,11 @@ export default function App() {
   const [updateExisting, setUpdateExisting] = useState(false)
   const [allowedHosts, setAllowedHosts] = useState<string[]>([])
   const [manualHosts, setManualHosts] = useState('')
-  const [launchForm, setLaunchForm] = useState<LaunchForm>({ identity: 'offline', username: '', accountId: '', java: '', memory: '', autoInstallJava: true, dryRun: false })
+  const [launchForm, setLaunchForm] = useState<LaunchForm>({ accountId: '', java: '', memory: '', autoInstallJava: true, dryRun: false })
   const [offlineDraft, setOfflineDraft] = useState(false)
   const [pendingCancel, setPendingCancel] = useState<TaskSnapshot | null>(null)
-  const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null)
+  const [progressVisible, setProgressVisible] = useState(false)
+  const [logSource, setLogSource] = useState<'game' | 'launcher'>('game')
   const [runs, setRuns] = useState<RunRecord[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [runLog, setRunLog] = useState('')
@@ -119,14 +118,8 @@ export default function App() {
 
   const captureError = useCallback((cause: unknown) => {
     setError(errorMessage(cause, getMessages(languageRef.current).unknownError))
+    if (isDesktopRuntime()) void invoke('frontend_diagnostic', { event: 'operation_error' }).catch(() => {})
   }, [])
-
-  const refreshHistory = useCallback(async () => {
-    try {
-      const incoming = await invoke<TaskSnapshot[]>('task_history')
-      setHistory(current => newestHistory(current, incoming))
-    } catch (cause) { captureError(cause) }
-  }, [captureError])
 
   const refreshBootstrap = useCallback(async () => {
     try {
@@ -139,15 +132,23 @@ export default function App() {
     } catch (cause) { captureError(cause) }
   }, [captureError])
 
-  const applyTask = useCallback((incoming: TaskSnapshot, refreshTerminalHistory = true) => {
+  const applyTask = useCallback((incoming: TaskSnapshot) => {
     const accepted = acceptTaskSnapshot(taskCursor.current, incoming)
     if (accepted === taskCursor.current) return
     const bounded = accepted ? { ...accepted, logs: boundLogLines(accepted.logs, 100, 256 * 1024) } : null
     taskCursor.current = bounded
     setTask(bounded)
     if (bounded?.kind === 'launch') setLaunchPending(false)
-    if (bounded && isTerminal(bounded) && refreshTerminalHistory) void refreshHistory()
-  }, [refreshHistory])
+  }, [])
+
+  const progressCursor = useRef<{ id: number; state: string; pid: number | null } | null>(null)
+  useEffect(() => {
+    if (!task) return
+    const previous = progressCursor.current
+    if (!previous || previous.id !== task.id || (previous.state !== 'failed' && task.state === 'failed')) setProgressVisible(true)
+    if (task.kind === 'launch' && taskIsActive(task) && task.pid !== null && previous?.pid !== task.pid) setProgressVisible(false)
+    progressCursor.current = { id: task.id, state: task.state, pid: task.pid }
+  }, [task?.id, task?.state, task?.kind, task?.pid])
 
   const loadAuxiliary = useCallback(async () => {
     const snapshot = await invoke<TaskSnapshot | null>('task_snapshot')
@@ -156,19 +157,33 @@ export default function App() {
       taskCursor.current = null
       setTask(null)
     }
-    const saved = await invoke<TaskSnapshot[]>('task_history')
-    setHistory(newestHistory([], saved))
   }, [applyTask])
 
   const refreshTaskState = useCallback(async () => {
     try {
       const snapshot = await invoke<TaskSnapshot | null>('task_snapshot')
-      if (snapshot) applyTask(snapshot, false)
+      if (snapshot) applyTask(snapshot)
       else { taskCursor.current = null; setTask(null) }
-      const saved = await invoke<TaskSnapshot[]>('task_history')
-      setHistory(current => newestHistory(current, saved))
     } catch (cause) { captureError(cause) }
   }, [applyTask, captureError])
+
+  // Event delivery can pause in an occluded WebView. Reconcile only while work
+  // is active, with one in-flight read and a slower cadence for a running game.
+  useEffect(() => {
+    if (!desktop || !activeTask) return
+    let disposed = false, reading = false
+    const reconcile = async () => {
+      if (reading) return
+      reading = true
+      try {
+        const snapshot = await invoke<TaskSnapshot | null>('task_snapshot')
+        if (!disposed && snapshot) applyTask(snapshot)
+      } catch (cause) { if (!disposed) captureError(cause) }
+      finally { reading = false }
+    }
+    const timer = window.setInterval(() => { void reconcile() }, activeTask.kind === 'launch' && activeTask.pid !== null ? 5000 : 1000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [desktop, activeTask?.id, activeTask?.pid, applyTask, captureError])
 
   const loadBootstrap = useCallback(async () => {
     if (!desktop) { setLoading(false); return }
@@ -271,6 +286,16 @@ export default function App() {
     return () => media.removeEventListener('change', update)
   }, [theme])
 
+  useEffect(() => {
+    if (!desktop) return
+    const reportError = () => { void invoke('frontend_diagnostic', { event: 'render_error' }).catch(() => {}) }
+    const reportRejection = () => { void invoke('frontend_diagnostic', { event: 'unhandled_rejection' }).catch(() => {}) }
+    window.addEventListener('error', reportError); window.addEventListener('unhandledrejection', reportRejection)
+    return () => { window.removeEventListener('error', reportError); window.removeEventListener('unhandledrejection', reportRejection) }
+  }, [desktop])
+  useEffect(() => {
+    if (desktop) void invoke('frontend_diagnostic', { event: 'navigation' }).catch(() => {})
+  }, [desktop, page])
   const guiReadySent = useRef(false)
   const hasRenderedBootstrap = !!bootstrap
   useEffect(() => {
@@ -285,7 +310,6 @@ export default function App() {
     return matchesFilter && haystack.includes(query.toLocaleLowerCase().trim())
   })
   const selected = (bootstrap?.entries ?? []).find(entry => entry.key === selectedKey) ?? entries[0] ?? null
-  const selectedHistory = history.find(item => item.id === selectedHistoryId) ?? null
 
   const startTask = async (operation: () => Promise<TaskSnapshot>) => {
     if (working || activeTask) return null
@@ -293,7 +317,7 @@ export default function App() {
     try {
       const result = await operation()
       applyTask(result)
-      setPage('tasks')
+      setProgressVisible(true)
       return result
     } catch (cause) { captureError(cause); return null }
     finally { setWorking(false) }
@@ -385,7 +409,7 @@ export default function App() {
     try {
       const listing = await invoke<AccountListing>('account_list')
       setAccountListing(listing)
-      setLaunchForm(current => ({ ...current, accountId: current.accountId || listing.selected || '' }))
+      setLaunchForm(current => ({ ...current, accountId: listing.selected || '' }))
     }
     catch (cause) { captureError(cause) }
     finally { setWorking(false) }
@@ -394,7 +418,7 @@ export default function App() {
   const enterPage = (next: Page) => {
     setPage(next); setPageNotice(null)
     if (next === 'accounts' && !bootstrap?.setup_required) void loadAccounts()
-    if ((next === 'tasks' || next === 'logs') && !bootstrap?.setup_required) void refreshTaskState()
+    if (next === 'logs' && !bootstrap?.setup_required) void refreshTaskState()
   }
 
   const accountSelect = async (id: string) => {
@@ -415,20 +439,18 @@ export default function App() {
     catch (cause) { captureError(cause) }
     finally { setWorking(false) }
   }
-  const accountRefresh = (id: string) => startTask(() => invoke<TaskSnapshot>('account_refresh', { id }))
-  const login = async (event: FormEvent) => {
-    event.preventDefault()
-    if (working || activeTask) return
-    setWorking(true); setError(null); setPageNotice(null)
+  const addOfflineAccount = async (username: string) => {
+    setWorking(true); setError(null)
     try {
-      const result = await invoke<AccountStorage>('account_check_storage')
-      setAccountStorage(result)
-      if (!result.available) return
-      const next = await invoke<TaskSnapshot>('account_login', { clientId: accountClientId.trim() || null, openBrowser })
-      applyTask(next); setPage('tasks')
-    } catch (cause) { captureError(cause) }
+      const listing = await invoke<AccountListing>('account_add_offline', { username })
+      setAccountListing(listing)
+      setLaunchForm(current => ({ ...current, accountId: listing.selected ?? '' }))
+    } catch (cause) { captureError(cause); throw cause }
     finally { setWorking(false) }
   }
+  useEffect(() => {
+    if (bootstrap && !bootstrap.setup_required) void loadAccounts()
+  }, [bootstrap?.config_path, bootstrap?.setup_required, loadAccounts])
 
   const savePreferences = async () => {
     setWorking(true); setError(null)
@@ -453,12 +475,13 @@ export default function App() {
     if (!selected || working || activeTask) return
     const memoryValue = launchForm.memory.trim() ? Number(launchForm.memory) : null
     if (memoryValue !== null && (!Number.isSafeInteger(memoryValue) || memoryValue <= 0 || memoryValue > 4_294_967_295)) return
-    if (launchForm.identity === 'microsoft' && !launchForm.accountId) return
+    const account = accountListing.accounts.find(item => item.id === launchForm.accountId)
+    if (!account) { enterPage('accounts'); return }
     const request: LaunchRequest = {
       key: selected.key,
-      identity: launchForm.identity === 'offline'
-        ? { kind: 'offline', username: launchForm.username.trim() || null, account_id: null }
-        : { kind: 'microsoft', username: null, account_id: launchForm.accountId },
+      identity: account.account_type === 'offline'
+        ? { kind: 'offline', username: account.username, account_id: account.id }
+        : { kind: 'microsoft', username: null, account_id: account.id },
       java: launchForm.java.trim() || null,
       memory_mb: memoryValue,
       auto_install_java: launchForm.autoInstallJava,
@@ -473,19 +496,6 @@ export default function App() {
     if (!pendingCancel) return
     setWorking(true); setError(null)
     try { applyTask(await invoke<TaskSnapshot>('cancel_task', { id: pendingCancel.id })); setPendingCancel(null) }
-    catch (cause) { captureError(cause) }
-    finally { setWorking(false) }
-  }
-
-  const checkStorage = async () => {
-    setWorking(true); setError(null)
-    try { setAccountStorage(await invoke<AccountStorage>('account_check_storage')) }
-    catch (cause) { captureError(cause) }
-    finally { setWorking(false) }
-  }
-  const openVerification = async (taskId: number) => {
-    setWorking(true); setError(null)
-    try { await invoke('open_login_browser', { taskId }) }
     catch (cause) { captureError(cause) }
     finally { setWorking(false) }
   }
@@ -538,7 +548,7 @@ export default function App() {
     if (['login', 'refresh'].includes(task.kind)) void loadAccounts()
   }, [task?.id, task?.revision, task?.kind, task?.state, refreshBootstrap, loadAccounts])
 
-  const activePageLabel = page === 'library' ? t.library : page === 'discover' ? t.discover : page === 'accounts' ? t.accounts : page === 'tasks' ? t.tasks : page === 'logs' ? t.logs : t.settings
+  const activePageLabel = page === 'library' ? t.library : page === 'discover' ? t.discover : page === 'accounts' ? t.accounts : page === 'logs' ? t.logs : t.settings
   if (!desktop) return <div className="connection-card"><div className="connection-symbol">!</div><h1>{t.notConnected}</h1><p>{t.notConnectedCopy}</p></div>
 
   return <div className="shell">
@@ -548,30 +558,29 @@ export default function App() {
         <NavItem icon="library" label={t.library} active={page === 'library'} onClick={() => enterPage('library')} />
         <NavItem icon="compass" label={t.discover} active={page === 'discover'} disabled={!!bootstrap?.setup_required} onClick={() => enterPage('discover')} />
         <NavItem icon="user" label={t.accounts} active={page === 'accounts'} disabled={!!bootstrap?.setup_required} unavailableLabel={t.setupTitle} onClick={() => enterPage('accounts')} />
-        <NavItem icon="tasks" label={t.tasks} active={page === 'tasks'} onClick={() => enterPage('tasks')} />
         <NavItem icon="logs" label={t.logs} active={page === 'logs'} onClick={() => enterPage('logs')} />
       </nav>
-      <div className="sidebar-bottom"><NavItem icon="settings" label={t.settings} active={page === 'settings'} onClick={() => enterPage('settings')} /><p>{t.tagline}</p></div>
+      <div className="sidebar-bottom"><NavItem icon="settings" label={t.settings} active={page === 'settings'} onClick={() => enterPage('settings')} /></div>
     </aside>
 
     <main className="main">
       <header className="topline"><span className="crumb">{t.brand} <span aria-hidden="true">/</span> {activePageLabel}</span><div className="top-actions"><span className="edition-badge">{t.edition}</span><button className="locale-switch" onClick={() => setLanguage(language === 'en' ? 'zh-CN' : 'en')}>{language === 'en' ? '简体中文' : 'English'}</button></div></header>
       {error && <div className="alert" role="alert"><strong>{t.error}</strong><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError(null)}>×</button></div>}
       {pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label="Dismiss" onClick={() => setPageNotice(null)}>×</button></div>}
-      {loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
+      {page === 'logs' && (!bootstrap || bootstrap.setup_required) ? <LauncherLogs language={language}/> : loading || !bootstrap ? <><div className="loading" role="status">{loading ? t.loading : t.error}</div>{!loading && <MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={applyTask} />}</> : bootstrap.setup_required
         ? <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot} />
         : <>
-          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} filter={filter} query={query} setFilter={setFilter} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false);setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} loadAccounts={() => void loadAccounts()} />}
-          {page === 'library' && <InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setPage('tasks') }} onChanged={() => void refreshBootstrap()} />}
-          {page === 'discover' && <Discover entries={bootstrap.entries} onSelectEntry={setSelectedKey} language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setPage('tasks') }} onChanged={() => void refreshBootstrap()} />}
-          {page === 'accounts' && <AccountsPage t={t} listing={accountListing} storage={accountStorage} working={working} clientId={accountClientId} setClientId={setAccountClientId} openBrowser={openBrowser} setOpenBrowser={setOpenBrowser} refresh={loadAccounts} select={accountSelect} logout={accountLogout} refreshAccount={accountRefresh} checkStorage={checkStorage} signIn={login} activeTask={!!activeTask} task={task} openVerification={openVerification} />}
-          {page === 'tasks' && <TasksPage t={t} task={task} history={history} selectedHistory={selectedHistory} selectHistory={setSelectedHistoryId} working={working} requestCancel={setPendingCancel} openVerification={openVerification} />}
-          {page === 'logs' && <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={setSelectedKey} runs={runs} selectedRunId={selectedRunId} selectRun={(runId) => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.id ?? null} />}
+          {page === 'library' && <LibraryPage t={t} entries={entries} selected={selected} bootstrap={bootstrap} filter={filter} query={query} setFilter={setFilter} setQuery={setQuery} setSelectedKey={setSelectedKey} openCreate={openCreate} openImport={() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false);setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }} launchForm={launchForm} setLaunchForm={setLaunchForm} launch={launch} activeTask={!!activeTask} working={working} accountListing={accountListing} selectAccount={accountSelect} openAccounts={() => enterPage('accounts')} />}
+          {page === 'library' && <InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} onChanged={() => void refreshBootstrap()} />}
+          {page === 'discover' && <Discover entries={bootstrap.entries} onSelectEntry={setSelectedKey} language={language} entry={selected} busy={working || !!activeTask} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} onChanged={() => void refreshBootstrap()} />}
+          {page === 'accounts' && <AccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout} />}
+          {page === 'logs' && <><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? '启动器日志' : 'Launcher logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} /> : <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={setSelectedKey} runs={runs} selectedRunId={selectedRunId} selectRun={(runId) => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.id ?? null} />}</>}
           {page === 'settings' && <SettingsPage t={t} theme={theme} language={language} setTheme={setTheme} setLanguage={setLanguage} savePreferences={savePreferences} working={working} hasUnsaved={hasUnsavedPreferences} saved={!!savedPreferences && !hasUnsavedPreferences} offlineDraft={offlineDraft} setOfflineDraft={setOfflineDraft} offlineSaved={bootstrap.launch_defaults.network_offline} saveNetworkOffline={saveNetworkOffline} busy={!!activeTask} root={bootstrap.root} chooseRoot={chooseRoot} />}
-          {page === 'settings' && <MaintenancePanel language={language} busy={working || !!activeTask} entry={selected} onChanged={() => void loadBootstrap()} onTask={incoming => { applyTask(incoming); setPage('tasks') }} />}
+          {page === 'settings' && <MaintenancePanel language={language} busy={working || !!activeTask} entry={selected} onChanged={() => void loadBootstrap()} onTask={incoming => { applyTask(incoming); setProgressVisible(true) }} />}
         </>}
     </main>
 
+    {task && !modal && !pendingCancel && <ProgressDialog task={task} language={language} visible={progressVisible} onVisibility={setProgressVisible} onCancel={() => setPendingCancel(task)} onLogs={() => { setPage('logs'); setLogSource('game'); setProgressVisible(false) }} />}
     {modal === 'create' && <CreateModal t={t} versions={versions} versionsLoading={versionsLoading} versionId={versionId} setVersionId={chooseVersion} versionKind={versionKind} setVersionKind={setVersionKind} instanceId={instanceId} setInstanceId={setInstanceId} shared={shared} setShared={setShared} loader={loader} changeLoader={changeLoader} loaderLoading={loaderLoading} loaderVersions={loaderVersions} loaderVersion={loaderVersion} setLoaderVersion={setLoaderVersion} working={working || !!activeTask} close={() => setModal(null)} submit={installInstance} />}
     {modal === 'import' && <ImportModal language={language} updateExisting={updateExisting} setUpdateExisting={setUpdateExisting} t={t} preview={importPreview} inspect={inspectImport} id={importId} setId={setImportId} includeOptional={includeOptional} setIncludeOptional={setIncludeOptional} replaceModified={replaceModified} setReplaceModified={setReplaceModified} allowedHosts={allowedHosts} setAllowedHosts={setAllowedHosts} manualHosts={manualHosts} setManualHosts={setManualHosts} working={working || !!activeTask} close={() => setModal(null)} submit={importInstance} />}
     {pendingCancel && <ConfirmDialog t={t} task={pendingCancel} working={working} cancel={() => setPendingCancel(null)} confirm={confirmCancel} />}
@@ -592,14 +601,13 @@ function SetupPage({ t, bootstrap, working, chooseRoot, initializeRoot }: { t: R
   </section>
 }
 
-function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter, setQuery, setSelectedKey, openCreate, openImport, launchForm, setLaunchForm, launch, activeTask, working, accountListing, loadAccounts }: {
+function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter, setQuery, setSelectedKey, openCreate, openImport, launchForm, setLaunchForm, launch, activeTask, working, accountListing, selectAccount, openAccounts }: {
   t: ReturnType<typeof getMessages>; entries: LibraryEntry[]; selected: LibraryEntry | null; bootstrap: Bootstrap; filter: Filter; query: string; setFilter: (value: Filter) => void; setQuery: (value: string) => void; setSelectedKey: (value: string) => void;
-  openCreate: () => void; openImport: () => void; launchForm: LaunchForm; setLaunchForm: (form: LaunchForm) => void; launch: (event: FormEvent) => void; activeTask: boolean; working: boolean; accountListing: AccountListing; loadAccounts: () => void
+  openCreate: () => void; openImport: () => void; launchForm: LaunchForm; setLaunchForm: (form: LaunchForm) => void; launch: (event: FormEvent) => void; activeTask: boolean; working: boolean; accountListing: AccountListing; selectAccount: (id: string) => void; openAccounts: () => void
 }) {
-  const tIdentity = launchForm.identity
   return <>
     <section className="hero"><div className="hero-copy"><div className="eyebrow">{t.welcome}</div><h1>{t.heading}</h1><p>{t.subheading}</p></div><Landscape/></section>
-    <div className="section-heading"><div><h2>{t.instances}</h2><p>{bootstrap.entries.length} · {bootstrap.root_exists ? t.rootExists : t.rootDoesNotExist}</p></div><div className="heading-actions"><button className="button secondary" onClick={openImport} disabled={working || activeTask}>{t.importPack}</button><button className="button primary" onClick={openCreate} disabled={working || activeTask}>＋ {t.createInstance}</button></div></div>
+    <div className="section-heading"><div><h2>{t.instances} ({bootstrap.entries.length})</h2></div><div className="heading-actions"><button className="button secondary" onClick={openImport} disabled={working || activeTask}>{t.importPack}</button><button className="button primary" onClick={openCreate} disabled={working || activeTask}>＋ {t.createInstance}</button></div></div>
     <div className="library-layout">
       <section className="library-list" aria-label={t.instances}>
         <label className="search-field"><Icon name="search"/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={t.search}/></label>
@@ -614,10 +622,10 @@ function LibraryPage({ t, entries, selected, bootstrap, filter, query, setFilter
           <dl className="metadata"><Meta label={t.id} value={selected.id}/><Meta label={t.gameVersion} value={selected.minecraft}/><Meta label={t.loader} value={selected.loader ?? 'Vanilla'}/><Meta label={t.kind} value={selected.kind === 'managed' ? t.managed : t.vanilla}/></dl>
           <div className="path-box"><span>{t.gameDirectory}</span><code title={selected.game_directory}>{selected.game_directory}</code></div>
           <form className="launch-form" onSubmit={launch}>
-            <div className="identity-options"><label><input type="radio" name="identity" checked={tIdentity === 'offline'} onChange={() => setLaunchForm({ ...launchForm, identity: 'offline' })}/>{t.offlineIdentity}</label><label><input type="radio" name="identity" checked={tIdentity === 'microsoft'} onChange={() => { setLaunchForm({ ...launchForm, identity: 'microsoft' }); loadAccounts() }}/>{t.microsoftLabel}</label></div>
-            {tIdentity === 'offline' ? <label className="field"><span>{t.username}</span><input autoComplete="off" value={launchForm.username} onChange={event => setLaunchForm({ ...launchForm, username: event.target.value })}/></label> : <label className="field"><span>{t.selectAccount}</span><select value={launchForm.accountId} onChange={event => setLaunchForm({ ...launchForm, accountId: event.target.value })}><option value="">{t.selectAccount}</option>{accountListing.accounts.map(account => <option key={account.id} value={account.id}>{account.username} · {account.account_type}</option>)}</select></label>}
+            <label className="field"><span>{t.account}</span><select value={launchForm.accountId} onChange={event => selectAccount(event.target.value)} disabled={working || activeTask}><option value="">{t.selectAccount}</option>{accountListing.accounts.map(account => <option key={account.id} value={account.id}>{account.username} · {account.account_type === 'offline' ? t.offlineIdentity : 'Microsoft'}</option>)}</select></label>
+            <button className="text-button" type="button" onClick={openAccounts}>{t.manageAccounts}</button>
             <details className="launch-options"><summary>{t.launchOptions}</summary><div className="launch-options-body"><label className="field"><span>{t.javaPath}</span><input value={launchForm.java} onChange={event => setLaunchForm({ ...launchForm, java: event.target.value })}/></label><label className="field"><span>{t.memory}</span><input inputMode="numeric" type="number" min="256" max="131072" step="1" value={launchForm.memory} onChange={event => setLaunchForm({ ...launchForm, memory: event.target.value })}/></label><label className="check-row"><input type="checkbox" checked={launchForm.autoInstallJava} onChange={event => setLaunchForm({ ...launchForm, autoInstallJava: event.target.checked })}/>{t.autoInstallJava}</label><label className="check-row"><input type="checkbox" checked={launchForm.dryRun} onChange={event => setLaunchForm({ ...launchForm, dryRun: event.target.checked })}/>{t.dryRun}</label></div></details>
-            <button className="button primary launch-button" disabled={working || activeTask || (tIdentity === 'microsoft' && !launchForm.accountId)}>{working ? t.starting : t.launchGame}</button>
+            <button className="button primary launch-button" disabled={working || activeTask || !launchForm.accountId}>{working ? t.starting : t.launchGame}</button>
           </form>
         </> : <div className="empty-detail"><div className="empty-detail-mark">✧</div><h2>{t.empty}</h2><p>{t.emptyHint}</p></div>}
       </section>
@@ -668,13 +676,12 @@ function ImportModal({ language, updateExisting, setUpdateExisting, t, preview, 
     const value = summaryString(summary, key)
     return value ? [{ key, value }] : []
   })
-  const rawSummary = JSON.stringify(preview?.summary, null, 2) ?? 'null'
   return <ModalFrame closeLabel={t.close} title={t.importPack} close={close}>
     <form className="modal-form" onSubmit={submit}>
       {!preview ? <div className="picker-state"><p>{t.inspectPack}</p><button type="button" className="button secondary" onClick={inspect}>{t.inspectPack}</button></div> : <>
         <div className="path-box"><span>{t.archive}</span><code title={preview.path}>{preview.path}</code></div>
         <label className="field"><span>{t.name}</span><input required value={id} onChange={event => setId(event.target.value)}/></label>
-        <section className="summary-box"><strong>{t.packSummary}</strong>{shortSummary.map(item => <Meta key={item.key} label={item.key} value={item.value}/>)}<details><summary>{t.rawSummary}</summary><pre>{rawSummary.slice(0, 8000)}</pre></details></section>
+        <section className="summary-box"><strong>{t.packSummary}</strong>{shortSummary.map(item => <Meta key={item.key} label={item.key} value={item.value}/>)}<details><summary>{t.rawSummary}</summary><ResultView value={preview?.summary} language={language}/></details></section>
         <label className="check-row"><input type="checkbox" checked={includeOptional} onChange={event => setIncludeOptional(event.target.checked)}/>{t.includeOptional}</label>
         <label className="check-row"><input type="checkbox" checked={updateExisting} onChange={event => setUpdateExisting(event.target.checked)}/>{language==='zh-CN'?'更新已有实例（默认新建；更新前会确认）':'Update an existing instance (creates new by default; confirmation required)'}</label>
         <label className="check-row"><input type="checkbox" checked={replaceModified} onChange={event => setReplaceModified(event.target.checked)}/>{t.replaceModified}</label>
@@ -686,43 +693,6 @@ function ImportModal({ language, updateExisting, setUpdateExisting, t, preview, 
     </form>
   </ModalFrame>
 }
-
-function AccountsPage({ t, listing, storage, working, clientId, setClientId, openBrowser, setOpenBrowser, refresh, select, logout, refreshAccount, checkStorage, signIn, activeTask, task, openVerification }: {
-  t: ReturnType<typeof getMessages>; listing: AccountListing; storage: AccountStorage | null; working: boolean; clientId: string; setClientId: (value: string) => void; openBrowser: boolean; setOpenBrowser: (value: boolean) => void; refresh: () => void; select: (id: string) => void; logout: (id: string) => void; refreshAccount: (id: string) => void; checkStorage: () => void; signIn: (event: FormEvent) => void; activeTask: boolean; task: TaskSnapshot | null; openVerification: (taskId: number) => void
-}) {
-  return <>
-    <PageHeading eyebrow={t.accounts} title={t.accounts} description={t.microsoftLabel}/>
-    <section className="accounts-panel"><div className="panel-heading"><div><h2>{t.account}</h2><p>{t.microsoftLabel}</p></div><button className="button secondary" onClick={refresh} disabled={working}>{t.refreshLogs}</button></div>
-      {listing.accounts.length === 0 ? <p className="muted-copy">{t.noAccounts}</p> : <div className="account-list">{listing.accounts.map(account => <article className={`account-card${listing.selected === account.id ? ' selected' : ''}`} key={account.id}><div className="account-avatar">{account.username.slice(0, 1).toLocaleUpperCase()}</div><div className="account-main"><strong>{account.username}</strong><span>{account.account_type} · {account.uuid}</span>{listing.selected === account.id && <small>{t.selectedAccount}</small>}</div><div className="account-actions"><button className="button secondary" onClick={() => select(account.id)} disabled={working || activeTask || listing.selected === account.id}>{t.useAccount}</button><button className="button secondary" onClick={() => refreshAccount(account.id)} disabled={working || activeTask}>{t.refreshAccount}</button><button className="button danger" onClick={() => logout(account.id)} disabled={working || activeTask}>{t.logout}</button></div></article>)}</div>}
-    </section>
-    <section className="accounts-panel sign-in-panel"><div className="panel-heading"><div><h2>{t.addMicrosoft}</h2><p className="experimental-label">{t.microsoftLabel}</p></div></div>
-      <div className="storage-check"><span>{storage ? storage.available ? t.secureStorageReady : t.secureStorageUnavailable : t.storageUnknown}</span><button className="text-button" onClick={checkStorage} disabled={working}>{t.checkStorage}</button></div>
-      <form className="modal-form" onSubmit={signIn}><label className="field"><span>{t.clientId}</span><input value={clientId} onChange={event => setClientId(event.target.value)} autoComplete="off"/></label><label className="check-row"><input type="checkbox" checked={openBrowser} onChange={event => setOpenBrowser(event.target.checked)}/>{t.openBrowser}</label><button className="button primary" disabled={working || activeTask}>{working ? t.starting : t.signIn}</button></form>
-    </section>
-    {task?.kind === 'login' && task.state === 'running' && task.authorization && <section className="authorization-card"><strong>{t.userCode}</strong><code>{task.authorization.user_code}</code><span>{t.verification}: {task.authorization.verification_uri}</span><span>{task.authorization.expires_in}s</span><button className="button secondary" onClick={() => openVerification(task.id)} disabled={working}>{t.openVerification}</button></section>}
-  </>
-}
-
-function TasksPage({ t, task, history, selectedHistory, selectHistory, working, requestCancel, openVerification }: { t: ReturnType<typeof getMessages>; task: TaskSnapshot | null; history: TaskSnapshot[]; selectedHistory: TaskSnapshot | null; selectHistory: (id: number | null) => void; working: boolean; requestCancel: (task: TaskSnapshot) => void; openVerification: (taskId: number) => void }) {
-  const active = taskIsActive(task)
-  const focus = active ? task : selectedHistory ?? task
-  const progress = focus ? taskProgress(focus) : null
-  const logs = focus?.logs.slice(-100) ?? []
-  const prepared = asRecord(asRecord(focus?.result)?.prepared)
-  return <>
-    <PageHeading eyebrow={t.tasks} title={t.taskIntro} description={t.noTaskCopy}/>
-    <section className="task-panel">
-      <div className="task-panel-head"><div className="task-glyph"><Icon name="tasks"/></div><div className="task-title"><strong>{focus ? `${focus.kind} · ${t.state[focus.state]}` : t.noTask}</strong><span>{focus ? `#${focus.id} · ${focus.phase}` : t.noTaskCopy}</span></div>{active && task && <button className="button danger" onClick={() => requestCancel(task)} disabled={working || task.state === 'cancelling' || task.cancellable === false}>{task.kind === 'launch' ? t.stopGameTitle : t.cancel}</button>}</div>
-      {focus && <div className="task-progress"><div className="progress-label"><span>{t.progress}: {progress === null ? t.totalUnknown : `${Math.round(progress)}%`}</span><span>{focus.total === null ? t.totalUnknown : `${focus.completed.toLocaleString()} / ${focus.total.toLocaleString()}`}</span></div>{progress !== null && <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }}/></div>}{focus.error && <p className="task-error">{focus.error_code ? `${focus.error_code}: ` : ''}{focus.error}</p>}{focus.pid !== null && <p className="task-meta">{t.pid}: {focus.pid}</p>}{focus.authorization && <div className="authorization-inline"><strong>{t.userCode}: {focus.authorization.user_code}</strong><button className="button secondary" onClick={() => { void navigator.clipboard.writeText(focus.authorization?.user_code ?? '').catch(() => window.alert(t.userCode + ': ' + (focus.authorization?.user_code ?? ''))) }}>{t.userCode} ⧉</button><span>{t.verification}: {focus.authorization.verification_uri} · {focus.authorization.expires_in}s</span><button className="button secondary" onClick={() => openVerification(focus.id)} disabled={working || focus.kind !== 'login' || focus.state !== 'running'}>{t.openVerification}</button></div>}</div>}
-      {prepared && <section className="prepared-plan"><strong>{t.dryRun}</strong><pre>{JSON.stringify(redactSensitive(prepared), null, 2)}</pre></section>}
-      {focus && focus.result !== null && !prepared && <details className="task-result"><summary>{t.result}</summary><pre>{JSON.stringify(redactSensitive(focus.result), null, 2)}</pre></details>}
-      {focus && <div className="log-wrap"><div className="log-heading"><strong>{t.logHeading}</strong><span>{logs.length} / 100</span></div><pre className="log-view" tabIndex={0} aria-label={t.logHeading}>{logs.length ? logs.join('\n') : t.noLogs}</pre></div>}
-    </section>
-    <section className="history-panel"><div className="panel-heading"><h2>{t.taskHistory}</h2><span>{history.length} / 8</span></div>{history.length === 0 ? <p className="muted-copy">{t.noHistory}</p> : <div className="history-list">{history.map(item => <button key={item.id} className={`history-row${selectedHistoryId(item, selectedHistory) ? ' selected' : ''}`} onClick={() => selectHistory(item.id)}><span>#{item.id} · {item.kind}</span><span>{item.phase}</span><span className={`state-tag state-${item.state}`}>{t.state[item.state]}</span></button>)}</div>}</section>
-  </>
-}
-
-function selectedHistoryId(item: TaskSnapshot, selected: TaskSnapshot | null) { return item.id === selected?.id }
 
 function LogsPage({ t, entries, selectedKey, setSelectedKey, runs, selectedRunId, selectRun, runLog, logLoading, refresh, liveTask, logsPaused, liveEntry }: { t: ReturnType<typeof getMessages>; entries: LibraryEntry[]; selectedKey: string | null; setSelectedKey: (key: string) => void; runs: RunRecord[]; selectedRunId: string | null; selectRun: (id: string | null) => void; runLog: string; logLoading: boolean; refresh: () => void; liveTask: TaskSnapshot | null; logsPaused: boolean; liveEntry: string | null }) {
   const selected = entries.find(entry => entry.key === selectedKey)
@@ -759,27 +729,6 @@ function SettingsPage({ t, theme, language, setTheme, setLanguage, savePreferenc
 function ConfirmDialog({ t, task, working, cancel, confirm }: { t: ReturnType<typeof getMessages>; task: TaskSnapshot; working: boolean; cancel: () => void; confirm: () => void }) {
   const isLaunch = task.kind === 'launch'
   return <ModalFrame title={isLaunch ? t.stopGameTitle : t.cancelTaskTitle} close={cancel} closeLabel={t.close} role="alertdialog" descriptionId="confirm-copy"><p id="confirm-copy">{isLaunch ? t.stopGameCopy : t.cancelTaskCopy}</p><div className="modal-actions"><button type="button" className="button secondary" onClick={cancel} disabled={working}>{t.keepRunning}</button><button type="button" className="button danger" onClick={confirm} disabled={working}>{working ? t.starting : t.confirmCancel}</button></div></ModalFrame>
-}
-
-function ModalFrame({ title, close, closeLabel, children, role = 'dialog', descriptionId }: { title: string; close: () => void; closeLabel: string; children: ReactNode; role?: 'dialog' | 'alertdialog'; descriptionId?: string }) {
-  const panel = useRef<HTMLElement>(null)
-  const closeRef = useRef(close)
-  closeRef.current = close
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = panel.current
-    const first = element?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])') ?? element?.querySelector<HTMLElement>('button:not([disabled])')
-    first?.focus()
-    return () => { if (previous?.isConnected) previous.focus() }
-  }, [])
-  return <div className="modal-backdrop" role="presentation"><section ref={panel} className="modal-card" role={role} aria-modal="true" aria-labelledby="modal-title" aria-describedby={descriptionId} onKeyDown={event => {
-    if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
-    if (event.key !== 'Tab') return
-    const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]') ?? [])].filter(element => element.offsetParent !== null)
-    const first = focusable[0], last = focusable.at(-1)
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-  }}><header><h2 id="modal-title">{title}</h2><button type="button" className="icon-button" onClick={close} aria-label={closeLabel}>×</button></header>{children}</section></div>
 }
 
 function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <div className="page-heading"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div> }

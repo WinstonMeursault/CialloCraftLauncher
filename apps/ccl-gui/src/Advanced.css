@@ -21,12 +21,22 @@
 .adv-check input { accent-color:var(--accent); }
 .adv-muted { color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
 .adv-error { padding:9px 11px; border:1px solid var(--danger); border-radius:7px; color:var(--danger); font-size:11px; overflow-wrap:anywhere; }
-.adv-result { max-width:100%; margin-top:12px; overflow:auto; border:1px solid var(--line); border-radius:7px; }
-.adv-result table { width:100%; border-collapse:collapse; font-size:10px; }
-.adv-result th,.adv-result td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
-.adv-result th { width:170px; color:var(--muted); text-transform:capitalize; }
-.adv-result tr:last-child th,.adv-result tr:last-child td { border-bottom:0; }
-.adv-result pre,.adv-json { max-width:100%; margin:0; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.adv-result { max-width:100%; margin-top:12px; padding:10px 12px; border:1px solid var(--line); border-radius:7px; }
+.adv-result-fields { display:grid; gap:0; margin:0; }
+.adv-result-fields>div { display:grid; grid-template-columns:minmax(110px,.3fr) 1fr; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); }
+.adv-result-fields>div:last-child { border-bottom:0; }
+.adv-result-fields dt { color:var(--muted); font-size:10px; }
+.adv-result-fields dd { min-width:0; margin:0; overflow-wrap:anywhere; font-size:11px; }
+.adv-result-list { display:grid; gap:7px; }
+.adv-result-item { min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
+.adv-result-summary { margin:0; font-size:11px; }
+.adv-outcome { margin-top:12px; padding:11px 12px; border:1px solid var(--line); border-radius:8px; }
+.adv-outcome-title { margin:0 0 8px; font-size:12px; font-weight:650; }
+.adv-outcome h4 { margin:10px 0 6px; font-size:11px; }
+.adv-outcome ul { margin:6px 0 0; padding-left:18px; color:var(--muted); font-size:10px; }
+.advanced-setting { margin-top:12px; padding:12px; border:1px solid var(--line); border-radius:8px; }
+.advanced-setting summary { cursor:pointer; font-size:12px; font-weight:600; }
+.advanced-setting p { margin:8px 0; color:var(--muted); }
 .adv-projects { display:grid; gap:6px; margin-top:13px; }
 .adv-projects button { display:grid; gap:4px; padding:10px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
 .adv-projects button.selected { border-color:var(--accent); background:var(--accent-soft); }
