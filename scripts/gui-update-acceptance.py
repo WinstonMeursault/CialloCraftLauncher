@@ -48,8 +48,16 @@ def wait(root, phases):
         data = json.loads(journal.read_text()) if journal.exists() else {}
         if data.get("phase") in phases:
             return data
+        if data.get("phase") in {"rolled_back", "failed"}:
+            raise RuntimeError(
+                f"Update reached unexpected terminal phase {data['phase']}; "
+                f"expected {phases}; reason: {data.get('last_error')}"
+            )
         time.sleep(.1)
-    raise RuntimeError(f"Update did not reach {phases}; last phase: {data.get('phase')}")
+    raise RuntimeError(
+        f"Update did not reach {phases}; last phase: {data.get('phase')}; "
+        f"reason: {data.get('last_error')}"
+    )
 
 
 def environment(root):

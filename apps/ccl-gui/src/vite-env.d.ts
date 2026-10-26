@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 interface ImportMetaEnv {
   readonly VITE_CCL_GUI_PERF_HARNESS?: string
 }

@@ -78,7 +78,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 ## 桌面应用
 
-Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。本文接口参考对应 v0.2.3；程序包可用状态以 GitHub Releases 为准。原始 v0.2.0 macOS 签名限制和 v0.2.1 应用包签名修正仍见使用指南。通过 Tauri 的 `invoke` API 调用命令。成功时返回类型化数据；失败时以 `{ "code": "...", "message": "..." }` 格式拒绝调用。GUI 错误码与 CLI 错误码和退出码分开。
+Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。本文接口参考对应 v0.3.0；程序包可用状态以 GitHub Releases 为准。原始 v0.2.0 macOS 签名限制和 v0.2.1 应用包签名修正仍见使用指南。通过 Tauri 的 `invoke` API 调用命令。成功时返回类型化数据；失败时以 `{ "code": "...", "message": "..." }` 格式拒绝调用。GUI 错误码与 CLI 错误码和退出码分开。
 
 常见 GUI 错误码包括 `setup_required`（确认游戏根目录）、`library_unavailable`（无法安全读取元数据）、`configuration_error`、`task_busy`、`task_not_found`、`task_not_cancellable`、`path_not_selected`、`cancelled` 和 `update_error`。命令还可能返回其他操作专属错误码；调用方应按 `code` 而不是本地化后的消息文本分支处理。
 
@@ -96,7 +96,7 @@ Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。本文接口参考�
 | `instance_query`、`instance_mutate`、`online_query`、`online_mutate` | 高级页面的实例/内容管理及来源发现/变更请求。 |
 | `choose_path`、`inspect_dropped`、`maintenance`、`update_installation`、`gui_self_update` | 原生路径选择/导入检查、设置/来源/诊断、所选 CLI 维护和当前 GUI 应用包更新。 |
 
-`bootstrap` 返回 `Bootstrap` 对象，字段为 `root`、`root_exists`、`setup_required`、`launch_defaults`、`config_path`、`preferences`、`entries`、`hidden_entries` 和 `warnings`。`launch_defaults` 包含可空的 `java`、数值型 `max_memory_mb`，以及布尔型 `auto_install_java` 和 `network_offline`。`preferences` 包含 `theme`（`system`、`light`、`dark`）及 `language`（`en`、`zh-CN`）。每个条目包含 `key`、`id`、`display_name`、`minecraft`、可空的 `loader`、`game_directory`、`launch_version` 和 `has_revision_storage`；不再提供来源分类 `kind`。key 采用不透明形式 `instance:<64 位小写十六进制字符>`，调用方应原样传回。`has_revision_storage` 表示是否支持 CCL 修订版生命周期操作，是能力标记而非所有权分类。显示名称和隐藏状态单独保存在 `.ccl/library.json`（schema 1）中。重命名只修改 `display_name`，保留 ID 和路径；隐藏会从可见游戏库移除条目，但不会删除文件；`hidden_entries` 统计已保存的隐藏记录。`library_update` 接收 `{ operation: "rename", key, name }`、`{ operation: "hide", key }` 或 `{ operation: "restore_all" }`，并返回刷新的 `Bootstrap`。重命名/隐藏仅接受当前可发现的条目；恢复后仍可发现的隐藏条目会重新显示。bootstrap 和游戏库更新不会移动或复制发现的游戏目录。警告用于报告不可用或不兼容的游戏库元数据；bootstrap 不会改写这些文件。只有在用户明确确认后，`initialize_root` 才会创建并保存建议的根目录。`select_root` 只选择已有目录。`save_preferences` 接收 `{ theme, language }`；GUI 偏好与共享核心配置分开保存。
+`bootstrap` 返回 `Bootstrap` 对象，字段为 `root`、`root_exists`、`setup_required`、`launch_defaults`、`config_path`、`preferences`、`entries`、`hidden_entries` 和 `warnings`。`launch_defaults` 包含可空的 `java`、数值型 `max_memory_mb`，以及布尔型 `auto_install_java` 和 `network_offline`。`preferences` 包含 `theme`（`system`、`light`、`dark`）及 `language`（`en`、`zh-CN`）。v0.3.0 API 额外返回 `reduce_transparency`、`reduce_motion`、可空的 `last_selected_instance` 和可空的 `background_image`。每个条目包含 `key`、`id`、`display_name`、`minecraft`、可空的 `loader`、`game_directory`、`launch_version` 和 `has_revision_storage`；不再提供来源分类 `kind`。key 采用不透明形式 `instance:<64 位小写十六进制字符>`，调用方应原样传回。`has_revision_storage` 表示是否支持 CCL 修订版生命周期操作，是能力标记而非所有权分类。显示名称和隐藏状态单独保存在 `.ccl/library.json`（schema 1）中。重命名只修改 `display_name`，保留 ID 和路径；隐藏会从可见游戏库移除条目，但不会删除文件；`hidden_entries` 统计已保存的隐藏记录。`library_update` 接收 `{ operation: "rename", key, name }`、`{ operation: "hide", key }` 或 `{ operation: "restore_all" }`，并返回刷新的 `Bootstrap`。重命名/隐藏仅接受当前可发现的条目；恢复后仍可发现的隐藏条目会重新显示。bootstrap 和游戏库更新不会移动或复制发现的游戏目录。警告用于报告不可用或不兼容的游戏库元数据；bootstrap 不会改写这些文件。只有在用户明确确认后，`initialize_root` 才会创建并保存建议的根目录。`select_root` 只选择已有目录。`save_preferences` 接收 `{ preferences: { theme, language, reduce_transparency, reduce_motion } }`；GUI 偏好与共享核心配置分开保存。
 
 `install_instance` 接收 `{ id, minecraft, loader, loader_version }`，不再定义 `shared` 字段。两个加载器字段均为 null 时，会创建带有 CCL 修订存储的原版 CCL 实例目录；同时提供两项则安装受支持的加载器配置。此创建流程不会转换或移动已发现的游戏目录。`launch_game` 接收 `{ key, identity, java, memory_mb, auto_install_java, dry_run }`；`identity` 为 `{ kind: "offline" | "microsoft", username, account_id }`。离线身份使用 `account_id: null` 和可选用户名（默认 `CCLPlayer`）；Microsoft 身份要求 `account_id`，并使用 `username: null`。key 使用上述不透明游戏库条目格式。旧 GUI 请求中的来源前缀 key 和 `shared` 字段不受支持。`inspect_import` 打开原生归档选择器，取消时返回 `null`，否则返回 `{ path, summary }`；`import_instance` 接收 `{ update_existing, id, archive, include_optional, replace_modified, allowed_hosts }`。归档必须与最近一次检查或拖入的路径一致。`select_config` 取消时返回 `null`，否则选择现有有效配置并返回刷新的 `Bootstrap`。`CCL_GUI_CONFIG_PATH` 固定配置并禁用配置选择器；`CCL_GUI_GAME_DIR` 固定根目录并禁用根目录选择。
 
@@ -132,6 +132,14 @@ GUI 中离线身份选项与持久化网络离线设置分开。`set_network_off
 
 
 发现页也可针对所选 Minecraft 版本解析可选版本和可空的加载器。选定版本会解析它自身固定的依赖图；安装复用同一解析路径。版本或目标筛选改变时，GUI 清除旧计划，并要求先生成计划再安装内容。
+
+### 外观与选择命令（v0.3.0）
+
+`save_preferences { preferences: { theme, language, reduce_transparency, reduce_motion } }` 仅保存外观并返回最新完整 `Preferences`，保留独立更新的背景和最近选择。`select_instance { key: string | null }` 只更新最近选择并返回 `Preferences`，不会启动游戏。调用方仍需在当前游戏库解析 key，失效时不能替换为另一个实例。
+
+`select_background_image {}` 打开原生 JPG/PNG/WebP 选择器；取消返回 `null`，成功返回更新后的 `Preferences`。输入限制为 32 MiB、单边 12,000 像素、总计 4,000 万像素，在内存分配限制下解码，缩放至不超过 1920×1080 并缓存为 JPEG。`reset_background_image {}` 清除背景选择并返回 `Preferences`。`background_image_data {}` 返回有大小限制的 JPEG data URL；未选择、缓存缺失或缓存文件不安全时返回 `null`。无效图片以 `invalid_background` 拒绝且不修改偏好。唯一管理文件名为 `background.jpg`，偏好不接受任意文件系统路径。渲染失败由前端回退。背景数据只在初始化/选择后读取，不轮询。
+
+原生 `ccl-archive-hover` 事件携带布尔值，用于受支持归档的拖入反馈。`ccl-archive-drop` 和 `ccl-drop-error` 保留既有载荷，松手后仍需确认导入。这些新增项仅影响 GUI 本机偏好，不修改核心配置或账户 schema。
 
 <a id="core"></a>
 

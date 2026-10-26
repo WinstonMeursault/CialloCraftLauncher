@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.2.3 release notes](#release-notes)
+- [v0.3.0 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -77,6 +77,14 @@ The Advanced page uses typed `InstanceRequest`, `OnlineQuery`, and `OnlineMutati
 Maintenance stores CurseForge keys only through the config-scoped OS vault; `CCL_CURSEFORGE_API_KEY` is an explicit override and UI/status responses never expose the value. Diagnostic raw log preview is opt-in, bounded and only best-effort redacted; exported reports stay local and require manual review before sharing. Maintenance provides distinct update controls for the installed GUI package and a selected standalone CLI. Both use stable (`main`) or dev (`dev`) channels.
 
 The launcher log is separate from game/task output. It records an allowlisted startup version/platform/commit, task start and terminal events, `GuiError` codes, and optional fixed-category navigation events. It never persists arbitrary request/response payloads, credentials, paths or JavaScript exception text. Five files rotate at 5 MiB each. The Logs page reads at most 1,000 lines/256 KiB and can export the displayed content locally; it does not upload logs. `frontend_diagnostic` accepts only fixed event categories. Debug navigation logging is off by default. The log directory is `<GUI data directory>/logs`. GUI preference files and launcher logs are separate from the shared core config and account metadata; this UI work adds no config/account schema fields.
+
+### v0.3.0 UI implementation
+
+The v0.3.0 UI splits Play from the full Library. `Home.tsx` owns the bottom-right launch cluster and searchable switcher; `Navigation.tsx` owns the overlay rail with hover/focus and an explicit touch toggle; `AppearanceSettings.tsx` edits local appearance. `App.tsx` continues to coordinate the real bootstrap, account selection, task snapshots, and launch commands. Main navigation surfaces remain mounted and own their scrolling; instance details are entered on demand. No frontend demo data is used for production state.
+
+GUI-local `Preferences` additionally persist reduced transparency/motion, the recent stable instance key, and a managed background filename. Appearance saves update only appearance fields under the existing preference lock, preserving independently changed selection/background. Wallpaper imports bound input/decode/cache sizes and produce a JPEG copy; the frontend loads its data URL once per change, with default-image fallback. The default WebP wallpaper is static and its provenance is recorded in `apps/ccl-gui/src/assets/README.en.md`. No new fields are added to core configuration or account schemas. Navigation is the only backdrop-filter surface, with opaque fallback and system/user accessibility preferences. macOS keeps native window controls/title bar; wallpaper fills the WebView content, not OS-owned window chrome. Native window minimum is 520×480; small-screen layouts stack launch controls.
+
+For final acceptance, use the exact branch commit's GUI workflow on all three supported targets, plus native visual/interaction checks on available hardware. Failed update acceptance retains isolated transaction journals and launcher logs as diagnostic artifacts; unexpected rollback reports its recorded reason immediately. Acceptance manifests use the actual `ccl-gui` Cargo package version, matching the candidate identity checked at startup. UI test bundles must have a distinct name/identifier, isolated config/data/game paths, and be stopped/unregistered/moved to Trash after use. Do not replace the user's real installation. Record performance measurement scope: system-wide GPU counters cannot attribute activity to CCL alone. Neither static images nor passing build checks establish a zero-cost blur effect.
 
 ### Build and launch the desktop application
 
@@ -321,7 +329,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.2.3 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.0 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -345,12 +353,31 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.2.3 release notes
+## v0.3.0 release notes
 
-These notes target v0.2.3 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.0 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.3
+# CialloCraftLauncher 0.3.0
+
+This release redesigns the desktop interface around continuing your current game.
+
+- Full-window static wallpaper with the current instance, account and launch controls at the bottom right; home no longer shows a permanent instance list or technical parameters.
+- Icon navigation expands as an overlay on hover or keyboard focus, with an explicit click toggle, light/dark themes, localized glass and reduced transparency/motion options.
+- Remember the recently selected instance locally. A missing selection requires choosing again rather than silently launching another instance. Unicode, spaces and long instance names remain supported.
+- Import a local JPG, PNG or WebP background into a bounded cache copy. Moving the source does not remove it; missing or corrupt images fall back to the default.
+- Open the library, instance details, downloads, accounts and settings on demand. Dependency identifiers stay in technical disclosures; online modpacks distinguish new and existing instance destinations.
+- Discard stale account/log responses, stop hidden launcher-log reads and remove dismissed terminal progress chips.
+- Match update-acceptance manifests to the actual GUI package version, preserving strict identity checks and retaining rollback diagnostics.
+
+The UI development commit passed core and desktop CI on Windows x64, macOS arm64 and Linux x86_64, including packaging, WebView readiness, successful updates, failure rollback and interrupted recovery. Native Mac checks covered themes, language, minimum windows, backgrounds, accounts and an isolated fixture process; these do not establish physical gameplay or drag testing on every platform. The stable release workflow additionally revalidates this version and verifies uploaded packages.
+
+CLI and GUI updater manifests have detached release-key signatures. Installers still lack OS publisher certificate signatures; macOS retains full ad-hoc bundle verification and is not notarized. Microsoft GUI sign-in remains temporarily unavailable, and CurseForge requires a user-supplied API key. Instance directories and player files are not migrated.
+<!-- release-notes:end -->
+
+### v0.2.3 historical release notes
+
+#### CialloCraftLauncher 0.2.3
 
 This patch fixes launching existing Forge modpacks and preserves each profile’s runtime data.
 
@@ -363,7 +390,6 @@ This patch fixes launching existing Forge modpacks and preserves each profile’
 Validation before publication: 378 workspace tests passed with 9 ignored, desktop-feature compilation and warnings-denied Clippy passed. Four real macOS Forge profiles passed online and offline launch preparation (eight successful preparations). These checks did not enter a game world or establish successful Minecraft main-menu startup for every profile. The stable workflow additionally validates and packages Windows x64, macOS arm64 and Linux x64.
 
 CLI and GUI updater manifests have detached release-key signatures. Installers do not have OS publisher certificate signatures; the macOS bundle retains ad-hoc signature verification. Microsoft login availability and user-supplied CurseForge key requirements are unchanged.
-<!-- release-notes:end -->
 
 ### v0.2.2 historical release notes
 
@@ -401,7 +427,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.3; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.0; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

@@ -42,7 +42,7 @@ ccl logs --lines 100
 
 ## 桌面应用与自更新
 
-本指南对应 v0.2.3，包含 CLI、核心、桌面应用和签名清单更新器。程序包可用状态请查看 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
+本指南对应 v0.3.0，包含 CLI、核心、桌面应用和签名清单更新器。程序包可用状态请查看 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
 
 桌面程序会先让你确认游戏目录，再创建缺失的目录。游戏库会将所选根目录下发现的 Minecraft 版本与已有 CCL 游戏目录统一显示，不会移动或转换这些目录。程序可以安装版本和加载器配置、导入受支持的本地归档、使用已保存的离线账户启动游戏，并查看实时或已保存的游戏日志。可添加、选择和移除多个离线账户；这些本地玩家名不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用，实验性的 CLI 登录流程仍保留。外观和语言在“设置”中配置，完成初始目录设置前也可打开设置。公开的 Microsoft 客户端 ID 仅在“设置 → 高级设置”中配置（`auth.microsoft_client_id`）。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
 
@@ -56,11 +56,23 @@ ccl logs --lines 100
 
 健康检查只有在勾选对应选项后才会执行网络或临时写入探测。诊断导出保存在本地。原始日志预览必须明确启用，尽管会尽力脱敏，仍可能含私人信息；分享前请检查文件。CLI 更新器作用于你选定目录中的独立 CLI；GUI 更新控制只作用于当前安装的桌面程序包。两者均支持 stable（`main`）和 dev（`dev`）渠道，并会保存所选渠道。
 
+### v0.3.0 界面
+
+CCL v0.3.0 默认打开“开始游戏”。静态图片铺满内容窗口，并延伸到毛玻璃导航栏背后。当前实例、账户选择和启动按钮位于右下角。程序通过稳定的游戏库 key 记住所选实例；若该实例不可用，需明确选择另一个。重新打开 CCL 不会自动启动游戏。尚无保存选择时也需要先选择实例。“切换实例”打开可搜索选择器，“游戏库”显示完整列表。点击列表行返回启动页，更多按钮进入管理和会话启动选项。这里的 Java/内存覆盖仅用于本次启动器会话；共享默认值在“设置 → 游戏与 Java”保存。
+
+导航默认显示图标，鼠标悬停或键盘聚焦时展开文字。CCL 按钮可供触摸操作明确展开。展开覆盖页面，不挤动内容。管理页面采用实色阅读区，切换导航时保留各页滚动位置。实例名称支持 Unicode 和空格，玩家名限制保持不变。
+
+设置分为外观、游戏与 Java、下载与网络、更新、高级与诊断、关于。外观包含跟随系统/浅色/深色、中英文、减少透明效果和减少动态效果。外观选项需明确保存，背景更改立即保存。可选择不超过 32 MiB 的静态 JPG、PNG、WebP，单边不超过 12,000 像素，总计不超过 4,000 万像素。CCL 在内存分配限制下解码，缩放至不超过 1920×1080，并将 JPEG 副本保存到 GUI 数据目录的 `background.jpg`。移动原图不会影响背景。缓存图片损坏或缺失时回退到默认背景；“恢复默认”清除选择。背景居中裁切填充，边缘可能因窗口比例被裁掉。不提供动态背景。随附原创生成背景的来源记录保存在 GUI 资源目录。
+
+毛玻璃仅作用于导航。“减少透明效果”使用实色栏；不支持模糊或系统要求减少透明时也采用实色回退。“减少动态效果”关闭过渡与不定进度动画，同时遵循系统减少动态设置。静态背景仍占用图片内存，模糊性能取决于平台；此设计不代表 GPU 零成本。
+
+下载页直接显示来源、类型和搜索，将版本/加载器/数量限制收进高级选项。选择项目后才显示版本、依赖和安装操作。在线整合包需明确选择“创建新实例”并输入名称，或“更新已有实例”并选择游戏库显示名称；内部自动解析既有 ID，新建名称与已有实例冲突时界面禁止安装。依赖的技术标识收在折叠详情中。既有整合包导入确认、进度、取消与日志操作均保留。收起的进度在启动页右上角、管理页右下角重新打开；终态进度关闭后不保留永久入口。GUI 的 Microsoft 登录仍暂不可用，客户端 ID 位于“高级与诊断 → 身份验证设置”。本版本不包含看板娘素材。
+
 <a id="installation"></a>
 
 ## 安装与前置条件
 
-从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。本文档对应 v0.2.3；已发布程序包的可用状态以 GitHub Releases 为准。开发版另行发布。CLI 归档名称如下：
+从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。本文档对应 v0.3.0；已发布程序包的可用状态以 GitHub Releases 为准。开发版另行发布。CLI 归档名称如下：
 
 | 系统 | 归档文件 |
 | --- | --- |
@@ -91,7 +103,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。v0.2.3 目标版本也包含桌面应用；dev 预发行版可能包含较新的 GUI 改动。更新完整性说明见[启动器更新](#maintenance)。
+解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。v0.3.0 目标版本也包含桌面应用；dev 预发行版可能包含较新的 GUI 改动。更新完整性说明见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
@@ -102,7 +114,7 @@ Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS �
 
 macOS 构建配置会对完整 `.app`（包括 Info.plist 和资源）进行 ad-hoc 临时签名。这不是 Developer ID 发布者签名，也不是 Apple 公证。安装可信程序包后，macOS 仍可能要求通过**系统设置 → 隐私与安全性 → 仍要打开**逐应用批准，详见 [Apple 说明](https://support.apple.com/en-us/102445)。更新清单签名不能替代这项操作系统检查。
 
-原始 v0.2.0 macOS DMG 与更新归档只有不完整的链接器签名，可能显示“App 已损坏”。下载校验和匹配不会修复此签名。v0.2.1 构建配置已修正此问题，打包时会验证完整应用包、DMG 和更新归档；现有 v0.2.0 资产不会更改。安装 v0.2.1 或更高版本可获取修正后的程序包；v0.2.3 目标版本保留此修正。对于已下载且已按该发行版校验和验证的副本，可用以下命令修复本地应用包签名；请替换为实际安装路径。这只会创建本地 ad-hoc 签名，不会建立 Apple 发布者信任。若验证失败，请停止并替换该副本。随后如系统提供逐应用批准，请按 Apple 说明操作；不要全局关闭 Gatekeeper。
+原始 v0.2.0 macOS DMG 与更新归档只有不完整的链接器签名，可能显示“App 已损坏”。下载校验和匹配不会修复此签名。v0.2.1 构建配置已修正此问题，打包时会验证完整应用包、DMG 和更新归档；现有 v0.2.0 资产不会更改。安装 v0.2.1 或更高版本可获取修正后的程序包；v0.3.0 目标版本保留此修正。对于已下载且已按该发行版校验和验证的副本，可用以下命令修复本地应用包签名；请替换为实际安装路径。这只会创建本地 ad-hoc 签名，不会建立 Apple 发布者信任。若验证失败，请停止并替换该副本。随后如系统提供逐应用批准，请按 Apple 说明操作；不要全局关闭 Gatekeeper。
 
 ```sh
 codesign --force --sign - "/Applications/CialloCraftLauncher.app"
@@ -460,9 +472,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## 启动器更新与诊断
 
-v0.2.1 加入 GUI 流程修正、macOS 应用包密封和签名清单更新器；v0.2.2 增加统一游戏库及仅修改元数据的游戏库操作；v0.2.3 修复已有 Forge 配置的启动准备和运行目录。早于签名清单协议的 CLI 程序仍需手动引导更新。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
+v0.2.1 加入 GUI 流程修正、macOS 应用包密封和签名清单更新器；v0.2.2 增加统一游戏库及仅修改元数据的游戏库操作；v0.2.3 修复已有 Forge 配置的启动准备和运行目录；v0.3.0 加入背景首页、覆盖式导航、最近实例及本机外观设置。早于签名清单协议的 CLI 程序仍需手动引导更新。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
 
-只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 `main`，本指南的目标版本为 v0.2.3；程序包可用状态以 GitHub Releases 为准。dev 渠道跟随 `dev`，可包含尚未进入稳定版的较新 GUI 改动。稳定版使用 `v0.2.3` 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
+只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 `main`，本指南的目标版本为 v0.3.0；程序包可用状态以 GitHub Releases 为准。dev 渠道跟随 `dev`，可包含尚未进入稳定版的较新 GUI 改动。稳定版使用 `v0.3.0` 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
 
 ```sh
 ccl update check

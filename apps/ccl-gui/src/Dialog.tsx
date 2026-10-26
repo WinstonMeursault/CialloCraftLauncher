@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 
-export function ModalFrame({ title, close, closeLabel, children, role = 'dialog', descriptionId }: { title: string; close: () => void; closeLabel: string; children: ReactNode; role?: 'dialog' | 'alertdialog'; descriptionId?: string }) {
+export function ModalFrame({ title, close, closeLabel, children, role = 'dialog', descriptionId, placement }: { title: string; close: () => void; closeLabel: string; children: ReactNode; role?: 'dialog' | 'alertdialog'; descriptionId?: string; placement?: 'switcher' }) {
   const panel = useRef<HTMLElement>(null)
   const closeRef = useRef(close)
   closeRef.current = close
@@ -11,10 +11,10 @@ export function ModalFrame({ title, close, closeLabel, children, role = 'dialog'
     first?.focus()
     return () => { if (previous?.isConnected) previous.focus() }
   }, [])
-  return <div className="modal-backdrop" role="presentation"><section ref={panel} className="modal-card" role={role} aria-modal="true" aria-labelledby="modal-title" aria-describedby={descriptionId} onKeyDown={event => {
+  return <div className={`modal-backdrop${placement ? ` ${placement}-backdrop` : ''}`} role="presentation"><section ref={panel} className="modal-card" role={role} aria-modal="true" aria-labelledby="modal-title" aria-describedby={descriptionId} onKeyDown={event => {
     if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
     if (event.key !== 'Tab') return
-    const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]') ?? [])].filter(element => element.offsetParent !== null)
+    const focusable = [...(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"], summary, a[href]') ?? [])].filter(element => element.offsetParent !== null)
     const first = focusable[0], last = focusable.at(-1)
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }

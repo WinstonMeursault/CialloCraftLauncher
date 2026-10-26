@@ -16,6 +16,7 @@ export function ProgressDialog({ task, language, visible, onVisibility, onCancel
   const phase = task.state === 'cancelling' ? (zh ? '正在安全停止…' : 'Stopping safely…')
     : task.pid !== null && active ? (zh ? '游戏正在运行' : 'Game is running')
     : active ? (stage ? stage[zh ? 1 : 2] : (zh ? '正在处理，请稍候…' : 'Working, please wait…')) : t.state[task.state]
+  if (!visible && !active) return null
   if (!visible) return <button className="operation-chip" onClick={() => onVisibility(true)}><span>{title} · {phase}</span>{active && progress !== null && <strong>{Math.round(progress)}%</strong>}</button>
   const result = task.result && typeof task.result === 'object' ? task.result as Record<string, unknown> : null
   const prepared = result?.prepared
