@@ -1256,6 +1256,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let request = LaunchRequest {
                 game_directory,
+                working_directory: None,
                 version,
                 username: launch_username,
                 java: java.clone().or(config.launch.java.clone()),

@@ -137,6 +137,8 @@ impl OfflineAccount {
 #[derive(Clone, Debug)]
 pub struct PlanOptions {
     pub game_directory: PathBuf,
+    /// Optional profile-specific game directory and process working directory.
+    pub working_directory: Option<PathBuf>,
     pub version: String,
     pub natives_directory: PathBuf,
     pub java_executable: PathBuf,
@@ -342,8 +344,28 @@ fn build_plan(
     } else {
         ":"
     });
-    let mut values = placeholders(metadata, options, &game, &natives, &cp);
+    let working_directory = match &options.working_directory {
+        Some(path) => {
+            let path = absolute(path)?;
+            check_exists(&path)?;
+            if !path.is_dir() {
+                return Err(PlanError::MissingPath(path));
+            }
+            path
+        }
+        None => game.clone(),
+    };
+    let mut values = placeholders(metadata, options, &game, &working_directory, &natives, &cp);
     values.insert("primary_jar".into(), path_text(&client_path));
+    // HMCL-normalized Forge manifests use the client JAR basename in ignoreList.
+    values.insert(
+        "primary_jar_name".into(),
+        client_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
     values.insert(
         "file_separator".into(),
         if options.platform.os == "windows" {
@@ -440,7 +462,7 @@ fn build_plan(
                 "--version".into(),
                 options.version.clone(),
                 "--gameDir".into(),
-                path_text(&game),
+                path_text(&working_directory),
                 "--assetsDir".into(),
                 values["assets_root"].clone(),
                 "--uuid".into(),
@@ -463,7 +485,7 @@ fn build_plan(
     Ok(LaunchPlan {
         executable,
         arguments: args,
-        working_directory: game,
+        working_directory,
         sensitive_values: identity
             .map(|i| vec![i.access_token.clone()])
             .unwrap_or_default(),
@@ -492,10 +514,10 @@ fn placeholders(
     m: &VersionMetadata,
     o: &PlanOptions,
     game: &Path,
+    working_directory: &Path,
     natives: &Path,
     cp: &str,
 ) -> HashMap<String, String> {
-    let root = path_text(game);
     let assets = path_text(&game.join("assets"));
     HashMap::from([
         ("auth_player_name".into(), o.account.username.clone()),
@@ -511,7 +533,7 @@ fn placeholders(
             "version_type".into(),
             m.version_type.clone().unwrap_or_else(|| "release".into()),
         ),
-        ("game_directory".into(), root.clone()),
+        ("game_directory".into(), path_text(working_directory)),
         ("assets_root".into(), assets),
         (
             "game_assets".into(),
@@ -744,6 +766,7 @@ mod tests {
         fs::write(&java, b"java").unwrap();
         let options = PlanOptions {
             game_directory: game,
+            working_directory: None,
             version: "v1".into(),
             natives_directory: root.join("natives with spaces"),
             java_executable: java,
@@ -822,6 +845,112 @@ mod tests {
         assert_eq!(p.arguments[main + 1], "--username");
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn profile_directory_does_not_change_resource_roots() {
+        let (root, mut options) = setup();
+        let profile = root.join("HMCL 配置 with spaces");
+        fs::create_dir_all(&profile).unwrap();
+        options.working_directory = Some(profile.clone());
+        let lib = r#"{"name":"a:b:1","downloads":{"artifact":{"path":"a/b/1/b-1.jar"}}}"#;
+        let metadata = VersionMetadata::parse(&format!(r#"{{"id":"v1","mainClass":"example.Main","minecraftArguments":"--gameDir ${{game_directory}} --assetsDir ${{assets_root}}","downloads":{{"client":{{}}}},"libraries":[{lib}]}}"#)).unwrap();
+        let plan = build_launch_plan(&metadata, &options).unwrap();
+        assert_eq!(plan.working_directory, profile.canonicalize().unwrap());
+        let game_dir = plan
+            .arguments
+            .iter()
+            .position(|arg| arg == "--gameDir")
+            .unwrap()
+            + 1;
+        assert_eq!(
+            Path::new(&plan.arguments[game_dir]),
+            profile.canonicalize().unwrap()
+        );
+        let assets_dir = plan
+            .arguments
+            .iter()
+            .position(|arg| arg == "--assetsDir")
+            .unwrap()
+            + 1;
+        assert_eq!(
+            Path::new(&plan.arguments[assets_dir]),
+            options
+                .game_directory
+                .canonicalize()
+                .unwrap()
+                .join("assets")
+        );
+        let cp = &plan.arguments[plan.arguments.iter().position(|arg| arg == "-cp").unwrap() + 1];
+        assert!(
+            cp.contains(
+                &options
+                    .game_directory
+                    .canonicalize()
+                    .unwrap()
+                    .join("libraries/a/b/1/b-1.jar")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+        let fallback =
+            VersionMetadata::parse(r#"{"id":"v1","mainClass":"Main","downloads":{"client":{}}}"#)
+                .unwrap();
+        let fallback = build_launch_plan(&fallback, &options).unwrap();
+        let game_dir = fallback
+            .arguments
+            .iter()
+            .position(|arg| arg == "--gameDir")
+            .unwrap()
+            + 1;
+        assert_eq!(
+            Path::new(&fallback.arguments[game_dir]),
+            profile.canonicalize().unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn forge_primary_jar_placeholders_follow_the_client_jar_override() {
+        let (root, mut options) = setup();
+        let client = "原版 client";
+        let directory = options.game_directory.join("versions").join(client);
+        fs::create_dir_all(&directory).unwrap();
+        let jar = directory.join(format!("{client}.jar"));
+        fs::write(&jar, b"jar").unwrap();
+        let metadata = VersionMetadata::parse(
+            &serde_json::json!({
+                "id": "v1", "jar": client,
+                "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+                "downloads": {"client": {}},
+                "arguments": {"jvm": [
+                    "-DignoreList=bootstraplauncher,${primary_jar_name}",
+                    "-DlegacyClassPath=${primary_jar}",
+                    "-Dseparator=${file_separator}"
+                ]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (os, separator) in [("linux", "/"), ("osx", "/"), ("windows", "\\")] {
+            options.platform.os = os.into();
+            let plan = build_launch_plan(&metadata, &options).unwrap();
+            assert!(
+                plan.arguments
+                    .contains(&format!("-DignoreList=bootstraplauncher,{client}.jar"))
+            );
+            assert!(plan.arguments.contains(&format!(
+                "-DlegacyClassPath={}",
+                path_text(&jar.canonicalize().unwrap())
+            )));
+            assert!(plan.arguments.contains(&format!("-Dseparator={separator}")));
+            assert!(
+                !plan
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("${"))
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn windows_classpath_separator_and_unknown_placeholder() {
         let (root, mut options) = setup();

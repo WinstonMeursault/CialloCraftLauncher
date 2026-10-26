@@ -1119,6 +1119,7 @@ mod tests {
         let service = crate::launch::LaunchService::new(local_config.clone());
         let request = crate::launch::LaunchRequest {
             game_directory: dir.clone(),
+            working_directory: None,
             version: "runtime-cache-test".into(),
             username: "RuntimeCacheTest".into(),
             java: None,

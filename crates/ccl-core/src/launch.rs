@@ -66,6 +66,8 @@ pub struct InstalledVersion {
 #[derive(Debug, Clone)]
 pub struct LaunchRequest {
     pub game_directory: PathBuf,
+    /// Optional profile-specific game directory and process working directory.
+    pub working_directory: Option<PathBuf>,
     pub version: String,
     pub username: String,
     pub java: Option<PathBuf>,
@@ -192,7 +194,7 @@ impl LaunchService {
         )?;
         let root = fs::canonicalize(&request.game_directory)
             .map_err(|source| io(&request.game_directory, source))?;
-        let metadata = load_installed_metadata(&root, &request.version)?;
+        let mut metadata = load_installed_metadata(&root, &request.version)?;
         let runtime = match java::detect_java(request.java.as_deref(), required_java(&metadata)) {
             Ok(runtime) => runtime,
             Err(error @ java::JavaError::NoCompatibleRuntime(_)) => {
@@ -229,6 +231,8 @@ impl LaunchService {
                 runtime.architecture, platform.arch
             )));
         }
+        self.prepare_asset_index(&root, &mut metadata, &context)
+            .await?;
         verify_installation(&root, &request.version, &metadata, &platform)?;
         let logging_argument = self.prepare_logging(&root, &metadata, &context).await?;
         prepare_asset_projection(&root, &metadata)?;
@@ -241,8 +245,13 @@ impl LaunchService {
             let _ = fs::remove_dir_all(&natives_directory);
             return Err(error);
         }
+        let working_directory = match &request.working_directory {
+            Some(path) => Some(path.clone()),
+            None => Some(installed_working_directory(&root, &request.version)?),
+        };
         let options = PlanOptions {
             game_directory: root,
+            working_directory,
             version: request.version.clone(),
             natives_directory: natives_directory.clone(),
             java_executable: runtime.executable.clone(),
@@ -269,6 +278,53 @@ impl LaunchService {
                 Err(error.into())
             }
         }
+    }
+
+    async fn prepare_asset_index(
+        &self,
+        root: &Path,
+        metadata: &mut VersionMetadata,
+        context: &Option<TaskContext>,
+    ) -> Result<(), LaunchError> {
+        let Some(index) = metadata.asset_index.as_mut() else {
+            return Ok(());
+        };
+        let id = index
+            .id
+            .as_deref()
+            .ok_or_else(|| LaunchError::Invalid("asset index has no ID".into()))?;
+        safe_segment(id)?;
+        let path = root.join("assets/indexes").join(format!("{id}.json"));
+        if verify_file(&path, index.sha1.as_deref(), index.size).is_ok() {
+            return Ok(());
+        }
+        // Mojang can publish new content under the same index ID. Preserve the
+        // shared index for other profiles, and select this profile's exact hash.
+        let hash = index
+            .sha1
+            .as_deref()
+            .filter(|hash| hash.len() == 40 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+            .ok_or_else(|| LaunchError::Invalid("missing or invalid asset index SHA-1".into()))?;
+        let url = index
+            .url
+            .as_deref()
+            .ok_or_else(|| LaunchError::Invalid("asset index has no URL".into()))?;
+        let cache_id = format!("ccl-{}", hash.to_ascii_lowercase());
+        let path = root.join("assets/indexes").join(format!("{cache_id}.json"));
+        let mut request =
+            DownloadRequest::new(url_candidates(url, DownloadKind::File, &self.config), &path)
+                .with_sha1(hash);
+        if let Some(size) = index.size {
+            request = request.with_size(size);
+        }
+        if let Some(context) = context {
+            request = request.with_task_context(context.clone());
+        }
+        DownloadManager::new(&self.config)?
+            .download(request)
+            .await?;
+        index.id = Some(cache_id);
+        Ok(())
     }
 
     async fn prepare_logging(
@@ -335,6 +391,52 @@ impl LaunchService {
             context,
         )
         .await
+    }
+}
+
+/// Resolve the game directory used by profiles that keep saves and settings
+/// beside their version metadata. All downloaded resources remain under root.
+pub fn installed_working_directory(root: &Path, version: &str) -> Result<PathBuf, LaunchError> {
+    safe_segment(version)?;
+    let profile = root.join("versions").join(version);
+    let legacy_settings = profile.join("hmclversion.cfg");
+    if let Ok(bytes) = fs::read(&legacy_settings)
+        && let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && settings
+            .get("usesGlobal")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    {
+        let directory_type = settings.get("gameDirType").and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_i64().map(|n| n.to_string()))
+        });
+        match directory_type.as_deref() {
+            Some("ROOT_FOLDER" | "0") => return Ok(root.to_path_buf()),
+            Some("VERSION_FOLDER" | "1") => return Ok(profile),
+            Some("CUSTOM" | "2") => {
+                if let Some(directory) = settings.get("gameDir").and_then(serde_json::Value::as_str)
+                {
+                    let directory = PathBuf::from(directory);
+                    return Ok(if directory.is_absolute() {
+                        directory
+                    } else {
+                        root.join(directory)
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if ["mods", "config", "saves", "options.txt"]
+        .iter()
+        .any(|name| profile.join(name).exists())
+    {
+        Ok(profile)
+    } else {
+        Ok(root.to_path_buf())
     }
 }
 
@@ -730,6 +832,82 @@ fn unique_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn colliding_asset_index_uses_verified_hash_cache_without_replacing_shared_index() {
+        let root = root();
+        let directory = root.join("assets/indexes");
+        fs::create_dir_all(&directory).unwrap();
+        let shared = directory.join("5.json");
+        fs::write(&shared, b"other profile index").unwrap();
+        let expected = br#"{"objects":{}}"#;
+        let hash = format!("{:x}", Sha1::digest(expected));
+        let cache_id = format!("ccl-{hash}");
+        fs::write(directory.join(format!("{cache_id}.json")), expected).unwrap();
+        let mut metadata = VersionMetadata::parse(
+            &serde_json::json!({
+                "id":"fixture", "assetIndex": {"id":"5", "sha1":hash, "size":expected.len(),
+                    "url":"https://example.invalid/5.json"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let service = LaunchService::new(DownloadConfig {
+            offline: true,
+            ..Default::default()
+        });
+        service
+            .prepare_asset_index(&root, &mut metadata, &None)
+            .await
+            .unwrap();
+        assert_eq!(
+            metadata.asset_index.as_ref().unwrap().id.as_deref(),
+            Some(cache_id.as_str())
+        );
+        assert_eq!(fs::read(&shared).unwrap(), b"other profile index");
+        fs::write(directory.join(format!("{cache_id}.json")), b"corrupt").unwrap();
+        assert!(
+            service
+                .prepare_asset_index(&root, &mut metadata, &None)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(&shared).unwrap(), b"other profile index");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_layout_selects_version_directory_only_when_it_contains_game_data() {
+        let root = std::env::temp_dir().join(format!("ccl-profile-root-{}", unique_id()));
+        let profile = root.join("versions/1.20.1 Forge");
+        fs::create_dir_all(profile.join("mods")).unwrap();
+        fs::write(profile.join("options.txt"), "").unwrap();
+        assert_eq!(
+            installed_working_directory(&root, "1.20.1 Forge").unwrap(),
+            profile
+        );
+        assert_eq!(installed_working_directory(&root, "plain").unwrap(), root);
+        fs::write(
+            profile.join("hmclversion.cfg"),
+            r#"{"usesGlobal":false,"gameDirType":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            installed_working_directory(&root, "1.20.1 Forge").unwrap(),
+            root
+        );
+        fs::write(
+            profile.join("hmclversion.cfg"),
+            r#"{"usesGlobal":false,"gameDirType":1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            installed_working_directory(&root, "1.20.1 Forge").unwrap(),
+            profile
+        );
+        assert!(installed_working_directory(&root, "../outside").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     use serde_json::json;
 
     fn root() -> PathBuf {

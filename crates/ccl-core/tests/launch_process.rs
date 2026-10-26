@@ -206,6 +206,7 @@ async fn authenticated_launch_redacts_tokens_from_plans_logs_and_events() {
         &metadata,
         &PlanOptions {
             game_directory: root.clone(),
+            working_directory: None,
             version: "test".into(),
             natives_directory: root.join("natives"),
             java_executable: executable,
