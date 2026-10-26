@@ -224,7 +224,6 @@ pub fn update_library(
         ));
     }
     let catalog = LibraryCatalog::new(current.root.clone());
-    let records = catalog.records()?;
     match request {
         CatalogRequest::Rename { key, name } => {
             discover_entries(
@@ -257,10 +256,7 @@ pub fn update_library(
                         "This library entry is no longer available.",
                     )
                 })?;
-            if !records.contains_key(&key) {
-                catalog.set_display_name(&key, &entry.display_name)?;
-            }
-            catalog.hide(&key)?;
+            catalog.hide(&key, &entry.display_name)?;
         }
         CatalogRequest::RestoreAll => catalog.restore_all()?,
     }
