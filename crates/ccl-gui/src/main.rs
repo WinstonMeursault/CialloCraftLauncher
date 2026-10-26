@@ -26,6 +26,7 @@ struct DesktopState {
     operation_gate: Arc<Mutex<()>>,
     selected_archive: Arc<Mutex<Option<PathBuf>>>,
     path_grants: Arc<Mutex<std::collections::BTreeMap<String, PathBuf>>>,
+    archive_hover: AtomicBool,
     update_in_progress: AtomicBool,
     _update_process_guard: Option<std::fs::File>,
     launcher_log: Option<ccl_gui::launcher_log::LauncherLog>,
@@ -60,10 +61,67 @@ async fn save_preferences(
     let closing = state.closing.clone();
     let tasks = state.tasks.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_idle_gate(&gate, &closing, &tasks, || store.save(preferences))
+        with_idle_gate(&gate, &closing, &tasks, || {
+            store.save_appearance(preferences)
+        })
     })
     .await
     .map_err(|_| GuiError::new("worker_error", "Preferences worker stopped"))?
+}
+
+#[tauri::command]
+async fn select_instance(
+    state: State<'_, DesktopState>,
+    key: Option<String>,
+) -> Result<Preferences, GuiError> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.select_instance(key))
+        .await
+        .map_err(|_| GuiError::new("worker_error", "Preferences worker stopped"))?
+}
+
+#[tauri::command]
+async fn select_background_image(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Option<Preferences>, GuiError> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Background image", &["jpg", "jpeg", "png", "webp"])
+            .blocking_pick_file()
+            .map(|file| {
+                file.into_path()
+                    .map_err(|_| GuiError::new("invalid_path", "Choose a local image file"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|_| GuiError::new("worker_error", "File picker stopped"))??;
+    let Some(path) = selected else {
+        return Ok(None);
+    };
+    let store = state.store.clone();
+    let preferences = tauri::async_runtime::spawn_blocking(move || store.import_background(&path))
+        .await
+        .map_err(|_| GuiError::new("worker_error", "Background image worker stopped"))??;
+    Ok(Some(preferences))
+}
+
+#[tauri::command]
+async fn reset_background_image(state: State<'_, DesktopState>) -> Result<Preferences, GuiError> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.reset_background())
+        .await
+        .map_err(|_| GuiError::new("worker_error", "Background image worker stopped"))?
+}
+
+#[tauri::command]
+async fn background_image_data(state: State<'_, DesktopState>) -> Result<Option<String>, GuiError> {
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || store.background_data_url())
+        .await
+        .map_err(|_| GuiError::new("worker_error", "Background image worker stopped"))?
 }
 #[tauri::command]
 async fn select_root(
@@ -202,6 +260,7 @@ fn main() {
                 operation_gate: Arc::new(Mutex::new(())),
                 selected_archive: Arc::new(Mutex::new(None)),
                 path_grants: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+                archive_hover: AtomicBool::new(false),
                 update_in_progress: AtomicBool::new(false),
                 _update_process_guard: update_process_guard,
                 launcher_log,
@@ -211,6 +270,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             save_preferences,
+            select_instance,
+            select_background_image,
+            reset_background_image,
+            background_image_data,
             select_root,
             cancel_task,
             task_snapshot,
@@ -247,15 +310,55 @@ fn main() {
             gui_blank_baseline
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
-                && let Some(state)=window.try_state::<DesktopState>() {
-                    if paths.len()==1 {
-                        let path=&paths[0];
-                        if path.extension().and_then(|e|e.to_str()).is_some_and(|e|e.eq_ignore_ascii_case("zip")||e.eq_ignore_ascii_case("mrpack")) {
-                            state.path_grants.lock().unwrap_or_else(|e|e.into_inner()).insert("drop".into(),path.clone());
-                            let _=window.emit("ccl-archive-drop",path);
-                        } else { let _=window.emit("ccl-drop-error","Unsupported archive. Drop one .zip or .mrpack file."); }
-                    } else { let _=window.emit("ccl-drop-error","Drop one archive at a time."); }
+            if let tauri::WindowEvent::DragDrop(drag_event) = event
+                && let Some(state) = window.try_state::<DesktopState>()
+            {
+                match drag_event {
+                    tauri::DragDropEvent::Enter { paths, .. } => {
+                        let supported = paths.len() == 1
+                            && paths[0].extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                                e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("mrpack")
+                            });
+                        state.archive_hover.store(supported, Ordering::Release);
+                        if supported {
+                            let _ = window.emit("ccl-archive-hover", true);
+                        }
+                    }
+                    tauri::DragDropEvent::Over { .. } => {
+                        if state.archive_hover.load(Ordering::Acquire) {
+                            let _ = window.emit("ccl-archive-hover", true);
+                        }
+                    }
+                    tauri::DragDropEvent::Leave => {
+                        state.archive_hover.store(false, Ordering::Release);
+                        let _ = window.emit("ccl-archive-hover", false);
+                    }
+                    tauri::DragDropEvent::Drop { paths, .. } => {
+                        state.archive_hover.store(false, Ordering::Release);
+                        let _ = window.emit("ccl-archive-hover", false);
+                        if paths.len() == 1 {
+                            let path = &paths[0];
+                            if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                                e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("mrpack")
+                            }) {
+                                state
+                                    .path_grants
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .insert("drop".into(), path.clone());
+                                let _ = window.emit("ccl-archive-drop", path);
+                            } else {
+                                let _ = window.emit(
+                                    "ccl-drop-error",
+                                    "Unsupported archive. Drop one .zip or .mrpack file.",
+                                );
+                            }
+                        } else {
+                            let _ = window.emit("ccl-drop-error", "Drop one archive at a time.");
+                        }
+                    }
+                    _ => {}
+                }
             }
 
             if matches!(
