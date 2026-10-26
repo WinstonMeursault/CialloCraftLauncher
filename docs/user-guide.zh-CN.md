@@ -97,6 +97,18 @@ Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS �
 
 上述目标表示构建和打包覆盖范围，不代表已认证最低操作系统版本。Minecraft 主菜单验证范围更窄，见各功能章节；当前证据不包含 Windows 物理机游戏启动验证。Linux 启动游戏需要可用的显示服务和图形驱动；CI 成功本身不能验证用户机器的图形环境。
 
+
+### macOS 签名检查与首次启动
+
+macOS 构建配置会对完整 `.app`（包括 Info.plist 和资源）进行 ad-hoc 临时签名。这不是 Developer ID 发布者签名，也不是 Apple 公证。安装可信程序包后，macOS 仍可能要求通过**系统设置 → 隐私与安全性 → 仍要打开**逐应用批准，详见 [Apple 说明](https://support.apple.com/en-us/102445)。更新清单签名不能替代这项操作系统检查。
+
+原始 v0.2.0 macOS DMG 与更新归档只有不完整的链接器签名，可能显示“App 已损坏”。下载校验和匹配不会修复此签名。修正已加入开发版构建配置，不会更改现有 v0.2.0 资产。对于已下载且已按该发行版校验和验证的副本，可用以下命令修复本地应用包签名；请替换为实际安装路径。这只会创建本地 ad-hoc 签名，不会建立 Apple 发布者信任。若验证失败，请停止并替换该副本。随后如系统提供逐应用批准，请按 Apple 说明操作；不要全局关闭 Gatekeeper。
+
+```sh
+codesign --force --sign - "/Applications/CialloCraftLauncher.app"
+codesign --verify --deep --strict --verbose=2 "/Applications/CialloCraftLauncher.app"
+```
+
 ### 首次运行
 
 运行 `ccl doctor` 检查配置、目录访问、Java 候选项和凭据库适配器状态。然后运行 `ccl init` 创建所选游戏目录，`ccl versions` 检查版本发现，再用 `ccl install VERSION` 安装版本。除非显式请求探测，`doctor` 不会写入文件。`init` 只创建游戏目录，不安装 Minecraft。使用离线玩家身份运行 `ccl launch VERSION --offline --dry-run` 可预览启动，然后移除 `--dry-run` 实际启动。首次启动可能需要下载 Java 和剩余游戏文件。

@@ -50,6 +50,8 @@ cargo run -p ccl-cli -- --help
 
 桌面应用是独立的 Tauri 产品 `ccl-gui`，与 CLI 共享核心代码，但具有独立产品身份和更新清单。CLI 发行 ZIP 也继续提供，桌面程序包格式如下：
 
+
+
 | 目标 | 分发程序包 | 应用内更新负载 | 安装方式 |
 | --- | --- | --- | --- |
 | Windows x64 | 按用户安装的 NSIS `.exe` | NSIS `.exe` | 安装到用户可写位置；GUI 更新器不支持便携版和系统级安装 |
@@ -61,6 +63,8 @@ cargo run -p ccl-cli -- --help
 `crates/ccl-gui` 是 Rust 适配器/库，默认 feature 集为空（`default = []`）；可选的 `desktop` feature 启用 Tauri 2。`apps/ccl-gui` 是 React/TypeScript/Vite 前端。工作区默认成员只有 `ccl-core` 和 `ccl-cli`，因此普通默认 `cargo build` 或 `cargo test` 不包含 GUI；需使用 `--workspace` 或显式指定 `ccl-gui`。常规 CLI 和核心构建不依赖 Node.js 或 WebView。前端使用 Node 24 和 pnpm 11.25.0。
 
 `gui-validation` feature 会启用仅供测试的 GUI 更新驱动和钩子。前端维护页性能测试入口另由 `VITE_CCL_GUI_PERF_HARNESS=true` 控制；隔离性能验收场景必须同时启用这两个开关。正常发行包不要启用任一开关。
+
+macOS 程序包明确设置 `bundle.macOS.signingIdentity: "-"`，由 Tauri 密封完整应用包，而非依赖可执行文件的链接器签名。`scripts/package-gui-release.py` 在 macOS 上调用 `scripts/verify-macos-bundle.py`：构建应用包、更新归档解压后的应用包及只读 DMG 内的应用包都必须通过 `codesign --verify --deep --strict`。签名失败会中止 GUI 验证、dev 和 stable 工作流的打包。这些检查验证应用包完整性，不代表 Developer ID 信任或公证；浏览器下载后的 Gatekeeper 批准仍需单独处理。原始 v0.2.0 资产尚未包含此修正；本地恢复方法见使用指南。
 
 应用需要先确认游戏根目录才能打开游戏库。初始界面可通过系统目录选择器选择目录，或确认建议的目录；只有确认后才会创建缺失目录。已有根目录和托管实例会复用。可创建原版和托管实例，包括共享原版安装，以及使用受支持加载器的托管实例。系统文件选择器可先检查受支持的 Modrinth、CurseForge 和 MultiMC/Prism 归档，再导入。启动支持离线玩家身份或已保存的 Microsoft 账户，并可设置 Java 路径、内存、托管 Java 安装及 dry-run。
 

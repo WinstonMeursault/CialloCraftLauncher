@@ -97,6 +97,18 @@ You do not need to install Java to install CCL. On first launch CCL can download
 
 The targets above describe build and package coverage, not certification of each OS minimum. Minecraft menu validation is documented in each feature section and is narrower: there is no physical Windows game-launch validation in the current evidence. Linux game launches require a working display server and graphics drivers; CI success alone does not validate a user's graphics stack.
 
+
+### macOS signature checks and first launch
+
+The macOS build configuration uses an ad-hoc signature over the complete `.app`, including its Info.plist and resources. This is not a Developer ID signature or Apple notarization. After installing a trusted package, macOS may still require **System Settings → Privacy & Security → Open Anyway**; see [Apple's instructions](https://support.apple.com/en-us/102445). The updater manifest signature does not replace this OS check.
+
+The original v0.2.0 macOS DMG and updater archive have an incomplete linker-only signature and can display “app is damaged”. A matching download checksum does not repair that signature. The correction is in the development build configuration and does not change the existing v0.2.0 assets. For an already downloaded copy whose checksum you have verified against that release, you can repair its bundle signature locally with the commands below, substituting the actual installed path. This creates a local ad-hoc signature; it does not establish Apple publisher trust. If verification fails, stop and replace the copy. Then use Apple's per-app approval if offered; do not disable Gatekeeper globally.
+
+```sh
+codesign --force --sign - "/Applications/CialloCraftLauncher.app"
+codesign --verify --deep --strict --verbose=2 "/Applications/CialloCraftLauncher.app"
+```
+
 ### First run
 
 Run `ccl doctor` to inspect configuration, directory access, Java candidates, and credential-store adapter availability. Then use `ccl init` to create the selected game directory, `ccl versions` to check version discovery, and `ccl install VERSION` to install a version. `doctor` is read-only unless a probe is explicitly requested. `init` creates the game directory but does not install Minecraft. Use `ccl launch VERSION --offline --dry-run` to preview a launch with an offline player identity, then omit `--dry-run` to start it. The first launch may download Java and remaining game files.

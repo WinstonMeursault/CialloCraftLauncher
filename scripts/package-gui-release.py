@@ -4,6 +4,8 @@
 import argparse
 import hashlib
 import shutil
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -56,6 +58,17 @@ def main() -> None:
             f"{digest}  {destination.name}\n", encoding="ascii"
         )
         copied.append(destination)
+    if args.target == "aarch64-apple-darwin":
+        app_bundles = [path for path in args.bundle_root.rglob("*.app") if path.is_dir()]
+        if len(app_bundles) != 1:
+            raise SystemExit("expected exactly one macOS application bundle")
+        subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("verify-macos-bundle.py")),
+             "--app", str(app_bundles[0]),
+             "--archive", str(args.dist / "ccl-gui-aarch64-apple-darwin.app.tar.gz"),
+             "--dmg", str(args.dist / "ccl-gui-aarch64-apple-darwin.dmg")],
+            check=True,
+        )
     print("\n".join(str(path) for path in copied))
 
 
