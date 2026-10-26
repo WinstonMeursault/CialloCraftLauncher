@@ -862,8 +862,8 @@ mod tests {
             .unwrap()
             + 1;
         assert_eq!(
-            Path::new(&plan.arguments[game_dir]),
-            profile.canonicalize().unwrap()
+            plan.arguments[game_dir],
+            path_text(&profile.canonicalize().unwrap())
         );
         let assets_dir = plan
             .arguments
@@ -872,24 +872,24 @@ mod tests {
             .unwrap()
             + 1;
         assert_eq!(
-            Path::new(&plan.arguments[assets_dir]),
-            options
-                .game_directory
-                .canonicalize()
-                .unwrap()
-                .join("assets")
+            plan.arguments[assets_dir],
+            path_text(
+                &options
+                    .game_directory
+                    .canonicalize()
+                    .unwrap()
+                    .join("assets")
+            )
         );
         let cp = &plan.arguments[plan.arguments.iter().position(|arg| arg == "-cp").unwrap() + 1];
         assert!(
-            cp.contains(
+            cp.contains(&path_text(
                 &options
                     .game_directory
                     .canonicalize()
                     .unwrap()
                     .join("libraries/a/b/1/b-1.jar")
-                    .to_string_lossy()
-                    .to_string()
-            )
+            ))
         );
         let fallback =
             VersionMetadata::parse(r#"{"id":"v1","mainClass":"Main","downloads":{"client":{}}}"#)
@@ -902,8 +902,8 @@ mod tests {
             .unwrap()
             + 1;
         assert_eq!(
-            Path::new(&fallback.arguments[game_dir]),
-            profile.canonicalize().unwrap()
+            fallback.arguments[game_dir],
+            path_text(&profile.canonicalize().unwrap())
         );
         fs::remove_dir_all(root).unwrap();
     }
