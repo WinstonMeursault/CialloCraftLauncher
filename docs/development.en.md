@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.2.1 release notes](#release-notes)
+- [v0.2.2 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -64,11 +64,11 @@ The `gui-validation` feature enables test-only GUI update drivers and hooks. The
 
 macOS bundles explicitly use `bundle.macOS.signingIdentity: "-"` so Tauri seals the complete app, rather than relying on the executable’s linker signature. `scripts/package-gui-release.py` invokes `scripts/verify-macos-bundle.py` on macOS: `codesign --verify --deep --strict` must accept the build bundle and the apps extracted from both the updater archive and read-only DMG. A signature failure aborts packaging in GUI validation, dev and stable workflows. These checks verify bundle integrity, not Developer ID trust or notarization; browser-download Gatekeeper approval remains separate. The v0.2.1 correction originated on `dev` in commit `c366ce4`. The original v0.2.0 macOS DMG and updater archive still predate it and retain the incomplete linker-only signature; see the user guide for local recovery.
 
-The app requires a confirmed game root before opening the library. The setup screen can choose a directory with the native picker or confirm the proposed directory; only confirmation creates a missing directory. Existing roots and managed instances are reused. Vanilla and managed instances can be created, including shared vanilla installs and managed instances with supported loaders. A native file picker inspects supported Modrinth, CurseForge, and MultiMC/Prism archives before import. Launch selects a saved offline account; Java path, memory, managed Java installation, and dry-run controls are available. GUI Microsoft sign-in is temporarily unavailable.
+The app requires a confirmed game root before opening the library. The setup screen can choose a directory with the native picker or confirm the proposed directory; only confirmation creates a missing directory. The library combines discovered versions in the selected root with existing CCL game directories and does not move or convert them. Display-name changes are metadata only; remove from library hides an entry without deleting files, and Settings can restore hidden entries. Lifecycle actions that require CCL revision storage are offered only where that storage already exists. Language and appearance are configured in Settings, which is available before setup is complete. A native file picker inspects supported Modrinth, CurseForge, and MultiMC/Prism archives before import. Launch selects a saved offline account; Java path, memory, managed Java installation, and dry-run controls are available. GUI Microsoft sign-in is temporarily unavailable.
 
 Saved GUI offline profiles use account metadata only and never touch the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI; the experimental CLI device-login protocol remains. The Settings advanced disclosure retains the public Microsoft client ID. The GUI keeps one active task and up to eight completed snapshots in its native task registry while showing work in a collapsible progress dialog with a bottom-right reopen entry; the dialog collapses when a game PID appears. Backend task logs are capped at 1,000 lines of 512 characters and each WebView snapshot shows at most the latest 100. Progress/log notifications are coalesced to 10 per second, with lifecycle updates sent immediately. Install/import work can be cancelled cooperatively; stopping a game is a separate confirmed action. Closing during active work prompts first, and a second launch raises the existing window. Game logs and launcher diagnostics have separate views.
 
-GUI appearance preferences (`theme`, `language`, and selected root) live in a separate `gui.json`. The network-offline switch is different: it updates and persists the core `downloads.offline` setting in the shared launcher config, so CLI and GUI observe the same value. Offline player identity is a launch choice and does not disable networking. `CCL_GUI_DATA_DIR` selects GUI preference data, `CCL_GUI_CONFIG_PATH` selects the shared core config, and `CCL_GUI_GAME_DIR` pins the game root and disables root changes. Use distinct temporary values for tests. Reading an existing library may acquire instance locks or recover an interrupted instance transaction.
+GUI appearance preferences (`theme`, `language`, and selected root) live in a separate `gui.json`; language is changed in Settings, including before game-root setup is complete. Library display names and hidden state are stored separately at `<game-root>/.ccl/library.json` (schema 1). Renaming changes only the display name and keeps the same ID/path; hiding never deletes game files, and Restore hidden entries unhides discovered entries. The network-offline switch is different: it updates and persists the core `downloads.offline` setting in the shared launcher config, so CLI and GUI observe the same value. Offline player identity is a launch choice and does not disable networking. `CCL_GUI_DATA_DIR` selects GUI preference data, `CCL_GUI_CONFIG_PATH` selects the shared core config, and `CCL_GUI_GAME_DIR` pins the game root and disables root changes. Use distinct temporary values for tests. Reading an existing library may acquire instance locks or recover an interrupted instance transaction.
 
 The Settings panel edits shared download and launch values independently. The Microsoft client ID remains in the shared config but is exposed only through the Settings advanced disclosure; it is a public application ID. GUI Microsoft sign-in is temporarily unavailable; the experimental CLI flow remains. The adapter supplies the loaded settings document as `expected`; the core config lock compares it during write and rejects stale edits, so reload after an external CLI edit. Reset is available per field and for all fields, including recovery from malformed config. The config picker accepts a validated local JSON config; `CCL_GUI_CONFIG_PATH` pins it and disables selection. Switching config clears native path grants and the selected dropped archive.
 
@@ -321,7 +321,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-The workspace package version is 0.2.1. These guides target the v0.2.1 GUI and CLI release; GitHub Releases is authoritative for published package availability. Developer prereleases may contain newer changes.
+These guides target the v0.2.2 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -345,11 +345,29 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.2.1 release notes
+## v0.2.2 release notes
 
-These notes target v0.2.1 and are used by the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.2.2 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
+# CialloCraftLauncher 0.2.2
+
+This patch unifies the desktop library and stores display names and hidden state in separate metadata.
+
+- Show discovered Minecraft versions under the selected root and existing CCL game directories together in one library. Discovery and launch use existing paths; game directories are not moved or converted.
+- Rename a library display name, hide an entry from the library, and restore hidden entries in Settings. Display names and hidden state live in `.ccl/library.json`; rename keeps the game ID/path and hiding does not delete game files.
+- Remove shared/managed categories and the shared-install toggle from the desktop UI. Revision, loader and content actions depend on whether a directory already has CCL revision storage; entries without it are not automatically enrolled in full lifecycle management.
+- Use `instance:<64 lowercase hexadecimal characters>` library keys. Earlier source-prefixed GUI keys and the old `shared` install request field are no longer accepted.
+- Keep language selection in Settings, including before initial directory setup, and remove the desktop title-bar version/badge label.
+- Align the English and Simplified Chinese guides while retaining the original v0.2.0 macOS signature limitation and the v0.2.1 bundle-signing fix.
+
+Package targets are Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI DMG and updater archive), and Linux x86_64 (CLI ZIP / GUI AppImage and DEB). CLI and GUI updater manifests authenticate their separate payloads with detached signatures; packages do not have OS publisher certificate signatures. Linux DEB updates use the package manager.
+
+The new GUI display names and hidden state use sidecar metadata; existing game files are not migrated or rewritten. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
+<!-- release-notes:end -->
+
+### v0.2.1 historical release notes
+
 # CialloCraftLauncher 0.2.1
 
 This patch improves the desktop workflow and corrects macOS bundle integrity.
@@ -365,9 +383,8 @@ This patch improves the desktop workflow and corrects macOS bundle integrity.
 Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI DMG and updater archive), and Linux x86_64 (CLI ZIP / GUI AppImage and DEB). CLI and GUI updater manifests authenticate their separate payloads with detached signatures; packages do not have OS publisher certificate signatures. Linux DEB updates use the package manager.
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
-<!-- release-notes:end -->
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.1; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.2; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

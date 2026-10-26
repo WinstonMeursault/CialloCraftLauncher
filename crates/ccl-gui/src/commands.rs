@@ -129,6 +129,26 @@ fn account_service(config: &std::path::Path) -> Result<AccountService<OsSecretSt
     Ok(AccountService::new(config, Arc::new(vault), config_data))
 }
 #[tauri::command]
+async fn library_update(
+    state: State<'_, DesktopState>,
+    request: ccl_gui::catalog::CatalogRequest,
+) -> Result<Bootstrap, GuiError> {
+    ensure_idle(&state)?;
+    let store = state.store.clone();
+    let config = state.config_path();
+    let explicit = state.explicit_root.clone();
+    let gate = state.operation_gate.clone();
+    let closing = state.closing.clone();
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_idle_gate(&gate, &closing, &tasks, || {
+            ccl_gui::update_library(&store, &config, explicit, request)
+        })
+    })
+    .await
+    .map_err(|_| GuiError::new("worker_error", "Library worker stopped"))?
+}
+#[tauri::command]
 async fn initialize_root(state: State<'_, DesktopState>) -> Result<Bootstrap, GuiError> {
     ensure_idle(&state)?;
     let store = state.store.clone();

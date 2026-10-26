@@ -3,7 +3,7 @@ export type Language = 'en' | 'zh-CN'
 
 export interface Preferences { theme: Theme; language: Language }
 export interface LaunchDefaults { java: string | null; max_memory_mb: number; auto_install_java: boolean; network_offline: boolean }
-export interface LibraryEntry { key: string; id: string; kind: 'vanilla' | 'managed'; minecraft: string; loader: string | null; game_directory: string }
+export interface LibraryEntry { key: string; id: string; display_name: string; has_revision_storage: boolean; minecraft: string; loader: string | null; game_directory: string; launch_version: string }
 export interface Bootstrap {
   root: string
   root_exists: boolean
@@ -13,6 +13,7 @@ export interface Bootstrap {
   preferences: Preferences
   entries: LibraryEntry[]
   warnings: string[]
+  hidden_entries: number
 }
 export interface GameVersion { id: string; kind: string }
 export interface LoaderVersion { version: string; stable: boolean }
@@ -110,7 +111,7 @@ export function boundLogText(text: string, maxLines = GUI_LOG_MAX_LINES, maxByte
 }
 export interface ImportPreview { path: string; summary: unknown }
 
-export interface InstanceRequest { id: string; minecraft: string; loader: string | null; loader_version: string | null; shared: boolean }
+export interface InstanceRequest { id: string; minecraft: string; loader: string | null; loader_version: string | null }
 export interface ImportRequest { update_existing: boolean; id: string; archive: string; include_optional: boolean; replace_modified: boolean; allowed_hosts: string[] }
 export interface LaunchIdentity { kind: 'offline' | 'microsoft'; username: string | null; account_id: string | null }
 export interface LaunchRequest {
@@ -144,11 +145,11 @@ export function newestHistory(current: TaskSnapshot[], incoming: TaskSnapshot[])
   return [...byId.values()].sort((a, b) => b.id - a.id).slice(0, 8)
 }
 
-export function retainBusyManagedEntries(previous: Bootstrap, incoming: Bootstrap): Bootstrap {
-  const managedListUnavailable = incoming.warnings.some(warning => /managed.*(?:busy|unreadable|locked)/i.test(warning))
-  if (!managedListUnavailable) return incoming
+export function retainBusyEntries(previous: Bootstrap, incoming: Bootstrap): Bootstrap {
+  const listUnavailable = incoming.warnings.some(warning => /revision.*(?:busy|unreadable|locked)/i.test(warning))
+  if (!listUnavailable || previous.root !== incoming.root) return incoming
   const present = new Set(incoming.entries.map(entry => entry.key))
-  const retained = previous.entries.filter(entry => entry.kind === 'managed' && !present.has(entry.key))
+  const retained = previous.entries.filter(entry => entry.has_revision_storage && !present.has(entry.key))
   return retained.length ? { ...incoming, entries: [...incoming.entries, ...retained] } : incoming
 }
 

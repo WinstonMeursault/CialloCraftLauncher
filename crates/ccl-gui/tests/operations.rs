@@ -1,7 +1,9 @@
 #[cfg(unix)]
 use ccl_core::instances::InstanceError;
 use ccl_core::{
-    CancellationToken, TaskContext, config::DownloadConfig, install::InstallService,
+    CancellationToken, TaskContext,
+    config::DownloadConfig,
+    install::{InstallOptions, InstallService},
     loaders::LoaderKind,
 };
 use ccl_gui::operations::{
@@ -139,6 +141,26 @@ fn sha1(bytes: &[u8]) -> String {
     format!("{:x}", Sha1::digest(bytes))
 }
 
+async fn install_fixture_version(root: &std::path::Path, fixture: &Fixture) -> String {
+    let installer = InstallService::new(DownloadConfig::default())
+        .unwrap()
+        .with_manifest_url(&fixture.url);
+    installer
+        .install(
+            "fixture-1",
+            &InstallOptions::for_current_platform(root),
+            Some(context()),
+        )
+        .await
+        .unwrap();
+    ccl_gui::discover_entries(root, &DownloadConfig::default())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.id == "fixture-1" && !entry.has_revision_storage)
+        .expect("installed profile is discovered before log access")
+        .key
+}
+
 fn empty_mrpack(path: &std::path::Path) {
     let file = fs::File::create(path).unwrap();
     let mut archive = ZipWriter::new(file);
@@ -175,7 +197,7 @@ fn fixture_java(path: &std::path::Path, sleep: bool) {
 #[test]
 fn frontend_launch_request_shape_deserializes_as_owned_dto() {
     let request: LaunchRequest = serde_json::from_value(json!({
-        "key": "managed:my-world",
+        "key": "instance:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "identity": {"kind":"offline", "username":"Player_1", "account_id":null},
         "java": null,
         "memory_mb": 4096,
@@ -183,14 +205,17 @@ fn frontend_launch_request_shape_deserializes_as_owned_dto() {
         "dry_run": true
     }))
     .unwrap();
-    assert_eq!(request.key, "managed:my-world");
+    assert_eq!(
+        request.key,
+        "instance:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     assert!(matches!(request.identity.kind, LaunchIdentityKind::Offline));
     assert_eq!(request.identity.username.as_deref(), Some("Player_1"));
     assert_eq!(request.memory_mb, Some(4096));
 }
 
 #[tokio::test]
-async fn install_rejects_inconsistent_shared_loader_request_without_touching_game_root() {
+async fn install_rejects_inconsistent_loader_request_without_touching_game_root() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("game");
     let operations = GuiOperations::new(root.clone(), temp.path().join("config.json")).unwrap();
@@ -200,8 +225,7 @@ async fn install_rejects_inconsistent_shared_loader_request_without_touching_gam
                 id: "test".into(),
                 minecraft: "1.21.1".into(),
                 loader: Some(LoaderKind::Fabric),
-                loader_version: Some("0.16.10".into()),
-                shared: true,
+                loader_version: None,
             },
             context(),
         )
@@ -212,7 +236,7 @@ async fn install_rejects_inconsistent_shared_loader_request_without_touching_gam
 }
 
 #[tokio::test]
-async fn managed_loader_creation_conflicts_without_replacing_existing_save() {
+async fn instance_creation_conflicts_without_replacing_existing_save() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("game");
     let save = root.join(".ccl/instances/existing/game/saves/world/marker");
@@ -226,7 +250,6 @@ async fn managed_loader_creation_conflicts_without_replacing_existing_save() {
                 minecraft: "1.21.1".into(),
                 loader: Some(LoaderKind::Fabric),
                 loader_version: Some("0.16.10".into()),
-                shared: false,
             },
             context(),
         )
@@ -271,11 +294,16 @@ async fn launch_resolves_only_library_keys_and_log_history_is_bounded_shape() {
     fs::create_dir_all(&root).unwrap();
     let outside = temp.path().join("outside");
     fs::create_dir_all(&outside).unwrap();
+    let fixture = Fixture::new();
+    let key = install_fixture_version(&root, &fixture).await;
     let operations = GuiOperations::new(root.clone(), temp.path().join("config.json")).unwrap();
     let error = operations
         .launch(
             LaunchRequest {
-                key: format!("vanilla:{}", outside.display()),
+                key: format!(
+                    "instance:../{}",
+                    outside.file_name().unwrap().to_string_lossy()
+                ),
                 identity: LaunchIdentity {
                     kind: LaunchIdentityKind::Offline,
                     username: Some("Player".into()),
@@ -291,20 +319,19 @@ async fn launch_resolves_only_library_keys_and_log_history_is_bounded_shape() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "invalid_launch_key");
-    assert_eq!(operations.log_runs("vanilla:demo").unwrap(), json!([]));
+    assert_eq!(operations.log_runs(&key).unwrap(), json!([]));
     assert_eq!(
-        operations
-            .read_run_log("vanilla:demo", None, 20)
-            .unwrap_err()
-            .code,
+        operations.read_run_log(&key, None, 20).unwrap_err().code,
         "log_read"
     );
 }
 
-#[test]
-fn saved_log_reads_bound_file_size_lines_and_line_length() {
+#[tokio::test]
+async fn saved_log_reads_bound_file_size_lines_and_line_length() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("game");
+    let fixture = Fixture::new();
+    let key = install_fixture_version(&root, &fixture).await;
     let log_dir = root.join(".ccl/logs");
     fs::create_dir_all(&log_dir).unwrap();
     let log = log_dir.join("123-run.log");
@@ -314,7 +341,7 @@ fn saved_log_reads_bound_file_size_lines_and_line_length() {
     content.extend_from_slice(b"\nlast-tail\n");
     fs::write(log, content).unwrap();
     let operations = GuiOperations::new(root, temp.path().join("config.json")).unwrap();
-    let result = operations.read_run_log("vanilla:demo", None, 3).unwrap();
+    let result = operations.read_run_log(&key, None, 3).unwrap();
     assert_eq!(result["run_id"], "123-run");
     assert!(result["truncated"].as_bool().unwrap());
     let text = result["text"].as_str().unwrap();
@@ -326,27 +353,27 @@ fn saved_log_reads_bound_file_size_lines_and_line_length() {
 }
 
 #[cfg(unix)]
-#[test]
-fn saved_log_rejects_symlinked_log_directory() {
+#[tokio::test]
+async fn saved_log_rejects_symlinked_log_directory() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("game");
+    let fixture = Fixture::new();
+    let key = install_fixture_version(&root, &fixture).await;
     let ccl = root.join(".ccl");
     fs::create_dir_all(&ccl).unwrap();
     let external = temp.path().join("external-logs");
     fs::create_dir_all(&external).unwrap();
     symlink(external, ccl.join("logs")).unwrap();
     let operations = GuiOperations::new(root, temp.path().join("config.json")).unwrap();
-    let error = operations
-        .read_run_log("vanilla:demo", None, 20)
-        .unwrap_err();
+    let error = operations.read_run_log(&key, None, 20).unwrap_err();
     assert_eq!(error.code, "log_read");
 }
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_services() {
+async fn instance_launch_logs_cancellation_and_launch_lock_use_real_core_services() {
     use ccl_core::{TaskEvent, instances::InstanceService};
 
     let temp = tempfile::tempdir().unwrap();
@@ -366,7 +393,6 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
                 minecraft: "fixture-1".into(),
                 loader: None,
                 loader_version: None,
-                shared: false,
             },
             context(),
         )
@@ -377,6 +403,12 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
         root.join(".ccl/instances/fixture-world/game/versions/fixture-1/fixture-1.jar")
             .is_file()
     );
+    let fixture_key = ccl_gui::discover_entries(&root, &DownloadConfig::default())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.id == "fixture-world" && entry.has_revision_storage)
+        .expect("revision-backed profile is discovered")
+        .key;
 
     let java = temp.path().join("fixture-java");
     fixture_java(&java, false);
@@ -388,11 +420,12 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
         }),
     );
     let worker_ops = operations.clone();
+    let worker_key = fixture_key.clone();
     let worker = tokio::spawn(async move {
         worker_ops
             .launch(
                 LaunchRequest {
-                    key: "managed:fixture-world".into(),
+                    key: worker_key,
                     identity: LaunchIdentity {
                         kind: LaunchIdentityKind::Offline,
                         username: Some("FixturePlayer".into()),
@@ -427,7 +460,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
     assert_eq!(result["ok"], true);
     let run_id = result["launch"]["run_id"].as_str().unwrap();
     let log = operations
-        .read_run_log("managed:fixture-world", Some(run_id), 20)
+        .read_run_log(&fixture_key, Some(run_id), 20)
         .unwrap();
     assert!(
         log["text"]
@@ -437,7 +470,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
     );
     assert_eq!(
         operations
-            .log_runs("managed:fixture-world")
+            .log_runs(&fixture_key)
             .unwrap()
             .as_array()
             .unwrap()
@@ -461,7 +494,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
     let cancelled = operations
         .launch(
             LaunchRequest {
-                key: "managed:fixture-world".into(),
+                key: fixture_key.clone(),
                 identity: LaunchIdentity {
                     kind: LaunchIdentityKind::Offline,
                     username: Some("FixturePlayer".into()),
@@ -480,7 +513,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
     assert!(token.is_cancelled());
     assert_eq!(
         operations
-            .log_runs("managed:fixture-world")
+            .log_runs(&fixture_key)
             .unwrap()
             .as_array()
             .unwrap()
@@ -490,7 +523,7 @@ async fn managed_install_launch_logs_cancellation_and_launch_lock_use_real_core_
 }
 
 #[tokio::test]
-async fn managed_vanilla_install_uses_verified_downloads_on_every_platform() {
+async fn instance_install_uses_verified_downloads_on_every_platform() {
     let temp = tempfile::tempdir().unwrap();
     let fixture = Fixture::new();
     let installer = InstallService::new(DownloadConfig::default())
@@ -505,7 +538,6 @@ async fn managed_vanilla_install_uses_verified_downloads_on_every_platform() {
         minecraft: "fixture-1".into(),
         loader: None,
         loader_version: None,
-        shared: false,
     };
     let installed = service.install(request.clone(), context()).await.unwrap();
     assert_eq!(installed["instance"]["loader"], Value::Null);
@@ -531,7 +563,7 @@ async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
         .with_manifest_url(&fixture.url);
     let operations = GuiOperations::new(root.clone(), config_path.clone())
         .unwrap()
-        .with_install_service(installer);
+        .with_install_service(installer.clone());
     let display_id = "我的整合包 日本語! (1)";
     operations
         .install(
@@ -540,50 +572,53 @@ async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
                 minecraft: "fixture-1".into(),
                 loader: None,
                 loader_version: None,
-                shared: false,
             },
             context(),
         )
         .await
         .unwrap();
-    operations
+    installer
         .install(
-            InstallRequest {
-                id: "ignored-for-shared-version".into(),
-                minecraft: "fixture-1".into(),
-                loader: None,
-                loader_version: None,
-                shared: true,
-            },
-            context(),
+            "fixture-1",
+            &InstallOptions::for_current_platform(&root),
+            Some(context()),
         )
         .await
         .unwrap();
-
     let preferences = PreferencesStore::new(temp.path().join("preferences"));
     preferences.select_root(root.clone()).unwrap();
     let library = bootstrap(&preferences, &config_path, None).unwrap();
     let entry = library
         .entries
         .iter()
-        .find(|entry| entry.id == display_id)
-        .expect("managed instance is discovered in the library");
-    assert_eq!(entry.key, format!("managed:{display_id}"));
+        .find(|entry| entry.id == display_id && entry.has_revision_storage)
+        .expect("revision-backed profile is discovered in the library");
+    assert!(entry.key.starts_with("instance:"));
+    let descriptor_hash = entry.key.strip_prefix("instance:").unwrap();
+    assert_eq!(descriptor_hash.len(), 64);
+    assert!(
+        descriptor_hash
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
+    assert!(entry.has_revision_storage);
+    assert_eq!(entry.display_name, display_id);
     assert_eq!(
         entry.game_directory,
         fs::canonicalize(root.join(".ccl/instances").join(display_id).join("game")).unwrap()
     );
-    let shared_entry = library
+    let version_entry = library
         .entries
         .iter()
-        .find(|entry| entry.key == "vanilla:fixture-1")
-        .expect("existing shared version remains in the library");
+        .find(|entry| entry.id == "fixture-1" && !entry.has_revision_storage)
+        .expect("installed version is discovered in the library");
+    assert_eq!(version_entry.display_name, "fixture-1");
     assert_eq!(
-        shared_entry.game_directory,
+        version_entry.game_directory,
         fs::canonicalize(&root).unwrap()
     );
 
-    // Model an already-installed HMCL/shared profile with a Unicode and spaced ID.
+    // Model an already-installed external profile with a Unicode and spaced ID.
     let external_id = "HMCL 中文 1.20.1";
     let source_version = root.join("versions/fixture-1");
     let external_version = root.join("versions").join(external_id);
@@ -605,8 +640,8 @@ async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
     let external_entry = library_with_external
         .entries
         .iter()
-        .find(|entry| entry.key == format!("vanilla:{external_id}"))
-        .expect("Unicode shared profile remains discoverable");
+        .find(|entry| entry.id == external_id && !entry.has_revision_storage)
+        .expect("Unicode installed profile remains discoverable");
     assert_eq!(
         external_entry.game_directory,
         fs::canonicalize(&root).unwrap()
@@ -674,7 +709,6 @@ async fn advanced_instance_content_lifecycle_uses_actual_locked_core_transaction
                 minecraft: "fixture-1".into(),
                 loader: None,
                 loader_version: None,
-                shared: false,
             },
             context(),
         )
@@ -793,28 +827,25 @@ async fn advanced_instance_content_lifecycle_uses_actual_locked_core_transaction
     let copy_game = core.game_directory("copy").unwrap();
     fs::write(copy_game.join("mods/test.jar"), b"independent").unwrap();
     assert_eq!(fs::read(game.join("mods/test.jar")).unwrap(), before);
+    let key = ccl_gui::discover_entries(&root, &DownloadConfig::default())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.id == "copy" && entry.has_revision_storage)
+        .unwrap()
+        .key;
+    ccl_gui::catalog::LibraryCatalog::new(&root)
+        .set_display_name(&key, "Renamed copy 日本語")
+        .unwrap();
+    assert!(core.metadata("copy").is_ok());
+    assert_eq!(
+        fs::read(copy_game.join("mods/test.jar")).unwrap(),
+        b"independent"
+    );
     service
-        .execute(
-            R::Rename {
-                id: "copy".into(),
-                destination: "renamed".into(),
-            },
-            Some(context()),
-        )
+        .execute(R::Delete { id: "copy".into() }, Some(context()))
         .await
         .unwrap();
     assert!(core.metadata("copy").is_err());
-    assert!(core.metadata("renamed").is_ok());
-    service
-        .execute(
-            R::Delete {
-                id: "renamed".into(),
-            },
-            Some(context()),
-        )
-        .await
-        .unwrap();
-    assert!(core.metadata("renamed").is_err());
     let token = CancellationToken::default();
     token.cancel();
     let err = service

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { acceptTaskSnapshot, boundLogLines, formatGuiError, GUI_LOG_MAX_BYTES, GUI_LOG_MAX_LINES, newestHistory, redactSensitive, retainBusyManagedEntries, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
+import { acceptTaskSnapshot, boundLogLines, formatGuiError, GUI_LOG_MAX_BYTES, GUI_LOG_MAX_LINES, newestHistory, redactSensitive, retainBusyEntries, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
 
 function snapshot(id: number, revision: number): TaskSnapshot {
   return { id, revision, kind: 'probe', phase: 'running', state: 'running', completed: 0, total: 10, logs: [], error: null, error_code: null, pid: null, result: null, authorization: null }
@@ -50,13 +50,13 @@ test('history replaces stale revisions, sorts newest first, and retains eight ta
   assert.equal(history.find(item => item.id === 8)?.revision, 2)
 })
 
-test('keeps managed entries when a busy library refresh omits them', () => {
-  const oldEntry = { key: 'managed:atelier', id: 'atelier', kind: 'managed' as const, minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
-  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en' }, entries: [oldEntry], warnings: [] }
-  const incomplete: Bootstrap = { ...current, entries: [], warnings: ['Managed instances are busy or unreadable; retry after other operations finish'] }
+test('keeps entries with active revision storage when a busy library refresh omits them', () => {
+  const oldEntry = { key: 'instance:' + 'a'.repeat(64), id: 'atelier', display_name: 'Atelier', has_revision_storage: true, launch_version: '1.21.1', minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
+  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en' }, entries: [oldEntry], warnings: [], hidden_entries: 0 }
+  const incomplete: Bootstrap = { ...current, entries: [], warnings: ['Instance revision metadata is busy or unreadable; retry after other operations finish'] }
 
-  assert.deepEqual(retainBusyManagedEntries(current, incomplete).entries, [oldEntry])
-  assert.deepEqual(retainBusyManagedEntries(current, { ...incomplete, warnings: [] }).entries, [])
+  assert.deepEqual(retainBusyEntries(current, incomplete).entries, [oldEntry])
+  assert.deepEqual(retainBusyEntries(current, { ...incomplete, warnings: [] }).entries, [])
 })
 
 test('GUI errors retain structured codes and use a safe fallback', () => {

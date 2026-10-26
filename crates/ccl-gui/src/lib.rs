@@ -2,6 +2,7 @@
 //! A terminal or WebView is not required by this library.
 pub mod account_service;
 pub mod browser;
+pub mod catalog;
 pub mod instance_service;
 pub mod launcher_log;
 mod library;
@@ -16,7 +17,10 @@ pub mod update_service;
 #[cfg(feature = "gui-validation")]
 pub mod validation;
 
-pub use library::{Bootstrap, LibraryEntry, bootstrap, initialize_root};
+pub use catalog::{CatalogRecord, CatalogRequest, LibraryCatalog};
+pub use library::{
+    Bootstrap, LibraryEntry, bootstrap, discover_entries, initialize_root, update_library,
+};
 pub use preferences::{Preferences, PreferencesStore, Theme};
 pub use tasks::{TaskHandle, TaskRegistry, TaskSnapshot, TaskState};
 

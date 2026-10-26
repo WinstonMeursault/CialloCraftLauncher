@@ -4,12 +4,12 @@
 
 ## 项目状态
 
-CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包更新器的 Tauri 桌面 GUI。本文档对应 v0.2.1，包含 CLI、核心、桌面 GUI 和签名清单更新器，以及下述 GUI 流程和 macOS 应用包修正；已发布程序包的可用状态请查看 GitHub Releases。
+CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包更新器的 Tauri 桌面 GUI。本文档对应 v0.2.2，包含 CLI、核心、桌面 GUI 和签名清单更新器。程序包可用状态以 GitHub Releases 为准。v0.2.1 的 macOS 应用包修正及原始 v0.2.0 资产限制见使用指南。
 
 | 方面 | 已提供的功能 |
 | --- | --- |
 | 安装与启动 | 原版版本、Java 探测/托管运行时、下载校验/缓存复用、进程日志与显式网络离线模式 |
-| 实例与加载器 | 隔离实例；Fabric、Quilt、Legacy Fabric、Forge、NeoForge、OptiFine；修订版回退、重命名/复制/删除/历史和清理 |
+| 实例与加载器 | Fabric、Quilt、Legacy Fabric、Forge、NeoForge、OptiFine；在支持的实例目录中使用修订版回退、重命名/复制/删除/历史和清理 |
 | 整合包与内容 | Modrinth 整合包、受支持的 CurseForge/MultiMC/Prism 导入、在线搜索/依赖/更新/冲突分析、本地内容与用户数据备份 |
 | 维护 | CLI 与 GUI 的稳定/开发签名更新、事务式安装/恢复/回退、本地诊断与回归流程 |
 
@@ -23,7 +23,7 @@ CCL 提供 Rust 核心、命令行界面和具有独立安装程序及应用包�
 
 桌面发行工作流配置为 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 和 DEB。独立 GUI 验证工作流检查更新并手动回退、坏程序包自动回退及替换中断后的恢复；发行工作流检查渲染后的启动就绪状态。GUI 自更新支持 Windows 安装程序、macOS `.app.tar.gz` 和 Linux AppImage。DEB 安装应通过系统包管理器更新。托管运行器上的 CI 启动检查不能证明最低计划系统版本上的行为，也不代表已通过物理机游戏启动验收。
 
-GUI 可添加、选择和移除已保存的离线账户，且不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用；实验性的 CLI 流程仍保留，正版账户完整验收仍已暂缓。GUI 中的 Microsoft 客户端 ID 仅在设置的高级部分配置。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
+GUI 会在同一游戏库中显示发现的游戏版本和已有 CCL 实例目录，并保留现有路径不动；修改显示名称只更新元数据，从游戏库移除条目只会将其隐藏，不会删除文件。没有 CCL 修订存储的目录可执行的管理操作有限。外观和语言在“设置”中配置，初次选择游戏目录时也可进入设置。GUI 可添加、选择和移除已保存的离线账户，且不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用；实验性的 CLI 流程仍保留，正版账户完整验收仍已暂缓。GUI 中的 Microsoft 客户端 ID 仅在设置的高级部分配置。CurseForge 使用用户自行提供的 key，可选保存于系统凭据库；CCL 不内置项目 key。参阅[账户指南](docs/user-guide.zh-CN.md#accounts)及[发布清单](docs/development.zh-CN.md#release)。
 
 ## 安装与开始使用
 

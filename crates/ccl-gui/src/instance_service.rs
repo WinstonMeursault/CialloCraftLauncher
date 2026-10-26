@@ -1,4 +1,4 @@
-//! Typed GUI adapter for managed instances and their local content.
+//! Typed GUI adapter for instance files, revisions and local content.
 //!
 //! This adapter deliberately accepts paths only for local archive/content inputs and
 //! outputs. The desktop command layer is responsible for obtaining them from native
@@ -41,10 +41,6 @@ pub enum InstanceRequest {
     },
     UninstallLoader {
         id: String,
-    },
-    Rename {
-        id: String,
-        destination: String,
     },
     Copy {
         id: String,
@@ -164,7 +160,7 @@ impl InstanceOperations {
         }
         match request {
             InstanceRequest::List => Ok(
-                json!({"ok":true,"managed_instances":self.instances()?.list().map_err(instance_error)?}),
+                json!({"ok":true,"instances":crate::discover_entries(&self.root, &self.config)?}),
             ),
             InstanceRequest::Show { id } => Ok(
                 json!({"ok":true,"instance":self.instances()?.metadata(&id).map_err(instance_error)?}),
@@ -206,9 +202,6 @@ impl InstanceOperations {
                     .map_err(instance_error)?;
                 Ok(json!({"ok":true,"instance":instance}))
             }
-            InstanceRequest::Rename { id, destination } => Ok(
-                json!({"ok":true,"instance":self.instances()?.rename(&id, &destination).map_err(instance_error)?}),
-            ),
             InstanceRequest::Copy { id, destination } => Ok(
                 json!({"ok":true,"instance":self.instances()?.duplicate(&id, &destination).map_err(instance_error)?}),
             ),

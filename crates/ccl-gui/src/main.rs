@@ -216,6 +216,7 @@ fn main() {
             task_snapshot,
             set_visibility,
             initialize_root,
+            library_update,
             list_versions,
             list_loaders,
             install_instance,

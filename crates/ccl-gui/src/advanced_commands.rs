@@ -1,4 +1,4 @@
-use ccl_gui::instance_service::{InstanceOperations, InstanceRequest as ManagedRequest};
+use ccl_gui::instance_service::{InstanceOperations, InstanceRequest as InstanceAction};
 use ccl_gui::maintenance::{Maintenance, MaintenanceRequest};
 use ccl_gui::online_service::{OnlineMutation, OnlineQuery, OnlineService};
 
@@ -22,15 +22,15 @@ fn require_grant(
         ))
     }
 }
-fn validate_instance_paths(state: &DesktopState, request: &ManagedRequest) -> Result<(), GuiError> {
+fn validate_instance_paths(state: &DesktopState, request: &InstanceAction) -> Result<(), GuiError> {
     match request {
-        ManagedRequest::PackInspect { archive }
-        | ManagedRequest::ContentRestore { archive, .. } => {
+        InstanceAction::PackInspect { archive }
+        | InstanceAction::ContentRestore { archive, .. } => {
             require_grant(state, "archive", archive)
         }
-        ManagedRequest::PackExport { output, .. } => require_grant(state, "export", output),
-        ManagedRequest::ContentBackup { output, .. } => require_grant(state, "backup", output),
-        ManagedRequest::ContentAdd { source, .. } => require_grant(state, "content_file", source)
+        InstanceAction::PackExport { output, .. } => require_grant(state, "export", output),
+        InstanceAction::ContentBackup { output, .. } => require_grant(state, "backup", output),
+        InstanceAction::ContentAdd { source, .. } => require_grant(state, "content_file", source)
             .or_else(|_| require_grant(state, "content_directory", source)),
         _ => Ok(()),
     }
@@ -108,7 +108,7 @@ async fn choose_path(
 #[tauri::command]
 async fn instance_query(
     state: State<'_, DesktopState>,
-    request: ManagedRequest,
+    request: InstanceAction,
 ) -> Result<Value, GuiError> {
     if request.mutates() {
         return Err(GuiError::new(
@@ -129,7 +129,7 @@ async fn instance_query(
 #[tauri::command]
 async fn instance_mutate(
     state: State<'_, DesktopState>,
-    request: ManagedRequest,
+    request: InstanceAction,
 ) -> Result<TaskSnapshot, GuiError> {
     ensure_idle(&state)?;
     validate_instance_paths(&state, &request)?;
@@ -145,9 +145,9 @@ async fn instance_mutate(
         "instance",
         matches!(
             &request,
-            ManagedRequest::Install { .. }
-                | ManagedRequest::Update { .. }
-                | ManagedRequest::UninstallLoader { .. }
+            InstanceAction::Install { .. }
+                | InstanceAction::Update { .. }
+                | InstanceAction::UninstallLoader { .. }
         ),
         move |h| async move {
             tauri::async_runtime::spawn_blocking(move || {

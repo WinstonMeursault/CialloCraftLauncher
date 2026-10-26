@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.2.1 发行说明](#release-notes)
+- [v0.2.2 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -66,11 +66,11 @@ cargo run -p ccl-cli -- --help
 
 macOS 程序包明确设置 `bundle.macOS.signingIdentity: "-"`，由 Tauri 密封完整应用包，而非依赖可执行文件的链接器签名。`scripts/package-gui-release.py` 在 macOS 上调用 `scripts/verify-macos-bundle.py`：构建应用包、更新归档解压后的应用包及只读 DMG 内的应用包都必须通过 `codesign --verify --deep --strict`。签名失败会中止 GUI 验证、dev 和 stable 工作流的打包。这些检查验证应用包完整性，不代表 Developer ID 信任或公证；浏览器下载后的 Gatekeeper 批准仍需单独处理。v0.2.1 的该修正源自 `dev` 的 `c366ce4` 提交。原始 v0.2.0 macOS DMG 和更新归档仍保留不完整的链接器签名；本地恢复方法见使用指南。
 
-应用需要先确认游戏根目录才能打开游戏库。初始界面可通过系统目录选择器选择目录，或确认建议的目录；只有确认后才会创建缺失目录。已有根目录和托管实例会复用。可创建原版和托管实例，包括共享原版安装，以及使用受支持加载器的托管实例。系统文件选择器可先检查受支持的 Modrinth、CurseForge 和 MultiMC/Prism 归档，再导入。启动时选择已保存的离线账户，并可设置 Java 路径、内存、托管 Java 安装及 dry-run。GUI Microsoft 登录暂时不可用。
+应用需要先确认游戏根目录才能打开游戏库。初始界面可通过系统目录选择器选择目录，或确认建议的目录；只有确认后才会创建缺失目录。游戏库会统一显示所选根目录中发现的版本和已有 CCL 游戏目录，不会移动或转换它们。修改显示名称只更新元数据；从游戏库移除会隐藏条目但不删除文件，可在设置中恢复隐藏条目。需要 CCL 修订存储的生命周期操作只会在已有该存储的目录上提供。语言和外观在“设置”中选择，初始目录设置完成前也可进入设置。系统文件选择器可先检查受支持的 Modrinth、CurseForge 和 MultiMC/Prism 归档，再导入。启动时选择已保存的离线账户，并可设置 Java 路径、内存、托管 Java 安装及 dry-run。GUI Microsoft 登录暂时不可用。
 
 GUI 已保存离线档案仅使用账户元数据，不访问系统凭据库。GUI 中的 Microsoft 登录暂时不可用；实验性的 CLI 设备码登录协议仍保留。“设置”的高级折叠区保留公开 Microsoft 客户端 ID。GUI 原生任务注册表保留一个活动任务及最多八个已完成快照；界面通过可收起进度弹窗展示任务，右下角入口可重新打开；游戏 PID 出现后弹窗会收起。后端最多保存 1,000 行任务日志，每行 512 个字符；每份 WebView 快照最多显示最近 100 行。进度/日志通知合并为每秒最多 10 次，生命周期更新立即发送。安装/导入任务可协作式取消；停止游戏需单独确认。活动任务期间关闭程序前会询问；再次启动会唤起已有窗口。游戏日志与启动器诊断分开显示。
 
-GUI 外观偏好（`theme`、`language` 和所选根目录）保存在独立的 `gui.json` 中。网络离线开关不同：它会更新并持久化共享启动器配置中的核心设置 `downloads.offline`，因此 CLI 和 GUI 使用相同值。离线玩家身份只是启动选项，不会禁用网络。`CCL_GUI_DATA_DIR` 指定 GUI 偏好数据目录，`CCL_GUI_CONFIG_PATH` 指定共享核心配置，`CCL_GUI_GAME_DIR` 固定游戏根目录并禁用根目录修改。测试时请使用互相隔离的临时路径。读取已有游戏库时可能获取实例锁，或恢复中断的实例事务。
+GUI 外观偏好（`theme`、`language` 和所选根目录）保存在独立的 `gui.json` 中；语言在“设置”中更改，初始游戏根目录设置完成前也可调整。游戏库显示名称和隐藏状态单独保存在 `<游戏根目录>/.ccl/library.json`（schema 1）中。重命名只修改显示名称并保留 ID/路径；隐藏不会删除游戏文件，“恢复隐藏条目”可重新显示仍可发现的条目。网络离线开关不同：它会更新并持久化共享启动器配置中的核心设置 `downloads.offline`，因此 CLI 和 GUI 使用相同值。离线玩家身份只是启动选项，不会禁用网络。`CCL_GUI_DATA_DIR` 指定 GUI 偏好数据目录，`CCL_GUI_CONFIG_PATH` 指定共享核心配置，`CCL_GUI_GAME_DIR` 固定游戏根目录并禁用根目录修改。测试时请使用互相隔离的临时路径。读取已有游戏库时可能获取实例锁，或恢复中断的实例事务。
 
 设置面板分别编辑共享下载和启动值。Microsoft 客户端 ID 仍保存在共享配置中，但只在“设置”的高级折叠区显示；它是公开应用 ID。GUI 中的 Microsoft 登录暂时不可用；实验性的 CLI 流程仍保留。适配器把已读取的设置文档作为 `expected` 传入；核心配置锁会在写入时比较它并拒绝陈旧修改，因此 CLI 外部修改后需先重新加载。可按字段或全部重置，也可用于修复损坏配置。配置选择器接受经过验证的本地 JSON 配置；`CCL_GUI_CONFIG_PATH` 固定配置并禁用选择。切换配置会清除原生路径授权和已选的拖入归档。
 
@@ -323,7 +323,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-当前工作区 package 版本为 0.2.1。本文档对应 v0.2.1 GUI 和 CLI 发行版；已发布程序包的可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.2.2 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -347,11 +347,29 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.2.1 发行说明
+## v0.2.2 发行说明
 
-以下说明对应 v0.2.1，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.2.2，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
+# CialloCraftLauncher 0.2.2
+
+本次补丁统一桌面游戏库，并将显示名称和隐藏状态保存在独立元数据中。
+
+- 游戏库在一个列表中显示所选根目录下发现的 Minecraft 版本和已有 CCL 游戏目录。发现和启动会使用现有路径，不会移动或转换游戏目录。
+- 支持修改游戏库显示名称、从游戏库隐藏条目，以及在设置中恢复隐藏条目。显示名称和隐藏状态保存在 `.ccl/library.json`；重命名保留游戏 ID/路径，隐藏不会删除游戏文件。
+- 移除桌面界面中的共享/受管理分类及共享安装切换。修订、加载器和内容管理等功能按目录是否已有 CCL 修订存储提供；未具备该存储的条目不会被自动纳入完整生命周期管理。
+- 游戏库条目改用 `instance:<64 位小写十六进制字符>` key，不再接受旧 GUI 来源前缀 key 或旧安装请求中的 `shared` 字段。
+- 将语言选择集中到“设置”，包括初始目录设置前；移除桌面标题栏中的版本/徽标标签。
+- 中英文指南同步更新，保留原始 v0.2.0 macOS 签名限制及 v0.2.1 应用包签名修正说明。
+
+程序包目标为 Windows x86_64（CLI ZIP / GUI NSIS）、macOS arm64（CLI ZIP / GUI DMG 及更新归档）和 Linux x86_64（CLI ZIP / GUI AppImage 及 DEB）。CLI 和 GUI 更新清单分别使用独立签名认证各自负载；程序包没有操作系统发布者证书签名。Linux DEB 由包管理器更新。
+
+新 GUI 显示名称和隐藏状态由 sidecar 元数据保存，不迁移或改写现有游戏文件。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
+<!-- release-notes:end -->
+
+### v0.2.1 历史发行说明
+
 # CialloCraftLauncher 0.2.1
 
 本次补丁改进桌面使用流程，并修正 macOS 应用包完整性。
@@ -367,9 +385,8 @@ git push origin dev
 程序包覆盖 Windows x86_64（CLI ZIP / GUI NSIS）、macOS arm64（CLI ZIP / GUI DMG 及更新归档）和 Linux x86_64（CLI ZIP / GUI AppImage 及 DEB）。CLI 和 GUI 更新清单分别使用独立签名认证各自负载；程序包没有操作系统发布者证书签名。Linux DEB 由包管理器更新。
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
-<!-- release-notes:end -->
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.2.1；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.2.2；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

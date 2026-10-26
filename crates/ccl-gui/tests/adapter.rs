@@ -44,7 +44,7 @@ fn missing_game_root_is_not_created_by_bootstrap() {
     assert!(!store.directory().exists());
 }
 #[test]
-fn shared_and_managed_entries_have_distinct_keys_for_same_id() {
+fn separate_directories_have_distinct_unified_keys_for_same_id() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("game");
     let vanilla = root.join("versions/demo");
@@ -62,8 +62,11 @@ fn shared_and_managed_entries_have_distinct_keys_for_same_id() {
     .unwrap();
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     assert_eq!(result.entries.len(), 2);
-    assert_eq!(result.entries[0].key, "vanilla:demo");
-    assert_eq!(result.entries[1].key, "managed:demo");
+    assert_ne!(result.entries[0].key, result.entries[1].key);
+    for entry in &result.entries {
+        assert!(entry.key.starts_with("instance:"));
+        assert_eq!(entry.display_name, "demo");
+    }
 }
 #[test]
 fn incompatible_core_config_blocks_discovery_without_rewriting() {

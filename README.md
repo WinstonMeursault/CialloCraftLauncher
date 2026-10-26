@@ -4,12 +4,12 @@ A libre, open-source Minecraft: Java Edition launcher written in Rust for Window
 
 ## Project status
 
-CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. This documentation targets v0.2.1, including the CLI, core, desktop GUI and signed-manifest updater. It adds the GUI workflow and macOS bundle corrections described below; check GitHub Releases for published package availability.
+CCL provides a Rust core, a command-line interface, and a Tauri desktop GUI with its own installer and package updater. This documentation targets v0.2.2, including the CLI, core, desktop GUI and signed-manifest updater. The v0.2.2 release is not published yet; GitHub Releases is authoritative for package availability. The v0.2.1 macOS bundle correction and the original v0.2.0 asset limitation are documented in the user guide.
 
 | Area | Available functionality |
 | --- | --- |
 | Installation and launch | Vanilla versions, Java discovery/managed runtimes, verified downloads/cache reuse, process logs and explicit network offline mode |
-| Instances and loaders | Isolated instances; Fabric, Quilt, Legacy Fabric, Forge, NeoForge and OptiFine; revision rollback, rename/copy/delete/history and cleanup |
+| Instances and loaders | Fabric, Quilt, Legacy Fabric, Forge, NeoForge and OptiFine; revision rollback, rename/copy/delete/history and cleanup in supported instance directories |
 | Packs and content | Modrinth packs, supported CurseForge/MultiMC/Prism imports, online search/dependencies/updates/conflict analysis, local content and userdata backups |
 | Maintenance | Signed stable/dev updates for CLI and GUI, transactional install/recovery/rollback, local diagnostics and regression workflows |
 
@@ -23,7 +23,7 @@ Support follows the samples and boundaries in the guides, rather than every Mine
 
 Desktop release workflows are configured for Windows x64 per-user NSIS EXE, macOS arm64 DMG, and Linux x64 AppImage and DEB packages. The separate GUI validation workflow exercises update and manual rollback, bad-package automatic rollback, and interrupted-replacement recovery; release workflows check rendered startup readiness. GUI self-update accepts the Windows installer, macOS `.app.tar.gz`, and Linux AppImage. DEB installations update through the package manager. CI smoke launches on hosted runners do not establish behavior on the oldest planned OS versions or physical game-launch acceptance.
 
-Saved offline accounts can be added, selected and removed in the GUI without using the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI; the experimental CLI flow remains available, with full entitled-account acceptance still deferred. In the GUI, the Microsoft client ID is configured only in the Settings advanced section. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
+The GUI shows discovered game versions and existing CCL instance directories together in one library. It keeps existing paths in place; display-name changes are metadata only, and removing an item from the library hides it without deleting files. Directories without CCL revision storage have limited management actions. Language and appearance are configured in Settings, including during initial directory setup. Saved offline accounts can be added, selected and removed in the GUI without using the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI; the experimental CLI flow remains available, with full entitled-account acceptance still deferred. In the GUI, the Microsoft client ID is configured only in the Settings advanced section. CurseForge uses a user-supplied key, optionally saved in the OS credential vault; CCL does not bundle a project key. See the [account guide](docs/user-guide.en.md#accounts) and [release checklist](docs/development.en.md#release).
 
 ## Install and get started
 

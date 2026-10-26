@@ -5,7 +5,7 @@ use ccl_core::{
     accounts::{OsProviderKeyStore, OsSecretStore},
     config::LauncherConfig,
     import_formats::{ImportFormatService, ImportOptionsExt},
-    install::{InstallOptions, InstallService},
+    install::InstallService,
     instances::InstanceService,
     launch::{LaunchRequest as CoreLaunchRequest, LaunchResult, LaunchService},
     loaders::{LoaderKind, LoaderRequest, LoaderService},
@@ -27,7 +27,6 @@ pub struct InstallRequest {
     pub minecraft: String,
     pub loader: Option<LoaderKind>,
     pub loader_version: Option<String>,
-    pub shared: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -135,25 +134,6 @@ impl GuiOperations {
     }
 
     pub async fn install(&self, request: InstallRequest, context: TaskContext) -> GuiResult<Value> {
-        if request.shared {
-            if request.loader.is_some() || request.loader_version.is_some() {
-                return Err(GuiError::new(
-                    "invalid_install",
-                    "Shared installs support vanilla Minecraft versions only.",
-                ));
-            }
-            let summary = self
-                .installer()?
-                .install(
-                    &request.minecraft,
-                    &InstallOptions::for_current_platform(&self.root),
-                    Some(context),
-                )
-                .await
-                .map_err(install_error)?;
-            return Ok(json!({"ok": true, "shared": true, "installation": summary}));
-        }
-
         let instances = InstanceService::new(self.root.clone(), self.config.downloads.clone())
             .map_err(instance_error)?;
         match (request.loader, request.loader_version.as_deref()) {
@@ -398,44 +378,30 @@ impl GuiOperations {
         String,
         Option<ccl_core::instances::InstanceLaunchGuard>,
     )> {
-        let (kind, id) = key.split_once(':').ok_or_else(invalid_launch_key)?;
-        if id.is_empty() || id.contains(':') {
-            return Err(invalid_launch_key());
-        }
-        match kind {
-            "vanilla" => {
-                validate_key_id(id)?;
-                Ok((self.root.clone(), id.to_owned(), None))
-            }
-            "managed" => {
-                let service =
-                    InstanceService::new(self.root.clone(), self.config.downloads.clone())
-                        .map_err(instance_error)?;
-                let guard = service.acquire_launch(id).map_err(instance_error)?;
-                let game = guard.game_directory().to_path_buf();
-                let version = guard.version().to_owned();
-                Ok((game, version, Some(guard)))
-            }
-            _ => Err(invalid_launch_key()),
+        let entry = self.library_entry(key)?;
+        if entry.has_revision_storage {
+            let service = InstanceService::new(self.root.clone(), self.config.downloads.clone())
+                .map_err(instance_error)?;
+            let guard = service.acquire_launch(&entry.id).map_err(instance_error)?;
+            Ok((
+                guard.game_directory().to_path_buf(),
+                guard.version().to_owned(),
+                Some(guard),
+            ))
+        } else {
+            Ok((entry.game_directory, entry.launch_version, None))
         }
     }
 
+    fn library_entry(&self, key: &str) -> GuiResult<crate::LibraryEntry> {
+        crate::discover_entries(&self.root, &self.config.downloads)?
+            .into_iter()
+            .find(|entry| entry.key == key)
+            .ok_or_else(invalid_launch_key)
+    }
+
     fn game_root_for_key(&self, key: &str) -> GuiResult<PathBuf> {
-        let (kind, id) = key.split_once(':').ok_or_else(invalid_launch_key)?;
-        if id.is_empty() || id.contains(':') {
-            return Err(invalid_launch_key());
-        }
-        match kind {
-            "vanilla" => {
-                validate_key_id(id)?;
-                Ok(self.root.clone())
-            }
-            "managed" => InstanceService::new(self.root.clone(), self.config.downloads.clone())
-                .map_err(instance_error)?
-                .game_directory(id)
-                .map_err(instance_error),
-            _ => Err(invalid_launch_key()),
-        }
+        self.library_entry(key).map(|entry| entry.game_directory)
     }
 }
 
@@ -506,25 +472,6 @@ fn latest_run_id(directory: &Path) -> GuiResult<String> {
     ids.sort();
     ids.pop()
         .ok_or_else(|| GuiError::new("log_read", "No launch logs found"))
-}
-fn validate_key_id(id: &str) -> GuiResult<()> {
-    let stem = id.split('.').next().unwrap_or(id).trim_end_matches(' ');
-    let upper = stem.to_ascii_uppercase();
-    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (upper.len() == 4
-            && (upper.starts_with("COM") || upper.starts_with("LPT"))
-            && matches!(upper.as_bytes()[3], b'1'..=b'9'));
-    if id.is_empty()
-        || matches!(id, "." | "..")
-        || reserved
-        || id.ends_with(['.', ' '])
-        || id
-            .chars()
-            .any(|character| character.is_control() || "<>:\"/\\|?*".contains(character))
-    {
-        return Err(invalid_launch_key());
-    }
-    Ok(())
 }
 
 fn install_error(error: ccl_core::install::InstallError) -> GuiError {
@@ -608,25 +555,23 @@ fn account_error(error: ccl_core::accounts::AccountError) -> GuiError {
 
 #[cfg(test)]
 mod launch_key_tests {
-    use super::validate_key_id;
+    use super::*;
 
     #[test]
-    fn launch_path_components_accept_unicode_and_safe_punctuation() {
-        for id in ["1.20.1", "我的整合包", "日本語 pack! (1)"] {
-            assert!(validate_key_id(id).is_ok(), "{id}");
-        }
-        for id in [
-            "",
-            ".",
-            "..",
+    fn launch_keys_must_resolve_to_a_discovered_instance() {
+        let temp = tempfile::tempdir().unwrap();
+        let operations =
+            GuiOperations::new(temp.path().into(), temp.path().join("config.json")).unwrap();
+        for key in [
+            "vanilla:1.20.1",
+            "managed:旧实例",
             "../outside",
-            "a/b",
-            "a\\b",
-            "name:",
-            "CON.txt",
-            "COM1.save",
+            "instance:missing",
         ] {
-            assert!(validate_key_id(id).is_err(), "{id}");
+            assert_eq!(
+                operations.resolve_launch_key(key).err().unwrap().code,
+                "invalid_launch_key"
+            );
         }
     }
 }
