@@ -17,7 +17,10 @@ pub mod update_service;
 #[cfg(feature = "gui-validation")]
 pub mod validation;
 
-pub use library::{Bootstrap, LibraryEntry, bootstrap, initialize_root};
+pub use catalog::{CatalogRecord, CatalogRequest, LibraryCatalog};
+pub use library::{
+    Bootstrap, LibraryEntry, bootstrap, discover_entries, initialize_root, update_library,
+};
 pub use preferences::{Preferences, PreferencesStore, Theme};
 pub use tasks::{TaskHandle, TaskRegistry, TaskSnapshot, TaskState};
 

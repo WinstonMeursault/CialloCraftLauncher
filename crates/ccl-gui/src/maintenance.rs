@@ -4,7 +4,6 @@ use ccl_core::{
     accounts::OsProviderKeyStore,
     config::{ConfigStore, LauncherConfig},
     diagnostics::{DiagnosticsService, DoctorOptions, ExportOptions},
-    instances::InstanceService,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -206,26 +205,16 @@ impl Maintenance {
         }
     }
     fn diagnostic_root(&self, key: Option<&str>) -> GuiResult<PathBuf> {
-        match key {
-            None => Ok(self.root.clone()),
-            Some(key) if key.starts_with("vanilla:") => {
-                let id = &key[8..];
-                if id.is_empty() || id.contains(['/', '\\', ':']) || id == ".." {
-                    return Err(GuiError::new("invalid_key", "Invalid library key"));
-                }
-                Ok(self.root.clone())
-            }
-            Some(key) if key.starts_with("managed:") => InstanceService::new(
-                self.root.clone(),
-                LauncherConfig::read_or_default(&self.config)
-                    .map_err(|e| GuiError::new("configuration_error", e.to_string()))?
-                    .downloads,
-            )
-            .map_err(|e| GuiError::new("instance_error", e.to_string()))?
-            .game_directory(&key[8..])
-            .map_err(|e| GuiError::new("instance_error", e.to_string())),
-            _ => Err(GuiError::new("invalid_key", "Invalid library key")),
-        }
+        let Some(key) = key else {
+            return Ok(self.root.clone());
+        };
+        let config = LauncherConfig::read_or_default(&self.config)
+            .map_err(|e| GuiError::new("configuration_error", e.to_string()))?;
+        crate::discover_entries(&self.root, &config.downloads)?
+            .into_iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.game_directory)
+            .ok_or_else(|| GuiError::new("invalid_key", "Select an available instance"))
     }
 }
 fn vault_error(error: ccl_core::accounts::AccountError) -> GuiError {
