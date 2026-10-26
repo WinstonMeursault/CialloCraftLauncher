@@ -71,6 +71,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const selectedKeyRef = useRef(selectedKey)
+  selectedKeyRef.current = selectedKey
+  const accountReadSequence = useRef(0)
+  const accountMutating = useRef(false)
   const [currentLaunchKey, setCurrentLaunchKey] = useState<string | null>(null)
   const [modal, setModal] = useState<Modal>(null)
   const [versions, setVersions] = useState<GameVersion[]>([])
@@ -401,14 +405,16 @@ export default function App() {
   }
 
   const loadAccounts = useCallback(async () => {
-    setWorking(true); setError(null)
+    if (accountMutating.current) return
+    const sequence = ++accountReadSequence.current
+    setError(null)
     try {
       const listing = await invoke<AccountListing>('account_list')
+      if (sequence !== accountReadSequence.current || accountMutating.current) return
       setAccountListing(listing)
       setLaunchForm(current => ({ ...current, accountId: listing.selected || '' }))
     }
-    catch (cause) { captureError(cause) }
-    finally { setWorking(false) }
+    catch (cause) { if (sequence === accountReadSequence.current) captureError(cause) }
   }, [captureError])
 
   const selectEntry = (key: string) => {
@@ -425,31 +431,37 @@ export default function App() {
   }
 
   const accountSelect = async (id: string) => {
+    if (accountMutating.current) return
+    accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
     try {
       const listing = await invoke<AccountListing>('account_select', { id })
       setAccountListing(listing); setLaunchForm(current => ({ ...current, accountId: id }))
     }
     catch (cause) { captureError(cause) }
-    finally { setWorking(false) }
+    finally { accountMutating.current = false; setWorking(false) }
   }
   const accountLogout = async (id: string) => {
+    if (accountMutating.current) return
+    accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
     try {
       const listing = await invoke<AccountListing>('account_logout', { id })
       setAccountListing(listing); setLaunchForm(current => ({ ...current, accountId: current.accountId === id ? listing.selected ?? '' : current.accountId }))
     }
     catch (cause) { captureError(cause) }
-    finally { setWorking(false) }
+    finally { accountMutating.current = false; setWorking(false) }
   }
   const addOfflineAccount = async (username: string) => {
+    if (accountMutating.current) return
+    accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
     try {
       const listing = await invoke<AccountListing>('account_add_offline', { username })
       setAccountListing(listing)
       setLaunchForm(current => ({ ...current, accountId: listing.selected ?? '' }))
     } catch (cause) { captureError(cause); throw cause }
-    finally { setWorking(false) }
+    finally { accountMutating.current = false; setWorking(false) }
   }
   useEffect(() => {
     if (bootstrap && !bootstrap.setup_required) void loadAccounts()
@@ -512,35 +524,36 @@ export default function App() {
     setLogLoading(true)
     try {
       const result = await invoke<{ text: string }>('read_run_log', { key, runId, lines })
-      if (sequence === logReadSequence.current) setRunLog(boundLogText(logTail(result.text, Math.max(1, Math.min(lines, 1000))), 1000))
+      if (sequence === logReadSequence.current && selectedKeyRef.current === key) setRunLog(boundLogText(logTail(result.text, Math.max(1, Math.min(lines, 1000))), 1000))
     } catch (cause) {
       const payload = asRecord(cause)
-      if (sequence === logReadSequence.current) {
+      if (sequence === logReadSequence.current && selectedKeyRef.current === key) {
         if (payload?.code === 'log_read' && typeof payload.message === 'string' && /no launch logs found/i.test(payload.message)) setRunLog('')
         else captureError(cause)
       }
     }
-    finally { if (sequence === logReadSequence.current) setLogLoading(false) }
+    finally { if (sequence === logReadSequence.current && selectedKeyRef.current === key) setLogLoading(false) }
   }, [captureError])
 
   const loadRuns = useCallback(async (key: string, preferred: string | null = null) => {
     const sequence = ++runListSequence.current
     try {
       const result = await invoke<RunRecord[]>('log_runs', { key })
-      if (sequence !== runListSequence.current) return
+      if (sequence !== runListSequence.current || selectedKeyRef.current !== key) return
       const bounded = result.slice(0, 100)
       setRuns(bounded)
       const selectedRun = preferred && bounded.some(run => run.run_id === preferred) ? preferred : bounded[0]?.run_id ?? null
       setSelectedRunId(selectedRun)
       if (selectedRun) await readLog(key, selectedRun, 500)
       else setRunLog('')
-    } catch (cause) { if (sequence === runListSequence.current) captureError(cause) }
+    } catch (cause) { if (sequence === runListSequence.current && selectedKeyRef.current === key) captureError(cause) }
   }, [captureError, readLog])
 
   const previousLogKey = useRef<string | null>(selectedKey)
   useEffect(() => {
     if (previousLogKey.current === selectedKey) return
     previousLogKey.current = selectedKey
+    logReadSequence.current += 1; runListSequence.current += 1; setLogLoading(false)
     setRuns([]); setSelectedRunId(null); setRunLog('')
   }, [selectedKey])
 
@@ -579,7 +592,7 @@ export default function App() {
         <div ref={librarySurface} hidden={page !== 'library'} className="page-surface" data-page="library"><div hidden={detailOpen}><LibraryPage t={t} language={language} entries={entries} query={query} setQuery={setQuery} selectedKey={selectedKey} onManage={manageEntry} onRefresh={() => void refreshBootstrap()} onPlay={key => { selectEntry(key); enterPage('home') }} openCreate={openCreate} openImport={openImport} disabled={working || !!activeTask}/></div>{detailOpen && <><button className="button back-button" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => { if (librarySurface.current) librarySurface.current.scrollTop = libraryScroll.current }) }}><Icon name="back"/>{t.library}</button><InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={() => void refreshBootstrap()}/><details className="launch-settings"><summary>{t.launchOptions}</summary><LaunchOptions t={t} form={launchForm} onChange={setLaunchForm}/><p className="muted-copy">{language === 'zh-CN' ? '这些值用于本次启动器会话。全局默认值可在设置中保存。' : 'These values apply to this launcher session. Save global defaults in Settings.'}</p><button className="button primary" disabled={!selected} onClick={() => enterPage('home')}>{language === 'zh-CN' ? '返回启动' : 'Back to play'}</button></details></>}{bootstrap.warnings.length > 0 && <details className="warnings"><summary>{t.warnings}</summary>{bootstrap.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}</div>
         <div hidden={page !== 'discover'} className="page-surface" data-page="discover"><Discover entries={bootstrap.entries} onSelectEntry={selectEntry} language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={() => void refreshBootstrap()}/></div>
         <div hidden={page !== 'accounts'} className="page-surface" data-page="accounts"><AccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout}/></div>
-        <div hidden={page !== 'logs'} className="page-surface" data-page="logs"><h1>{t.logs}</h1><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? 'CCL 日志' : 'CCL logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language}/> : <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={selectEntry} runs={runs} selectedRunId={selectedRunId} selectRun={runId => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.display_name ?? null}/>}</div>
+        <div hidden={page !== 'logs'} className="page-surface" data-page="logs"><h1>{t.logs}</h1><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? 'CCL 日志' : 'CCL logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} active={page === 'logs'}/> : <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={selectEntry} runs={runs} selectedRunId={selectedRunId} selectRun={runId => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.display_name ?? null}/>}</div>
         <div hidden={page !== 'settings'} className="page-surface" data-page="settings"><h1>{t.settings}</h1><nav className="settings-tabs" aria-label={language === 'zh-CN' ? '设置类别' : 'Settings categories'}>{[['appearance','外观','Appearance'],['game','游戏与 Java','Game & Java'],['downloads','下载与网络','Downloads & network'],['updates','更新','Updates'],['advanced','高级与诊断','Advanced & diagnostics'],['about','关于','About']].map(([key,cn,en]) => <button key={key} aria-current={settingsCategory === key ? 'page' : undefined} className={settingsCategory === key ? 'active' : ''} onClick={() => setSettingsCategory(key)}>{language === 'zh-CN' ? cn : en}</button>)}</nav>
           <div hidden={settingsCategory !== 'appearance'}>{appearance}</div>
           {settingsCategory === 'game' && <section className="settings-card"><h2>{t.root}</h2><div className="setting-row"><code className="settings-path">{bootstrap.root}</code><button className="button secondary" onClick={chooseRoot} disabled={working || !!activeTask}>{t.changeRoot}</button></div>{bootstrap.hidden_entries > 0 && <div className="setting-row"><span>{t.hiddenInstances} · {bootstrap.hidden_entries}</span><button className="button secondary" disabled={working || !!activeTask} onClick={restoreHidden}>{t.restoreHidden}</button></div>}</section>}
