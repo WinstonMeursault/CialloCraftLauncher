@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.2.2 release notes](#release-notes)
+- [v0.2.3 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -321,7 +321,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.2.2 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.2.3 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -345,12 +345,29 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.2.2 release notes
+## v0.2.3 release notes
 
-These notes target v0.2.2 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.2.3 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.2
+# CialloCraftLauncher 0.2.3
+
+This patch fixes launching existing Forge modpacks and preserves each profile’s runtime data.
+
+- Expand HMCL’s `${primary_jar_name}` placeholder using the actual client JAR filename, including inherited JAR overrides, Unicode names and spaces.
+- Separate shared resource lookup from the game runtime directory. Existing profiles with local mods, configuration or saves run in their own directory; explicit per-profile HMCL directory choices take precedence. Game data is not moved.
+- Preserve different asset indexes published under the same ID by downloading and verifying a separate hash-specific index. Offline launch reuses that exact verified cache; existing shared indexes and version metadata are preserved.
+- Identify external profiles’ Minecraft versions and loaders from metadata instead of displaying every custom Forge profile as vanilla.
+- Record distinct, non-sensitive launcher error categories for unsupported placeholders, other launch-plan failures and Java failures.
+
+Validation before publication: 378 workspace tests passed with 9 ignored, desktop-feature compilation and warnings-denied Clippy passed. Four real macOS Forge profiles passed online and offline launch preparation (eight successful preparations). These checks did not enter a game world or establish successful Minecraft main-menu startup for every profile. The stable workflow additionally validates and packages Windows x64, macOS arm64 and Linux x64.
+
+CLI and GUI updater manifests have detached release-key signatures. Installers do not have OS publisher certificate signatures; the macOS bundle retains ad-hoc signature verification. Microsoft login availability and user-supplied CurseForge key requirements are unchanged.
+<!-- release-notes:end -->
+
+### v0.2.2 historical release notes
+
+#### CialloCraftLauncher 0.2.2
 
 This patch unifies the desktop library and stores display names and hidden state in separate metadata.
 
@@ -364,7 +381,7 @@ This patch unifies the desktop library and stores display names and hidden state
 Package targets are Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI DMG and updater archive), and Linux x86_64 (CLI ZIP / GUI AppImage and DEB). CLI and GUI updater manifests authenticate their separate payloads with detached signatures; packages do not have OS publisher certificate signatures. Linux DEB updates use the package manager.
 
 The new GUI display names and hidden state use sidecar metadata; existing game files are not migrated or rewritten. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
-<!-- release-notes:end -->
+
 
 ### v0.2.1 historical release notes
 
@@ -384,7 +401,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.2; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.3; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

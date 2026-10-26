@@ -78,7 +78,7 @@ The `launch` record includes `run_id`, `version`, `pid`, `exit_code`, `cancelled
 
 ## Desktop application
 
-The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. This API reference targets v0.2.2; GitHub Releases is authoritative for package availability. The original v0.2.0 macOS signature limitation and the v0.2.1 bundle-signing fix remain documented in the user guide. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
+The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. This API reference targets v0.2.3; GitHub Releases is authoritative for package availability. The original v0.2.0 macOS signature limitation and the v0.2.1 bundle-signing fix remain documented in the user guide. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
 
 Common GUI error codes include `setup_required` (confirm a game root), `library_unavailable` (metadata cannot safely be read), `configuration_error`, `task_busy`, `task_not_found`, `task_not_cancellable`, `path_not_selected`, `cancelled`, and `update_error`. Commands may return additional operation-specific codes; consumers should branch on `code`, not localized message text.
 
