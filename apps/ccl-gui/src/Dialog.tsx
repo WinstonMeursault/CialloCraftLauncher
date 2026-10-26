@@ -20,4 +20,3 @@ export function ModalFrame({ title, close, closeLabel, children, role = 'dialog'
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
   }}><header><h2 id="modal-title">{title}</h2><button type="button" className="icon-button" onClick={close} aria-label={closeLabel}>×</button></header>{children}</section></div>
 }
-
