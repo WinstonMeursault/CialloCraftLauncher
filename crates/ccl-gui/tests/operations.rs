@@ -7,6 +7,7 @@ use ccl_core::{
 use ccl_gui::operations::{
     GuiOperations, InstallRequest, LaunchIdentity, LaunchIdentityKind, LaunchRequest,
 };
+#[cfg(unix)]
 use ccl_gui::{PreferencesStore, bootstrap};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
