@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { formatGuiError, type Language } from './types'
 
 type Snapshot = { text: string; path: string; debug: boolean }
-export function LauncherLogs({ language }: { language: Language }) {
+export function LauncherLogs({ language, active = true }: { language: Language; active?: boolean }) {
   const zh = language === 'zh-CN'
   const [index, setIndex] = useState(0), [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
@@ -13,7 +13,7 @@ export function LauncherLogs({ language }: { language: Language }) {
     catch (cause) { setError(formatGuiError(cause, zh ? '无法读取启动器日志' : 'Could not read launcher logs')) }
     finally { setBusy(false) }
   }, [index, zh])
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { if (active) void load() }, [load, active])
   const debug = async (enabled: boolean) => {
     setBusy(true); setError('')
     try { await invoke('launcher_log_debug', { enabled }); await load() }

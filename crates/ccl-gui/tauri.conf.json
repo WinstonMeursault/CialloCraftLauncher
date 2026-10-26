@@ -13,8 +13,8 @@
         "title": "CialloCraftLauncher",
         "width": 1180,
         "height": 780,
-        "minWidth": 960,
-        "minHeight": 640
+        "minWidth": 520,
+        "minHeight": 480
       }
     ],
     "security": {

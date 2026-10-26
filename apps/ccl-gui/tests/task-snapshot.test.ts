@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { acceptTaskSnapshot, boundLogLines, formatGuiError, GUI_LOG_MAX_BYTES, GUI_LOG_MAX_LINES, newestHistory, redactSensitive, retainBusyEntries, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
+import { acceptTaskSnapshot, boundLogLines, formatGuiError, GUI_LOG_MAX_BYTES, GUI_LOG_MAX_LINES, newestHistory, redactSensitive, retainBusyEntries, resolveSelectedInstance, taskProgress, type Bootstrap, type TaskSnapshot } from '../src/types.ts'
 
 function snapshot(id: number, revision: number): TaskSnapshot {
   return { id, revision, kind: 'probe', phase: 'running', state: 'running', completed: 0, total: 10, logs: [], error: null, error_code: null, pid: null, result: null, authorization: null }
@@ -52,7 +52,7 @@ test('history replaces stale revisions, sorts newest first, and retains eight ta
 
 test('keeps entries with active revision storage when a busy library refresh omits them', () => {
   const oldEntry = { key: 'instance:' + 'a'.repeat(64), id: 'atelier', display_name: 'Atelier', has_revision_storage: true, launch_version: '1.21.1', minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
-  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en' }, entries: [oldEntry], warnings: [], hidden_entries: 0 }
+  const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en', reduce_transparency: false, reduce_motion: false, last_selected_instance: null, background_image: null }, entries: [oldEntry], warnings: [], hidden_entries: 0 }
   const incomplete: Bootstrap = { ...current, entries: [], warnings: ['Instance revision metadata is busy or unreadable; retry after other operations finish'] }
 
   assert.deepEqual(retainBusyEntries(current, incomplete).entries, [oldEntry])
@@ -92,4 +92,14 @@ test('a single oversized Unicode line is truncated on a UTF-8 boundary', () => {
   assert.ok(bytes <= 8 * 1024)
   assert.equal(output[0]!.endsWith('tail'), true)
   assert.doesNotThrow(() => new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(output[0]!)))
+})
+
+// Saved display names can collide; only the opaque library key chooses a game.
+test('instance selection requires the stable key and never falls back to another game', () => {
+  const first = { key: 'profile:a', id: 'a', display_name: '酒狐的奇妙冒险 with spaces', has_revision_storage: false, launch_version: 'a', minecraft: '1.20.1', loader: 'forge', game_directory: '/games/a' }
+  const second = { ...first, key: 'profile:b', id: 'b', game_directory: '/games/b' }
+  assert.equal(resolveSelectedInstance([first, second], second.key), second)
+  assert.equal(resolveSelectedInstance([first, second], second.display_name), null)
+  assert.equal(resolveSelectedInstance([first], second.key), null)
+  assert.equal(resolveSelectedInstance([first], null), null)
 })

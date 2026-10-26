@@ -21,6 +21,8 @@ tokio.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
 semver = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 tauri = { version = "2", optional = true }
