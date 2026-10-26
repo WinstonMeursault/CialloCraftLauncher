@@ -62,7 +62,7 @@ The release workflows target Windows 2025, macOS 15 and Ubuntu 24.04. They launc
 
 The `gui-validation` feature enables test-only GUI update drivers and hooks. The frontend maintenance performance harness is separately gated by `VITE_CCL_GUI_PERF_HARNESS=true`; the isolated performance acceptance scenario requires both gates to be enabled. Do not enable either for normal release packages.
 
-macOS bundles explicitly use `bundle.macOS.signingIdentity: "-"` so Tauri seals the complete app, rather than relying on the executable’s linker signature. `scripts/package-gui-release.py` invokes `scripts/verify-macos-bundle.py` on macOS: `codesign --verify --deep --strict` must accept the build bundle and the apps extracted from both the updater archive and read-only DMG. A signature failure aborts packaging in GUI validation, dev and stable workflows. These checks verify bundle integrity, not Developer ID trust or notarization; browser-download Gatekeeper approval remains separate. The correction was made on `dev` by commit `c366ce4`. The original v0.2.0 macOS DMG and updater archive still predate it and retain the incomplete linker-only signature; see the user guide for local recovery.
+macOS bundles explicitly use `bundle.macOS.signingIdentity: "-"` so Tauri seals the complete app, rather than relying on the executable’s linker signature. `scripts/package-gui-release.py` invokes `scripts/verify-macos-bundle.py` on macOS: `codesign --verify --deep --strict` must accept the build bundle and the apps extracted from both the updater archive and read-only DMG. A signature failure aborts packaging in GUI validation, dev and stable workflows. These checks verify bundle integrity, not Developer ID trust or notarization; browser-download Gatekeeper approval remains separate. The v0.2.1 correction originated on `dev` in commit `c366ce4`. The original v0.2.0 macOS DMG and updater archive still predate it and retain the incomplete linker-only signature; see the user guide for local recovery.
 
 The app requires a confirmed game root before opening the library. The setup screen can choose a directory with the native picker or confirm the proposed directory; only confirmation creates a missing directory. Existing roots and managed instances are reused. Vanilla and managed instances can be created, including shared vanilla installs and managed instances with supported loaders. A native file picker inspects supported Modrinth, CurseForge, and MultiMC/Prism archives before import. Launch selects a saved offline account; Java path, memory, managed Java installation, and dry-run controls are available. GUI Microsoft sign-in is temporarily unavailable.
 
@@ -265,7 +265,7 @@ Unit fixtures cover provider search and version payload mapping, dependency type
    git fetch origin
    git switch main
    git pull --ff-only origin main
-   git merge --no-ff origin/dev
+   git merge --squash origin/dev
    # Resolve/review any conflicts, then edit all three package versions if needed.
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z
@@ -321,7 +321,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-The workspace package version is currently 0.2.0. The latest stable release on `main` is v0.2.0 and includes the GUI and signed-manifest updater. Current GUI changes on `dev` are not included in that stable package; developer prereleases may provide them.
+The workspace package version is 0.2.1. These guides target the v0.2.1 GUI and CLI release; GitHub Releases is authoritative for published package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -347,21 +347,27 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 ## v0.2 release notes
 
-These notes describe the published stable v0.2.0 release on `main`. Current GUI changes on `dev` are not included in that package. The original macOS assets have the signature limitation described in [Desktop GUI and package updates](#gui-g3); later `dev` packaging adds bundle sealing and verification.
+These notes target v0.2.1 and are used by the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.0
+# CialloCraftLauncher 0.2.1
 
-This release provides a Rust CLI and a Tauri desktop application backed by a shared core. The CLI covers Minecraft installation and launch, isolated instances, supported loaders, Modrinth/CurseForge/MultiMC/Prism pack import, online content operations, local content management, and userdata backups; its distribution and update packages are ZIP archives on all three platforms. The desktop application provides the same core-backed workflows through a graphical interface. Windows packages include a per-user NSIS installer; macOS packages include a DMG and an app-bundle update archive; Linux packages include AppImage and DEB distributions.
+This patch improves the desktop workflow and corrects macOS bundle integrity.
 
-CLI and GUI use independent, product-specific signed update manifests and transactional update/rollback flows. The first CLI build using the signed-manifest protocol must be installed manually over v0.1.0 or earlier, whose updater cannot read the new manifest format. GUI in-app updates support writable per-user NSIS installations on Windows, writable app bundles on macOS, and writable AppImages on Linux; Linux DEB updates remain the package manager's responsibility. Offline identity launch is supported. Microsoft online sign-in is experimental, and genuine-account validation and acceptance have been deferred. CurseForge API keys are supplied by users and stored in the OS credential vault; production API access depends on provider authorization.
+- Instances support UTF-8 names, including Chinese, Japanese and spaces. Library discovery and launch use consistent filename validation, fixing `invalid_launch_key` for existing named profiles. Windows filename restrictions remain in effect.
+- Add, select and remove saved offline accounts in Accounts; the library selects these accounts directly. Offline profiles never use the credential vault. Microsoft sign-in is temporarily unavailable in the GUI, and its public client ID is in Settings → Advanced. The experimental CLI Microsoft flow remains available.
+- Downloads, installation, import and other task operations use a collapsible progress dialog. The Tasks page is removed, progress recovers missed completion events, and a running game collapses the dialog automatically.
+- Discover, instance tools and Settings display readable results instead of raw JSON or debug status fields. Redundant instance text and the sidebar slogan are removed.
+- Separate CCL launcher logs from game logs, with bounded rotation, optional navigation logging and local export. Persistent launcher logs record allowlisted events without arbitrary request data, credentials or user paths.
+- macOS packaging applies a complete ad-hoc bundle signature and verifies the built app, DMG and update archive. This corrects the incomplete signature in the original v0.2.0 assets. Apple Developer ID signing and notarization are still unavailable; macOS may require per-app approval.
+- English and Simplified Chinese guides are aligned with these changes.
 
-**Compatibility and security:** Detached cryptographic signatures authenticate updater manifests and their package digests. They are separate from OS publisher signatures: these CLI and GUI packages are not OS-signed, and macOS packages are not notarized. Update transactions cover launcher files, not game data. CI validates builds and GUI readiness on hosted Windows x64, macOS arm64, and Linux x86_64 runners; this does not establish physical-machine game-launch coverage or certify the intended minimum OS versions. Back up important worlds before pack operations that replace content.
+Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI DMG and updater archive), and Linux x86_64 (CLI ZIP / GUI AppImage and DEB). CLI and GUI updater manifests authenticate their separate payloads with detached signatures; packages do not have OS publisher certificate signatures. Linux DEB updates use the package manager.
 
-Packages are built for Windows x86_64, macOS arm64, and Linux x86_64. Review the included guides for setup, supported formats, and current platform requirements.
+Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 <!-- release-notes:end -->
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes describe the published v0.2.0 release; they do not describe unreleased `dev` changes. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.1; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

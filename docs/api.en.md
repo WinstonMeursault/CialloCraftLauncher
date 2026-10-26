@@ -78,7 +78,7 @@ The `launch` record includes `run_id`, `version`, `pid`, `exit_code`, `cancelled
 
 ## Desktop application
 
-The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. The latest stable release is v0.2.0 on `main`. The GUI changes documented here are currently on `dev` and are not included in v0.2.0. Stable publishing requires a manual workflow dispatch for an existing `vX.Y.Z` tag and the exact `PUBLISH` confirmation. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
+The Tauri desktop application is `ccl-gui`, distributed separately from CLI ZIPs. This API reference targets v0.2.1; its GUI changes are not present in the original v0.2.0 package. Stable publishing requires a manual workflow dispatch for an existing `vX.Y.Z` tag and the exact `PUBLISH` confirmation. Invoke commands through Tauri's `invoke` API. Successful commands return their typed value. A failed command rejects with a serialized `{ "code": "...", "message": "..." }` error; these GUI error codes are separate from CLI error codes and exit statuses.
 
 Common GUI error codes include `setup_required` (confirm a game root), `library_unavailable` (metadata cannot safely be read), `configuration_error`, `task_busy`, `task_not_found`, `task_not_cancellable`, `path_not_selected`, `cancelled`, and `update_error`. Commands may return additional operation-specific codes; consumers should branch on `code`, not localized message text.
 

@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "ccl-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ccl-core",
  "clap",
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "ccl-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "fs2",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "ccl-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ccl-core",
  "flate2",

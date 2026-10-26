@@ -64,7 +64,7 @@ cargo run -p ccl-cli -- --help
 
 `gui-validation` feature 会启用仅供测试的 GUI 更新驱动和钩子。前端维护页性能测试入口另由 `VITE_CCL_GUI_PERF_HARNESS=true` 控制；隔离性能验收场景必须同时启用这两个开关。正常发行包不要启用任一开关。
 
-macOS 程序包明确设置 `bundle.macOS.signingIdentity: "-"`，由 Tauri 密封完整应用包，而非依赖可执行文件的链接器签名。`scripts/package-gui-release.py` 在 macOS 上调用 `scripts/verify-macos-bundle.py`：构建应用包、更新归档解压后的应用包及只读 DMG 内的应用包都必须通过 `codesign --verify --deep --strict`。签名失败会中止 GUI 验证、dev 和 stable 工作流的打包。这些检查验证应用包完整性，不代表 Developer ID 信任或公证；浏览器下载后的 Gatekeeper 批准仍需单独处理。该修正在 `dev` 的 `c366ce4` 提交中完成。原始 v0.2.0 macOS DMG 和更新归档仍保留不完整的链接器签名；本地恢复方法见使用指南。
+macOS 程序包明确设置 `bundle.macOS.signingIdentity: "-"`，由 Tauri 密封完整应用包，而非依赖可执行文件的链接器签名。`scripts/package-gui-release.py` 在 macOS 上调用 `scripts/verify-macos-bundle.py`：构建应用包、更新归档解压后的应用包及只读 DMG 内的应用包都必须通过 `codesign --verify --deep --strict`。签名失败会中止 GUI 验证、dev 和 stable 工作流的打包。这些检查验证应用包完整性，不代表 Developer ID 信任或公证；浏览器下载后的 Gatekeeper 批准仍需单独处理。v0.2.1 的该修正源自 `dev` 的 `c366ce4` 提交。原始 v0.2.0 macOS DMG 和更新归档仍保留不完整的链接器签名；本地恢复方法见使用指南。
 
 应用需要先确认游戏根目录才能打开游戏库。初始界面可通过系统目录选择器选择目录，或确认建议的目录；只有确认后才会创建缺失目录。已有根目录和托管实例会复用。可创建原版和托管实例，包括共享原版安装，以及使用受支持加载器的托管实例。系统文件选择器可先检查受支持的 Modrinth、CurseForge 和 MultiMC/Prism 归档，再导入。启动时选择已保存的离线账户，并可设置 Java 路径、内存、托管 Java 安装及 dry-run。GUI Microsoft 登录暂时不可用。
 
@@ -267,7 +267,7 @@ CI 矩阵会运行格式检查、将警告视为错误的 Clippy、全部工作�
    git fetch origin
    git switch main
    git pull --ff-only origin main
-   git merge --no-ff origin/dev
+   git merge --squash origin/dev
    # 解决并复核冲突，然后按需修改全部三个 package 版本。
    cargo check --workspace
    python3 scripts/check-package-versions.py --expected X.Y.Z
@@ -323,7 +323,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-当前工作区 package 版本为 0.2.0。`main` 上最新稳定版为 v0.2.0，包含 GUI 和签名清单更新器。当前 `dev` 上的 GUI 改动尚未包含在该稳定程序包中；开发预发行版可能提供这些改动。
+当前工作区 package 版本为 0.2.1。本文档对应 v0.2.1 GUI 和 CLI 发行版；已发布程序包的可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -349,21 +349,27 @@ git push origin dev
 
 ## v0.2 发行说明
 
-以下说明对应 `main` 上已发布的 v0.2.0 稳定版。当前 `dev` 上的 GUI 改动尚未包含在该程序包中。原始 macOS 程序包存在[桌面 GUI 与应用更新](#gui-g3)所述签名限制；后续 `dev` 打包已增加应用包密封和验证。
+以下说明对应 v0.2.1，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.0
+# CialloCraftLauncher 0.2.1
 
-本版本提供 Rust 命令行界面和 Tauri 桌面应用，并由共享核心提供功能支持。CLI 涵盖 Minecraft 安装与启动、隔离实例、受支持的加载器、Modrinth/CurseForge/MultiMC/Prism 整合包导入、在线内容操作、本地内容管理和用户数据备份；三个平台的 CLI 分发包和更新包均为 ZIP 归档。桌面应用通过图形界面提供同一套基于核心的工作流。Windows 程序包包含按用户安装的 NSIS 安装程序；macOS 程序包包含 DMG 和应用包更新归档；Linux 提供 AppImage 与 DEB 分发包。
+本次补丁改进桌面使用流程，并修正 macOS 应用包完整性。
 
-CLI 和 GUI 分别使用产品专属的签名更新清单，并提供事务式更新与回退流程。首次升级到签名清单协议的 CLI 版本必须手动覆盖安装 v0.1.0 或更早版本，因为旧更新器无法读取新清单格式。GUI 应用内更新支持 Windows 上可写的按用户 NSIS 安装、macOS 上可写的应用包，以及 Linux 上可写的 AppImage；Linux DEB 更新由系统包管理器负责。支持离线身份启动。Microsoft 在线登录仍是实验功能，所有者已推迟真实账户验证与验收。CurseForge API 密钥由用户提供并保存在操作系统凭据库中；生产 API 访问仍取决于服务商授权。
+- 实例支持 UTF-8 名称，包括中日文和空格。游戏库发现和启动使用一致的文件名校验，修复已有命名配置触发 `invalid_launch_key` 的问题；仍遵守 Windows 文件名限制。
+- 在账户页添加、选择和删除已保存离线账户，游戏库直接选择这些账户。离线档案不使用凭据库。GUI Microsoft 登录暂不可用，公开 Client ID 移至设置 → 高级设置；CLI 实验性 Microsoft 流程仍保留。
+- 下载、安装、导入等操作改用可收起的进度弹窗，移除任务中心页面。进度同步可恢复遗漏的完成事件，游戏进程启动后自动收起弹窗。
+- 下载中心、实例工具和设置改为可读结果，移除原始 JSON、调试状态、多余实例文案及侧栏标语。
+- CCL 启动器日志与游戏日志分离，支持有界轮转、可选导航日志和本地导出。持久日志仅记录允许的事件，不记录任意请求数据、凭据或用户路径。
+- macOS 打包采用完整应用包 ad-hoc 签名，并验证构建应用、DMG 和更新归档，修正原始 v0.2.0 资产签名不完整的问题。仍无 Apple Developer ID 签名和公证，macOS 可能需要逐应用批准。
+- 中英文指南已与以上行为对齐。
 
-**兼容性与安全：** 独立的密码学签名用于认证更新清单及其中的程序包摘要，与操作系统发布者签名不同。CLI 和 GUI 程序包均无操作系统签名；macOS 程序包未经公证。更新事务只涉及启动器文件，不包含游戏数据。CI 会在托管的 Windows x64、macOS arm64 和 Linux x86_64 运行器上验证构建与 GUI 就绪状态；这不能证明物理机上的游戏启动情况，也不能认证预期最低系统版本。替换内容的整合包操作前请备份重要存档。
+程序包覆盖 Windows x86_64（CLI ZIP / GUI NSIS）、macOS arm64（CLI ZIP / GUI DMG 及更新归档）和 Linux x86_64（CLI ZIP / GUI AppImage 及 DEB）。CLI 和 GUI 更新清单分别使用独立签名认证各自负载；程序包没有操作系统发布者证书签名。Linux DEB 由包管理器更新。
 
-程序包目标平台为 Windows x86_64、macOS arm64 和 Linux x86_64。安装、支持的格式及当前平台要求见随包附带的指南。
+现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 <!-- release-notes:end -->
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应已发布的 v0.2.0，不代表尚未发布的 `dev` 改动。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.2.1；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

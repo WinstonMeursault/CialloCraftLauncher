@@ -78,7 +78,7 @@ ccl [--json] [--network-offline] [--game-dir PATH] [--config PATH] <doctor|diagn
 
 ## 桌面应用
 
-Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。最新稳定版是 main 上的 v0.2.0。本文记录的 GUI 改动目前位于 dev，尚未包含在 v0.2.0 中。稳定版必须针对已存在的 `vX.Y.Z` 标签手动触发工作流，并输入准确确认词 `PUBLISH`。通过 Tauri 的 `invoke` API 调用命令。成功时返回类型化数据；失败时以 `{ "code": "...", "message": "..." }` 格式拒绝调用。GUI 错误码与 CLI 错误码和退出码分开。
+Tauri 桌面应用为 `ccl-gui`，与 CLI ZIP 分开分发。本文接口参考对应 v0.2.1；原始 v0.2.0 程序包不包含这些 GUI 改动。稳定版必须针对已存在的 `vX.Y.Z` 标签手动触发工作流，并输入准确确认词 `PUBLISH`。通过 Tauri 的 `invoke` API 调用命令。成功时返回类型化数据；失败时以 `{ "code": "...", "message": "..." }` 格式拒绝调用。GUI 错误码与 CLI 错误码和退出码分开。
 
 常见 GUI 错误码包括 `setup_required`（确认游戏根目录）、`library_unavailable`（无法安全读取元数据）、`configuration_error`、`task_busy`、`task_not_found`、`task_not_cancellable`、`path_not_selected`、`cancelled` 和 `update_error`。命令还可能返回其他操作专属错误码；调用方应按 `code` 而不是本地化后的消息文本分支处理。
 
