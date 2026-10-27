@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.3.2 发行说明](#release-notes)
+- [v0.3.3 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -67,6 +67,8 @@ GUI 管理页通过 React memo 和稳定页面输入减少重渲染，仍保留�
 <a id="gui-g3"></a>
 
 ## 桌面 GUI 与应用包更新
+
+UI 基础控件共用圆角变量：`--radius-control`（8 px）、`--radius-surface`（12 px）、`--radius-dialog`（16 px）。交互行高亮使用控件圆角及内部留白；透明布局区和分隔线保持简洁。所有单选下拉框使用 `Select.tsx`，不使用原生 `<select>` 弹出菜单。受控的 `value` / `onValueChange` 接口将 option 子元素作为数据，保留空值与必填校验，支持禁用项、键盘选择、长列表搜索和焦点恢复。菜单按事件更新位置，约束在视口内并测量文字宽度，仅滚动自身列表。弹窗拥有其菜单 DOM，保留焦点限制及嵌套 Esc 处理。菜单为实色背景，不增加模糊、动画循环或运行时依赖。选项应使用纯文本且 value 唯一。单元检查覆盖搜索/导航/定位；渲染验收还须检查双主题、底部展开、弹窗 Tab/Esc、必填提交与长名称。`pnpm test` 运行所有前端测试文件。
 
 桌面应用是独立的 Tauri 产品 `ccl-gui`，与 CLI 共享核心代码，但具有独立产品身份和更新清单。CLI 发行 ZIP 也继续提供，桌面程序包格式如下：
 
@@ -353,7 +355,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-本文档对应 v0.3.2 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.3.3 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -377,12 +379,29 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.3.2 发行说明
+## v0.3.3 发行说明
 
-以下说明对应 v0.3.2，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.3.3，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.2
+# CialloCraftLauncher 0.3.3
+
+此补丁统一桌面应用浅色与深色主题下的控件设计。
+
+- 按钮、输入框、账户选中、游戏库选中、搜索结果、面板和弹窗采用共享圆角规范。选中行增加内部留白，普通布局区保持简洁。
+- 将全部 23 处原生下拉框替换为统一主题控件，覆盖首页账户、游戏/加载器版本、下载、日志、更新及内存设置。菜单采用实色背景，不增加运行时依赖或模糊效果。
+- 超过八个选项时提供搜索，支持按名称、标识及 Unicode 文本匹配。长列表在内部滚动，菜单按文字适度加宽且受视口约束，打开时显示当前选中项。
+- 支持键盘导航、禁用项、Enter 确认、Esc 取消、焦点恢复及必填校验。首页选择账户不会提交启动表单。
+- 根据实际内容高度和可用空间定位菜单。保留弹窗焦点，Esc 先关闭菜单再关闭弹窗，Tab 与 Shift+Tab 在所属弹窗的控件间移动。
+
+功能通过 16 项前端测试、TypeScript/Vite 生产构建，以及 Windows x64、macOS arm64、Linux x86_64 核心/桌面 CI。桌面检查覆盖打包、前端就绪及更新回滚/恢复。隔离渲染检查使用合成数据验证真实账户、首页、设置和弹窗组件，不代表三种操作系统均已完成交互式物理机验收。正式工作流会再次验证标签版本和上传附件。
+
+此 UI 补丁不改变 CLI 行为或游戏数据，内存分配仍默认自动。CLI 和 GUI 更新清单保留发行密钥签名。安装文件没有操作系统发布者证书签名；macOS 保留完整 ad-hoc 签名验证，未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 需要用户提供 API key。
+<!-- release-notes:end -->
+
+### v0.3.2 历史发行说明
+
+#### CialloCraftLauncher 0.3.2
 
 本版本为核心、CLI 和桌面 GUI 加入 Minecraft 堆内存自动分配，默认使用自动模式。
 
@@ -396,7 +415,6 @@ git push origin dev
 功能已通过 Windows x64、macOS arm64、Linux x86_64 核心 CI 及桌面打包/就绪/更新恢复检查，覆盖原生检测、预算边界、设置优先级与持久化、过期编辑保护、Unicode 实例名、不走回退的自动 dry-run 和 JVM 参数冲突。隔离浏览器检查覆盖真实设置组件。正式工作流会重新验证该标签及上传资产。
 
 自动分配是启发式策略，不是整个进程的内存上限，也不保证所有整合包可用；不会调整运行中的游戏。CLI/GUI 更新清单继续由发行密钥签名，安装程序无操作系统发布者证书签名，macOS 未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 需用户自备 API key。不迁移游戏数据。
-<!-- release-notes:end -->
 
 ### v0.3.1 历史发行说明
 
@@ -485,7 +503,7 @@ CLI 和 GUI 更新清单具有发行密钥的独立签名。安装程序不具�
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.2；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.3；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.3.2 release notes](#release-notes)
+- [v0.3.3 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -67,6 +67,8 @@ GUI management pages use React memoization with stable page inputs while retaini
 <a id="gui-g3"></a>
 
 ## Desktop GUI and package updates
+
+UI primitives use shared radius tokens: `--radius-control` (8 px), `--radius-surface` (12 px), and `--radius-dialog` (16 px). Interactive row highlights use the control radius with internal padding; transparent layout sections and separators remain plain. All single-choice dropdowns use `Select.tsx` rather than native `<select>` popups. Its controlled `value` / `onValueChange` API accepts option children as data, preserves empty values and required-field validation, and supports disabled items, keyboard selection, long-list search and focus restoration. Popup positioning is event-driven, constrained to the viewport and measured for label width; it scrolls only its own list. A dialog owns its popup DOM so focus trapping and nested Esc handling remain intact. Popup surfaces are opaque and introduce no blur, animation loop or new runtime dependency. Keep options textual and unique by value. Unit checks cover search/navigation/positioning; rendered acceptance must also check both themes, bottom-edge opening, modal Tab/Esc, required submission and long labels. `pnpm test` runs all frontend test files.
 
 The desktop application is a separate Tauri product named `ccl-gui`, sharing the core with the CLI while keeping a distinct product identity and updater manifest. CLI release ZIPs remain available alongside these desktop package formats:
 
@@ -349,7 +351,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.3.2 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.3 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -373,12 +375,29 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.3.2 release notes
+## v0.3.3 release notes
 
-These notes target v0.3.2 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.3 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.2
+# CialloCraftLauncher 0.3.3
+
+This patch makes desktop controls consistent across the application’s light and dark themes.
+
+- Use shared rounded corners for buttons, fields, account selection, library selection, search results, panels and dialogs. Add internal spacing to selected rows while keeping plain layout sections simple.
+- Replace all 23 native dropdowns with one themed control, including home accounts, game/loader versions, downloads, logs, updates and memory settings. Menus use opaque surfaces with no new runtime dependency or blur.
+- Add search when a menu contains more than eight options, matching names and identifiers including Unicode text. Keep long lists internally scrollable, widen menus for labels within viewport limits, and reveal the current selection when opening.
+- Support keyboard navigation, disabled options, Enter confirmation, Esc cancellation, focus restoration and required-field validation. Selecting a home account does not submit the launch form.
+- Position menus using their content height and available space. Preserve dialog focus and let Esc close the menu before the dialog; Tab and Shift+Tab move between the owning dialog’s controls.
+
+The feature passed 16 frontend tests, TypeScript/Vite production builds, and core/desktop CI on Windows x64, macOS arm64 and Linux x86_64. Desktop checks covered packaging, frontend readiness and update rollback/recovery. Isolated rendered checks covered actual account, home, settings and dialog components with synthetic data; they do not establish interactive physical-machine acceptance on all three operating systems. The stable workflow revalidates the tagged release and uploaded assets.
+
+CLI behavior and game data are unchanged by this UI patch; automatic memory remains the default. CLI and GUI updater manifests retain release-key signatures. Installers lack OS publisher certificate signatures; macOS bundles retain verified ad-hoc signatures and are not notarized. GUI Microsoft sign-in remains temporarily unavailable, and CurseForge requires a user-provided API key.
+<!-- release-notes:end -->
+
+### v0.3.2 historical release notes
+
+#### CialloCraftLauncher 0.3.2
 
 This release adds automatic Minecraft heap allocation to the core, CLI and desktop GUI. Automatic is the default.
 
@@ -392,7 +411,6 @@ This release adds automatic Minecraft heap allocation to the core, CLI and deskt
 The feature passed core CI and desktop packaging/readiness/update-recovery checks on Windows x64, macOS arm64 and Linux x86_64. Native probe tests, budget boundaries, setting precedence/persistence, stale-edit protection, Unicode profile names, non-fallback automatic dry-run and JVM argument conflicts were covered. Isolated browser checks covered the actual setting components. The stable workflow revalidates this tagged release and uploaded assets.
 
 Automatic allocation is a heuristic, not a total-process memory cap or a guarantee every modpack fits. It does not resize a running game. CLI/GUI updater manifests retain release-key signatures; installers lack OS publisher certificate signatures and macOS is not notarized. GUI Microsoft login remains temporarily unavailable; CurseForge requires a user-provided API key. Game data is not migrated.
-<!-- release-notes:end -->
 
 ### v0.3.1 historical release notes
 
@@ -481,7 +499,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.2; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.3; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 
