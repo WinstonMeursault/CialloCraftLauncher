@@ -162,9 +162,9 @@ enum Command {
         /// Java executable or Java home; otherwise detect a matching installed runtime.
         #[arg(long)]
         java: Option<PathBuf>,
-        /// Maximum Java heap in MiB.
+        /// Maximum Java heap: auto or an integer MiB limit. Overrides instance/global settings.
         #[arg(long)]
-        memory: Option<u32>,
+        memory: Option<ccl_core::memory::MemoryPolicy>,
         /// Prepare and print the argument vector without starting the game.
         #[arg(long)]
         dry_run: bool,
@@ -335,6 +335,16 @@ enum ContentCommand {
 
 #[derive(Subcommand)]
 enum SettingsCommand {
+    /// Read or save an installed profile's memory override (auto, MiB, or inherit).
+    Memory {
+        #[arg(required_unless_present = "instance", conflicts_with = "instance")]
+        version: Option<String>,
+        #[arg(long)]
+        instance: Option<String>,
+        /// Save auto, an integer MiB limit, or inherit to remove the override.
+        #[arg(long = "set")]
+        value: Option<String>,
+    },
     /// Show all settings with proxy credentials hidden.
     Show,
     /// Read one dotted setting.
@@ -617,6 +627,55 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Settings { command } => {
             let store = ConfigStore::new(&config_path);
             match command {
+                SettingsCommand::Memory {
+                    version,
+                    instance,
+                    value,
+                } => {
+                    let (directory, id) = if let Some(id) = instance {
+                        (
+                            InstanceService::new(
+                                resolution.path.clone(),
+                                config.downloads.clone(),
+                            )?
+                            .game_directory(id)?,
+                            id.clone(),
+                        )
+                    } else {
+                        let id = version.as_ref().expect("clap requires version or instance");
+                        launch::load_installed_metadata(&resolution.path, id)?;
+                        (resolution.path.clone(), id.clone())
+                    };
+                    let key = ccl_core::memory::profile_key(&directory, &id).map_err(|source| {
+                        Error::Io {
+                            path: directory.clone(),
+                            source,
+                        }
+                    })?;
+                    if let Some(value) = value {
+                        let policy = if value == "inherit" {
+                            None
+                        } else {
+                            Some(
+                                value
+                                    .parse::<ccl_core::memory::MemoryPolicy>()
+                                    .map_err(Error::InvalidConfig)?,
+                            )
+                        };
+                        store.update(|config| {
+                            if let Some(policy) = policy {
+                                config.launch.instance_memory.insert(key.clone(), policy);
+                            } else {
+                                config.launch.instance_memory.remove(&key);
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    let current = LauncherConfig::read_or_default(&config_path)?;
+                    Ok(
+                        json!({"ok":true,"id":id,"override":current.launch.instance_memory.get(&key),"effective":current.launch.memory_policy(&directory, &id, None)?}),
+                    )
+                }
                 SettingsCommand::Show => Ok(
                     json!({ "ok": true, "settings": config.display_json()?, "path": config_path }),
                 ),
@@ -1254,13 +1313,18 @@ async fn run(cli: &Cli) -> Result<Value> {
                     );
                 }
             }
+            let memory_policy = config.launch.memory_policy(
+                &game_directory,
+                instance.as_deref().unwrap_or(&version),
+                *memory,
+            )?;
             let request = LaunchRequest {
                 game_directory,
                 working_directory: None,
                 version,
                 username: launch_username,
                 java: java.clone().or(config.launch.java.clone()),
-                max_memory_mb: memory.unwrap_or(config.launch.max_memory_mb),
+                memory: memory_policy,
                 identity,
                 auto_install_java: !no_java_download && config.launch.auto_install_java,
             };
@@ -1445,6 +1509,20 @@ fn print_human(value: &Value) {
         println!("{}", serde_json::to_string_pretty(value).unwrap());
         return;
     }
+    if let Some(effective) = value.get("effective") {
+        let describe = |policy: &Value| match policy {
+            Value::String(value) if value == "auto" => "automatic".to_owned(),
+            Value::Number(value) => format!("{value} MiB"),
+            _ => "inherit".to_owned(),
+        };
+        println!(
+            "Memory for {}: {} (instance override: {})",
+            value["id"].as_str().unwrap_or("?"),
+            describe(effective),
+            describe(&value["override"])
+        );
+        return;
+    }
     if value.get("settings").is_some()
         || value.get("key").is_some()
         || value.get("accounts").is_some()
@@ -1600,6 +1678,7 @@ fn error_code(error: &Error) -> &'static str {
                     ccl_core::download::DownloadError::Cancelled,
                 ),
             ) => "cancelled",
+            LaunchError::Memory(_) => "memory_allocation_failed",
             LaunchError::Java(_) | LaunchError::Runtime(_) => "java_error",
             LaunchError::Cancelled
             | LaunchError::Download(ccl_core::download::DownloadError::Cancelled) => "cancelled",

@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.3.1 release notes](#release-notes)
+- [v0.3.2 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -42,6 +42,16 @@ cargo run -p ccl-cli -- --help
 `Cargo.lock` pins workspace dependencies. Use `--locked` for release checks and builds so Cargo fails if manifests and the committed lockfile disagree. HTTP uses Rustls; the selected `keyring` backends include native credential-store dependencies and may compile vendored native sources, so install the platform build tools listed above.
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
+
+### Automatic memory (v0.3.2)
+
+`memory` owns the pure budget function, serializable policy/decision and platform probes. Windows uses GlobalMemoryStatusEx; macOS uses sysctl and Mach statistics through small native FFI calls; Linux reads procfs and resolves v1/v2 cgroup mounts/membership plus ancestor limits. No monitoring daemon, shell memory command or hardware inventory dependency is added. libc is a macOS-only direct dependency; windows-sys enables the memory-status feature.
+
+macOS accepts older valid Mach statistics revisions by checking only the counter prefix it reads. XNU free_count already includes speculative pages, so they must not be added again. See [Apple host statistics](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c).
+
+The core config retains the manual value separately from auto_memory=true and stores per-profile policies under instance_memory. ConfigStore provides atomic, process-locked edits; GUI expected-value checks prevent stale instance edits. The launch service resolves the final budget after resource preparation and before native extraction/plan construction. PlanOptions continues to accept a numeric resolved maximum. Default launch behavior is automatic in core config, CLI and GUI.
+
+Tests cover reserve/rounding/cap/low-memory and fallback cases, Linux byte units/limits, native probes on each CI host, setting precedence and persistence, CLI auto/numeric/inherit, GUI request shape and per-instance stale-edit rejection, and conflicting JVM heap aliases. GUI acceptance should verify automatic defaults, hidden manual input, explicit save, global/instance switching and unchanged home layout. Keep test windows and data isolated; do not install a QA app into Applications.
 
 ### Release builds and cache verification
 
@@ -339,7 +349,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.3.1 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.2 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -363,12 +373,30 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.3.1 release notes
+## v0.3.2 release notes
 
-These notes target v0.3.1 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.2 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.1
+# CialloCraftLauncher 0.3.2
+
+This release adds automatic Minecraft heap allocation to the core, CLI and desktop GUI. Automatic is the default.
+
+- Compute the maximum Java heap at launch from available physical memory, with a 1 GiB reserve, a segmented budget, a 16 GiB automatic cap and 256 MiB rounding. Manual allocation remains available up to 128 GiB.
+- Share global defaults and saved per-instance overrides between CLI and GUI. A one-launch override takes precedence; instances inherit global settings unless explicitly saved.
+- Support `--memory auto` and numeric limits, plus `settings memory` to inspect, save or clear instance policies. Normal CLI output reports the effective policy.
+- Add automatic/manual controls under Settings → Game & Java and global/automatic/manual choices in instance launch options. Show numeric inputs only in manual mode and keep the home page unchanged.
+- Detect memory natively on Windows, macOS and Linux, including Linux cgroup limits and older macOS statistics replies. Avoid double-counting macOS speculative pages.
+- Preserve one authoritative maximum-heap argument, reject insufficient automatic headroom, and clearly report a 2048 MiB fallback when detection fails. Task logs and dry-run expose the decision; game logs record the actual heap limit.
+
+The feature passed core CI and desktop packaging/readiness/update-recovery checks on Windows x64, macOS arm64 and Linux x86_64. Native probe tests, budget boundaries, setting precedence/persistence, stale-edit protection, Unicode profile names, non-fallback automatic dry-run and JVM argument conflicts were covered. Isolated browser checks covered the actual setting components. The stable workflow revalidates this tagged release and uploaded assets.
+
+Automatic allocation is a heuristic, not a total-process memory cap or a guarantee every modpack fits. It does not resize a running game. CLI/GUI updater manifests retain release-key signatures; installers lack OS publisher certificate signatures and macOS is not notarized. GUI Microsoft login remains temporarily unavailable; CurseForge requires a user-provided API key. Game data is not migrated.
+<!-- release-notes:end -->
+
+### v0.3.1 historical release notes
+
+#### CialloCraftLauncher 0.3.1
 
 This patch reduces release package sizes and improves artifact downloading and desktop rendering.
 
@@ -382,7 +410,6 @@ Compared with the preceding dev baseline, measured macOS DMG size fell about 22%
 The performance commit passed core and desktop validation on Windows x64, macOS arm64 and Linux x86_64, including packaging, frontend readiness and update rollback/recovery. The stable release workflow revalidates the version and uploaded assets before publication.
 
 CLI and GUI updater manifests retain detached release-key signatures. Installers lack OS publisher certificate signatures; macOS uses verified ad-hoc bundle signatures and is not notarized. GUI Microsoft sign-in remains temporarily unavailable. CurseForge requires a user-supplied API key. No game data migration is performed.
-<!-- release-notes:end -->
 
 ### v0.3.0 historical release notes
 
@@ -454,7 +481,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.1; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.2; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

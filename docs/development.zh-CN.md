@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.3.1 发行说明](#release-notes)
+- [v0.3.2 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -42,6 +42,16 @@ cargo run -p ccl-cli -- --help
 `Cargo.lock` 固定工作区依赖版本。发行检查和构建应使用 `--locked`，让 Cargo 在清单与已提交锁文件不一致时直接失败。HTTP 使用 Rustls；所选 `keyring` 后端包含原生凭据库依赖，可能编译随附的原生源码，因此仍需安装上述平台构建工具。
 
 用户流程见[使用指南](user-guide.zh-CN.md)，命令、输出及核心服务见 [API 文档](api.zh-CN.md)。
+
+### 自动内存（v0.3.2）
+
+`memory` 模块负责纯预算函数、可序列化策略/结果和平台检测。Windows 使用 GlobalMemoryStatusEx；macOS 通过少量原生 FFI 调用 sysctl 和 Mach 统计；Linux 读取 procfs，解析 v1/v2 cgroup 挂载/成员关系及祖先限额。不增加监控后台任务、shell 内存命令或硬件清单依赖。libc 仅作为 macOS 直接依赖；windows-sys 启用内存状态功能。
+
+macOS 按实际读取的计数字段前缀校验 Mach 回复长度，接受旧系统的有效结构修订。XNU free_count 已包含推测页，不能再次相加。参阅 [Apple 主机统计实现](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c)。
+
+核心配置将手动值与 auto_memory=true 分开保留，实例策略存入 instance_memory。ConfigStore 提供进程锁与原子写入；GUI expected 比较拒绝过期实例编辑。启动服务在资源准备后、原生库提取/构建参数前解析最终预算；PlanOptions 继续接受已解析的数值上限。核心配置、CLI、GUI 的默认启动行为均为自动。
+
+测试覆盖余量/取整/上限/低内存与回退、Linux 字节单位/限额、各 CI 主机原生检测、设置优先级与持久化、CLI auto/数值/inherit、GUI 请求形状及实例过期编辑拒绝，以及冲突 JVM 堆参数别名。GUI 验收需检查自动默认值、隐藏手动输入、明确保存、全局/实例切换，以及首页布局不变。测试窗口和数据应隔离，不在 Applications 安装 QA 应用。
 
 ### 发行构建与缓存校验
 
@@ -343,7 +353,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-本文档对应 v0.3.1 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.3.2 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -367,12 +377,30 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.3.1 发行说明
+## v0.3.2 发行说明
 
-以下说明对应 v0.3.1，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.3.2，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.1
+# CialloCraftLauncher 0.3.2
+
+本版本为核心、CLI 和桌面 GUI 加入 Minecraft 堆内存自动分配，默认使用自动模式。
+
+- 启动时按可用物理内存计算最大 Java 堆，预留 1 GiB，使用分段预算，自动上限 16 GiB，按 256 MiB 向下取整。手动模式仍支持最高 128 GiB。
+- CLI 与 GUI 共用全局默认和保存的实例覆盖。本次启动指定值优先，实例未明确保存时跟随全局。
+- 支持 `--memory auto` 与数值上限，提供 `settings memory` 查看、保存和清除实例策略；普通 CLI 输出会显示实际使用的策略。
+- “设置 → 游戏与 Java”提供自动/手动控制，实例启动选项提供跟随全局/自动/手动。仅手动模式显示数值输入，首页布局保持不变。
+- 在 Windows、macOS、Linux 使用原生内存检测，包括 Linux cgroup 限额和旧版 macOS 统计回复；避免重复计算 macOS 推测页。
+- 最终保留一个权威最大堆参数；自动余量不足时返回明确错误；检测失败时明确标记回退到 2048 MiB。任务日志和 dry-run 展示分配结果，游戏运行日志记录实际堆上限。
+
+功能已通过 Windows x64、macOS arm64、Linux x86_64 核心 CI 及桌面打包/就绪/更新恢复检查，覆盖原生检测、预算边界、设置优先级与持久化、过期编辑保护、Unicode 实例名、不走回退的自动 dry-run 和 JVM 参数冲突。隔离浏览器检查覆盖真实设置组件。正式工作流会重新验证该标签及上传资产。
+
+自动分配是启发式策略，不是整个进程的内存上限，也不保证所有整合包可用；不会调整运行中的游戏。CLI/GUI 更新清单继续由发行密钥签名，安装程序无操作系统发布者证书签名，macOS 未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 需用户自备 API key。不迁移游戏数据。
+<!-- release-notes:end -->
+
+### v0.3.1 历史发行说明
+
+#### CialloCraftLauncher 0.3.1
 
 本次补丁缩小发行包，并优化文件下载和桌面界面渲染。
 
@@ -386,7 +414,6 @@ git push origin dev
 性能提交已通过 Windows x64、macOS arm64、Linux x86_64 核心与桌面验证，包括打包、前端就绪及更新回滚恢复。正式发行流程会在发布前重新验证版本和上传资产。
 
 CLI 与 GUI 更新清单继续使用独立发行密钥签名。安装包无操作系统发布者证书签名；macOS 使用经过验证的 ad-hoc 应用包签名且未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 仍需用户自备 API key。不迁移游戏数据。
-<!-- release-notes:end -->
 
 ### v0.3.0 历史发行说明
 
@@ -458,7 +485,7 @@ CLI 和 GUI 更新清单具有发行密钥的独立签名。安装程序不具�
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.1；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.2；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

@@ -50,7 +50,7 @@ pub struct LaunchRequest {
     pub key: String,
     pub identity: LaunchIdentity,
     pub java: Option<PathBuf>,
-    pub memory_mb: Option<u32>,
+    pub memory: Option<ccl_core::memory::MemoryPolicy>,
     pub auto_install_java: bool,
     pub dry_run: bool,
 }
@@ -213,7 +213,8 @@ impl GuiOperations {
     }
 
     pub async fn launch(&self, request: LaunchRequest, context: TaskContext) -> GuiResult<Value> {
-        let (game_directory, version, _guard) = self.resolve_launch_key(&request.key)?;
+        let (game_directory, version, profile_id, _guard) =
+            self.resolve_launch_key(&request.key)?;
         let identity = match request.identity.kind {
             LaunchIdentityKind::Offline => None,
             LaunchIdentityKind::Microsoft => {
@@ -239,15 +240,18 @@ impl GuiOperations {
             (None, Some(username)) => username,
             (None, None) => "CCLPlayer".into(),
         };
+        let memory = self
+            .config
+            .launch
+            .memory_policy(&game_directory, &profile_id, request.memory)
+            .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
         let launch_request = CoreLaunchRequest {
             game_directory: game_directory.clone(),
             working_directory: None,
             version: version.clone(),
             username,
             java: request.java.or(self.config.launch.java.clone()),
-            max_memory_mb: request
-                .memory_mb
-                .unwrap_or(self.config.launch.max_memory_mb),
+            memory,
             identity,
             auto_install_java: request.auto_install_java,
         };
@@ -377,6 +381,7 @@ impl GuiOperations {
     ) -> GuiResult<(
         PathBuf,
         String,
+        String,
         Option<ccl_core::instances::InstanceLaunchGuard>,
     )> {
         let entry = self.library_entry(key)?;
@@ -387,10 +392,11 @@ impl GuiOperations {
             Ok((
                 guard.game_directory().to_path_buf(),
                 guard.version().to_owned(),
+                entry.id,
                 Some(guard),
             ))
         } else {
-            Ok((entry.game_directory, entry.launch_version, None))
+            Ok((entry.game_directory, entry.launch_version, entry.id, None))
         }
     }
 
@@ -551,6 +557,7 @@ fn launch_error(error: ccl_core::launch::LaunchError) -> GuiError {
                     ccl_core::launch_plan::PlanError::UnknownPlaceholder(_),
                 ) => "launch_unsupported_placeholder",
                 ccl_core::launch::LaunchError::Plan(_) => "launch_plan_failed",
+                ccl_core::launch::LaunchError::Memory(_) => "memory_allocation_failed",
                 ccl_core::launch::LaunchError::Java(_) => "launch_java_failed",
                 _ => "launch_failed",
             }

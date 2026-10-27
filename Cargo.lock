@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "ccl-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ccl-core",
  "clap",
@@ -530,12 +530,13 @@ dependencies = [
 
 [[package]]
 name = "ccl-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.22.1",
  "fs2",
  "getrandom 0.2.17",
  "keyring",
+ "libc",
  "md-5",
  "minisign",
  "regex",
@@ -553,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "ccl-gui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.22.1",
  "ccl-core",

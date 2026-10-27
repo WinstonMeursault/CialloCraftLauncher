@@ -42,7 +42,7 @@ ccl logs --lines 100
 
 ## 桌面应用与自更新
 
-本指南对应 v0.3.1，包含 CLI、核心、桌面应用和签名清单更新器。程序包可用状态请查看 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
+本指南对应 v0.3.2，包含 CLI、核心、桌面应用和签名清单更新器。程序包可用状态请查看 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)。GUI 程序包包括 Windows x64 按用户安装的 NSIS EXE、macOS arm64 DMG，以及 Linux x64 AppImage 或 DEB。平台目标和发行要求见开发指南。
 
 桌面程序会先让你确认游戏目录，再创建缺失的目录。游戏库会将所选根目录下发现的 Minecraft 版本与已有 CCL 游戏目录统一显示，不会移动或转换这些目录。程序可以安装版本和加载器配置、导入受支持的本地归档、使用已保存的离线账户启动游戏，并查看实时或已保存的游戏日志。可添加、选择和移除多个离线账户；这些本地玩家名不使用系统凭据库。GUI 中的 Microsoft 登录暂时不可用，实验性的 CLI 登录流程仍保留。外观和语言在“设置”中配置，完成初始目录设置前也可打开设置。公开的 Microsoft 客户端 ID 仅在“设置 → 高级设置”中配置（`auth.microsoft_client_id`）。GUI 的网络离线设置会保存到共享启动器配置，因此也会影响 CLI。选择离线玩家身份不会关闭下载或其他网络活动。
 
@@ -56,9 +56,9 @@ ccl logs --lines 100
 
 健康检查只有在勾选对应选项后才会执行网络或临时写入探测。诊断导出保存在本地。原始日志预览必须明确启用，尽管会尽力脱敏，仍可能含私人信息；分享前请检查文件。CLI 更新器作用于你选定目录中的独立 CLI；GUI 更新控制只作用于当前安装的桌面程序包。两者均支持 stable（`main`）和 dev（`dev`）渠道，并会保存所选渠道。
 
-### v0.3.1 界面
+### v0.3.2 界面
 
-CCL v0.3.1 默认打开“开始游戏”。静态图片铺满内容窗口，并延伸到毛玻璃导航栏背后。当前实例、账户选择和启动按钮位于右下角。程序通过稳定的游戏库 key 记住所选实例；若该实例不可用，需明确选择另一个。重新打开 CCL 不会自动启动游戏。尚无保存选择时也需要先选择实例。“切换实例”打开可搜索选择器，“游戏库”显示完整列表。点击列表行返回启动页，更多按钮进入管理和会话启动选项。这里的 Java/内存覆盖仅用于本次启动器会话；共享默认值在“设置 → 游戏与 Java”保存。
+CCL v0.3.2 默认打开“开始游戏”。静态图片铺满内容窗口，并延伸到毛玻璃导航栏背后。当前实例、账户选择和启动按钮位于右下角。程序通过稳定的游戏库 key 记住所选实例；若该实例不可用，需明确选择另一个。重新打开 CCL 不会自动启动游戏。尚无保存选择时也需要先选择实例。“切换实例”打开可搜索选择器，“游戏库”显示完整列表。点击列表行返回启动页，更多按钮进入管理和会话启动选项。Java 覆盖仅用于本次启动器会话；实例内存需单独保存，共享默认值在“设置 → 游戏与 Java”修改。
 
 导航默认显示图标，鼠标悬停或键盘聚焦时展开文字。CCL 按钮可供触摸操作明确展开。展开覆盖页面，不挤动内容。管理页面采用实色阅读区，切换导航时保留各页滚动位置。实例名称支持 Unicode 和空格，玩家名限制保持不变。
 
@@ -72,7 +72,7 @@ CCL v0.3.1 默认打开“开始游戏”。静态图片铺满内容窗口，并
 
 ## 安装与前置条件
 
-从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。本文档对应 v0.3.1；已发布程序包的可用状态以 GitHub Releases 为准。开发版另行发布。CLI 归档名称如下：
+从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)下载适用于系统的 CLI 归档。本文档对应 v0.3.2；已发布程序包的可用状态以 GitHub Releases 为准。开发版另行发布。CLI 归档名称如下：
 
 | 系统 | 归档文件 |
 | --- | --- |
@@ -103,7 +103,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS 上运行 `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`。请在归档和校验文件所在目录运行；只有命令报告匹配后才继续。校验和可发现归档更改或传输损坏，但不能单独验证发布者身份。
 
-解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。v0.3.1 目标版本也包含桌面应用；dev 预发行版可能包含较新的 GUI 改动。更新完整性说明见[启动器更新](#maintenance)。
+解压整个 CLI 归档文件夹，并将可执行文件、README、`docs/` 目录、`LICENSE` 和第三方声明文件一并保留。Windows 程序名为 `ccl.exe`，macOS/Linux 上为 `ccl`。在 PowerShell 的该目录中运行 `.\ccl.exe --help`；在 macOS/Linux 上运行 `./ccl --help`。如果解压时 Unix 可执行权限丢失，运行一次 `chmod u+x ./ccl`。请将解压目录保存在可写位置：CLI 更新器会在可执行文件所在目录旁创建 `.ccl-update` 来保存事务文件。可将该目录加入 `PATH`，或通过完整路径调用程序。CLI 归档不包含桌面应用。v0.3.2 目标版本也包含桌面应用；dev 预发行版可能包含较新的 GUI 改动。更新完整性说明见[启动器更新](#maintenance)。
 
 安装 CCL 不需要 Java。首次启动游戏时，CCL 可下载与 Minecraft 版本和系统架构匹配的 Java 运行时。如需手动指定 Java，请安装兼容运行时，并通过 `--java PATH` 传入可执行文件或 Java 主目录。发现版本及下载游戏文件、托管 Java、加载器、整合包或更新需要网络连接。请确保所选游戏目录及 CCL 配置/数据目录可写。Linux 上的 Microsoft 登录和已保存的 CurseForge 密钥还需要可用的系统凭据服务；Microsoft 登录特别要求当前 D-Bus 会话可访问且已解锁的 Secret Service。
 
@@ -114,7 +114,7 @@ Linux 上运行 `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`。macOS �
 
 macOS 构建配置会对完整 `.app`（包括 Info.plist 和资源）进行 ad-hoc 临时签名。这不是 Developer ID 发布者签名，也不是 Apple 公证。安装可信程序包后，macOS 仍可能要求通过**系统设置 → 隐私与安全性 → 仍要打开**逐应用批准，详见 [Apple 说明](https://support.apple.com/en-us/102445)。更新清单签名不能替代这项操作系统检查。
 
-原始 v0.2.0 macOS DMG 与更新归档只有不完整的链接器签名，可能显示“App 已损坏”。下载校验和匹配不会修复此签名。v0.2.1 构建配置已修正此问题，打包时会验证完整应用包、DMG 和更新归档；现有 v0.2.0 资产不会更改。安装 v0.2.1 或更高版本可获取修正后的程序包；v0.3.1 目标版本保留此修正。对于已下载且已按该发行版校验和验证的副本，可用以下命令修复本地应用包签名；请替换为实际安装路径。这只会创建本地 ad-hoc 签名，不会建立 Apple 发布者信任。若验证失败，请停止并替换该副本。随后如系统提供逐应用批准，请按 Apple 说明操作；不要全局关闭 Gatekeeper。
+原始 v0.2.0 macOS DMG 与更新归档只有不完整的链接器签名，可能显示“App 已损坏”。下载校验和匹配不会修复此签名。v0.2.1 构建配置已修正此问题，打包时会验证完整应用包、DMG 和更新归档；现有 v0.2.0 资产不会更改。安装 v0.2.1 或更高版本可获取修正后的程序包；v0.3.2 目标版本保留此修正。对于已下载且已按该发行版校验和验证的副本，可用以下命令修复本地应用包签名；请替换为实际安装路径。这只会创建本地 ad-hoc 签名，不会建立 Apple 发布者信任。若验证失败，请停止并替换该副本。随后如系统提供逐应用批准，请按 Apple 说明操作；不要全局关闭 Gatekeeper。
 
 ```sh
 codesign --force --sign - "/Applications/CialloCraftLauncher.app"
@@ -175,7 +175,9 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
 | `downloads.max_parallel` | `8` | 1 到 64 的整数 |
 | `auth.microsoft_client_id` | `null` | 公开 OAuth 客户端 ID 或 `null` |
 | `launch.java` | `null` | Java 可执行文件路径、Java 主目录或 `null` |
-| `launch.max_memory_mb` | `2048` | 256 到 131072 MiB 的整数 |
+| `launch.auto_memory` | `true` | 默认自动分配 |
+| `launch.max_memory_mb` | `2048` | 保留的手动值，256–131072 MiB；仅关闭自动分配时使用 |
+| `launch.instance_memory` | `{}` | 由 settings memory 管理的实例覆盖 |
 | `launch.auto_install_java` | `true` | `true` 或 `false` |
 
 以下完整配置使用所有默认值：
@@ -196,6 +198,8 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
   "launch": {
     "java": null,
     "max_memory_mb": 2048,
+    "auto_memory": true,
+    "instance_memory": {},
     "auto_install_java": true
   }
 }
@@ -203,11 +207,39 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
 
 对于支持映射的 Minecraft 地址，`auto` 先尝试官方地址再尝试配置的镜像；`official` 仅使用官方地址；`mirror` 先尝试镜像再尝试官方地址。未知主机保留原始地址。OptiFine 使用配置的镜像端点。这些设置不会重定向 Modrinth、CurseForge 或 GitHub 请求。
 
-配置中可省略字段，省略时使用默认值。`--memory` 可在单次启动中覆盖 `launch.max_memory_mb`，接受 256–131072 MiB。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+配置中可省略字段，省略时使用默认值。`--memory auto` 或 `--memory 4096` 可在本次启动覆盖已保存的实例/全局策略；数值接受 256–131072 MiB。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+
+### 自动与手动内存分配（v0.3.2）
+
+默认使用**自动**。GUI 在“设置 → 游戏与 Java → 内存分配”选择自动/手动；只有手动模式显示最大堆内存输入框。实例详情 → 启动选项可选择“跟随全局 / 自动 / 手动”，点击“保存此实例内存设置”后才持久化；未保存的编辑不影响启动。首页不常驻显示数值，启动任务日志及 dry-run 显示实际结果。
+
+```sh
+# 仅本次启动：明确自动，或手动 4 GiB
+ccl launch "中文实例 with spaces" --offline --memory auto --dry-run
+ccl launch "中文实例 with spaces" --offline --memory 4096
+# 全局默认自动；max_memory_mb 只保留手动数值
+ccl settings set launch.auto_memory true
+# 切换到全局手动
+ccl settings set launch.max_memory_mb 4096
+ccl settings set launch.auto_memory false
+# 查看、保存及清除某一配置的覆盖
+ccl settings memory "中文实例 with spaces"
+ccl settings memory "中文实例 with spaces" --set auto
+ccl settings memory "中文实例 with spaces" --set 6144
+ccl settings memory "中文实例 with spaces" --set inherit
+# CCL 修订实例使用 --instance；不需指定游戏版本
+ccl settings memory --instance "整合包 A" --set auto
+```
+
+优先级为本次 `--memory` → 保存的实例覆盖 → 全局设置。实例覆盖保存在共享核心配置的 `launch.instance_memory` 中，键由实际游戏目录与稳定实例 ID 生成，不使用显示名称；改显示名称不会丢失，CLI 与 GUI 共用。复制、移动实例不复制覆盖；删除后遗留的覆盖不会影响其他目录/ID。GUI 遇到外部修改会拒绝覆盖，重新加载后再保存。
+
+每次启动准备末尾读取可用物理内存，扣除 1 GiB 余量。剩余预算 8 GiB 以内取 80%，超过部分取 20%；自动上限 16 GiB，向下取整到 256 MiB。这个上限只限制自动模式；手动最多 128 GiB。Linux 同时考虑当前 cgroup 及其祖先的内存限额和已用量；macOS 估计可回收物理内存，不把压缩内存/交换空间当作额外容量。余量不足时返回 `memory_allocation_failed`，建议关闭其他程序或选择手动值，不会强行抬高预算。检测失败时回退到 2048 MiB，并在任务日志及 dry-run 标记；回退值不是可用内存保证。
+
+分配的是 `-Xmx` 最大 Java 堆，不是整个游戏进程的内存上限，也不会立即占满；原生内存、模组和图形资源另有开销。不会把 `-Xms` 提高到最大值；元数据中的冲突最大堆参数、超过预算的初始堆参数会被过滤。游戏运行后不动态调整，不按模组数量猜测需求。内存快照可能随其他程序变化，无法保证任意整合包均有足够内存。
 
 CurseForge API 请求需要用户提供对相应 API 和文件下载有权限的密钥。[CurseForge API 文档](https://docs.curseforge.com/rest-api/)介绍密钥流程；实际访问取决于服务方授权。获得密钥后运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 会显示是否已保存密钥及是否启用环境变量覆盖；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
 
-启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。GUI 仅在“设置 → 高级设置”显示此项；GUI 登录暂时不可用。实验性的 CLI 流程仍使用该 ID。参阅[账户设置](user-guide.zh-CN.md#accounts)。
+启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.auto_memory`（默认 `true`）、`launch.max_memory_mb`（保留的手动值，默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。GUI 仅在“设置 → 高级设置”显示此项；GUI 登录暂时不可用。实验性的 CLI 流程仍使用该 ID。参阅[账户设置](user-guide.zh-CN.md#accounts)。
 
 `settings get` 和 `settings show` 会隐藏代理 URL 中的用户名和密码。为网络连接所需，配置文件仍会保存完整代理 URL，因此应保护该文件。在 Unix 系统上，启动器写入的配置文件仅允许文件所有者访问。设置会先校验，再通过原子替换写入；多个 CLI 进程之间使用锁协调更新。`settings reset --all` 也可将损坏的配置替换为默认值。
 
@@ -472,9 +504,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## 启动器更新与诊断
 
-v0.2.1 加入 GUI 流程修正、macOS 应用包密封和签名清单更新器；v0.2.2 增加统一游戏库及仅修改元数据的游戏库操作；v0.2.3 修复已有 Forge 配置的启动准备和运行目录；v0.3.1 加入背景首页、覆盖式导航、最近实例及本机外观设置。早于签名清单协议的 CLI 程序仍需手动引导更新。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
+v0.2.1 加入 GUI 流程修正、macOS 应用包密封和签名清单更新器；v0.2.2 增加统一游戏库及仅修改元数据的游戏库操作；v0.2.3 修复已有 Forge 配置的启动准备和运行目录；v0.3.0 加入背景首页、覆盖式导航、最近实例及本机外观设置；v0.3.1 缩小程序包并优化下载和渲染；v0.3.2 加入自动内存分配。早于签名清单协议的 CLI 程序仍需手动引导更新。早于独立签名清单协议的 CLI 程序无法跨越该协议变更自行更新。首次需从 [GitHub Releases 页面](https://github.com/WinstonMeursault/CialloCraftLauncher/releases)手动下载当前 CLI ZIP，并在替换旧程序前核对 `.sha256`；之后更新器即可使用签名清单。现有设置、账户元数据、凭据和实例仍保留在原用户数据位置；兼容性检查覆盖已知的旧格式，不代表涵盖所有历史数据集。
 
-只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 `main`，本指南的目标版本为 v0.3.1；程序包可用状态以 GitHub Releases 为准。dev 渠道跟随 `dev`，可包含尚未进入稳定版的较新 GUI 改动。稳定版使用 `v0.3.1` 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
+只有显式运行更新命令时，CCL 才会检查启动器自身更新。稳定渠道跟随 `main`，本指南的目标版本为 v0.3.2；程序包可用状态以 GitHub Releases 为准。dev 渠道跟随 `dev`，可包含尚未进入稳定版的较新 GUI 改动。稳定版使用 `v0.3.2` 形式的版本标签。dev 提交只有在三个支持的 CI 目标均完成验证和打包后才会发布；保留最近十个 dev 发行版。
 
 ```sh
 ccl update check

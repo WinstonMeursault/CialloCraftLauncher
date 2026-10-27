@@ -2,7 +2,7 @@
 pub use crate::launch_plan::LaunchPlan;
 use crate::{
     TaskContext, TaskEvent,
-    config::{DownloadConfig, MAX_LAUNCH_MEMORY_MB, MIN_LAUNCH_MEMORY_MB},
+    config::DownloadConfig,
     download::{DownloadManager, DownloadRequest},
     java::{self, JavaRuntime},
     launch_plan::{self, LaunchPlatform, MicrosoftIdentity, OfflineAccount, PlanOptions},
@@ -38,6 +38,8 @@ pub enum LaunchError {
     },
     #[error("invalid installation: {0}")]
     Invalid(String),
+    #[error("memory allocation failed: {0}")]
+    Memory(String),
     #[error(transparent)]
     Metadata(#[from] metadata::MetadataError),
     #[error(transparent)]
@@ -71,7 +73,7 @@ pub struct LaunchRequest {
     pub version: String,
     pub username: String,
     pub java: Option<PathBuf>,
-    pub max_memory_mb: u32,
+    pub memory: crate::memory::MemoryPolicy,
     pub identity: Option<MicrosoftIdentity>,
     pub auto_install_java: bool,
 }
@@ -79,6 +81,7 @@ pub struct LaunchRequest {
 #[derive(Debug, Serialize)]
 pub struct PreparedLaunch {
     pub plan: LaunchPlan,
+    pub memory: crate::memory::MemoryDecision,
     pub runtime: JavaRuntime,
     pub version: String,
     pub natives_directory: PathBuf,
@@ -181,11 +184,7 @@ impl LaunchService {
     ) -> Result<PreparedLaunch, LaunchError> {
         check_cancelled(&context)?;
         safe_segment(&request.version)?;
-        if !(MIN_LAUNCH_MEMORY_MB..=MAX_LAUNCH_MEMORY_MB).contains(&request.max_memory_mb) {
-            return Err(LaunchError::Invalid(format!(
-                "memory must be in {MIN_LAUNCH_MEMORY_MB}..={MAX_LAUNCH_MEMORY_MB} MiB"
-            )));
-        }
+        request.memory.validate().map_err(LaunchError::Invalid)?;
         let account = OfflineAccount::new(
             request
                 .identity
@@ -237,6 +236,31 @@ impl LaunchService {
         let logging_argument = self.prepare_logging(&root, &metadata, &context).await?;
         prepare_asset_projection(&root, &metadata)?;
         check_cancelled(&context)?;
+        let memory = crate::memory::resolve(request.memory).map_err(LaunchError::Memory)?;
+        if let Some(context) = &context {
+            context
+                .emit(TaskEvent::Log {
+                    stream: "launcher".into(),
+                    line: format!(
+                        "Java maximum heap: {} MiB{}",
+                        memory.max_memory_mb,
+                        if memory.fallback {
+                            " (detection fallback)"
+                        } else {
+                            ""
+                        }
+                    ),
+                })
+                .map_err(|_| LaunchError::Cancelled)?;
+            if let Some(warning) = &memory.warning {
+                context
+                    .emit(TaskEvent::Log {
+                        stream: "launcher".into(),
+                        line: warning.clone(),
+                    })
+                    .map_err(|_| LaunchError::Cancelled)?;
+            }
+        }
         let parent = root.join(".ccl/natives");
         fs::create_dir_all(&parent).map_err(|source| io(&parent, source))?;
         let natives_directory = parent.join(unique_id());
@@ -255,7 +279,7 @@ impl LaunchService {
             version: request.version.clone(),
             natives_directory: natives_directory.clone(),
             java_executable: runtime.executable.clone(),
-            max_memory_mb: request.max_memory_mb,
+            max_memory_mb: memory.max_memory_mb,
             account,
             platform,
             logging_argument,
@@ -269,6 +293,7 @@ impl LaunchService {
         match plan_result {
             Ok(plan) => Ok(PreparedLaunch {
                 plan,
+                memory,
                 runtime,
                 version: request.version.clone(),
                 natives_directory,
@@ -596,7 +621,18 @@ pub async fn run_process(
         fs::canonicalize(log_directory).map_err(|source| io(log_directory, source))?;
     let run_id = unique_id();
     let log_path = log_directory.join(format!("{run_id}.log"));
-    let log = File::create(&log_path).map_err(|source| io(&log_path, source))?;
+    let mut log = File::create(&log_path).map_err(|source| io(&log_path, source))?;
+    if let Some(heap) = plan
+        .arguments
+        .iter()
+        .find(|argument| argument.starts_with("-Xmx"))
+    {
+        writeln!(
+            log,
+            "[CCL] Java heap limit: {heap}; native memory is additional."
+        )
+        .map_err(|source| io(&log_path, source))?;
+    }
     let log = Arc::new(Mutex::new(log));
     let started_at_ms = now_ms();
     let mut command = tokio::process::Command::new(&plan.executable);

@@ -42,7 +42,7 @@ Java matching the version and host architecture is detected or installed automat
 
 ## Desktop app and self-update
 
-This guide targets v0.3.1, including the CLI, core, desktop app and signed-manifest updater. check the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) for package availability. The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
+This guide targets v0.3.2, including the CLI, core, desktop app and signed-manifest updater. check the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) for package availability. The GUI packages are a per-user NSIS EXE for Windows x64, a DMG for macOS arm64, and AppImage or DEB for Linux x64. See the development guide for package targets and release requirements.
 
 The desktop app asks you to confirm a game directory before it creates a missing one. Its library combines discovered Minecraft versions under the selected game root with existing CCL game directories, without moving or converting either. It can install versions and loader profiles, import supported local archives, launch with a saved offline account, and inspect live or saved game logs. Multiple offline accounts can be added, selected and removed; they are local profile names and do not use the OS credential vault. Microsoft sign-in is temporarily unavailable in the GUI. The experimental CLI sign-in flow remains available. Configure appearance and language in Settings, which is available before setup is complete. Configure the public Microsoft application client ID only in Settings → Advanced settings (`auth.microsoft_client_id`). The GUI's network-offline setting is saved in the shared launcher configuration and affects CLI behavior too. Choosing an offline player identity does not disable downloads or other network activity.
 
@@ -56,9 +56,9 @@ Settings separates appearance and game-root choices from shared core settings. T
 
 Health checks make network or temporary-write probes only when their checkboxes are selected. Diagnostic export is local. Raw log preview is an explicit option and may contain private data despite best-effort redaction; review the file before sharing. The CLI updater operates on the standalone CLI in the folder you select. GUI update controls act only on the currently installed desktop package. Both support stable (`main`) and dev (`dev`) channels and persist the selected channel.
 
-### v0.3.1 interface
+### v0.3.2 interface
 
-CCL v0.3.1 opens on **Play**. A static image fills the content window, including behind the frosted navigation rail. The current instance, account selector, and launch button stay at the bottom right. The application remembers the selected instance by its stable library key; if that instance is unavailable, choose another explicitly. Reopening CCL never starts a game automatically. No saved selection also requires choosing an instance. Use **Switch instance** for the searchable picker or **Library** for the full list. Select a list row to return to Play; its more button opens management and session launch options. Those Java/memory overrides last for this launcher session; save shared defaults under Settings → Game & Java.
+CCL v0.3.2 opens on **Play**. A static image fills the content window, including behind the frosted navigation rail. The current instance, account selector, and launch button stay at the bottom right. The application remembers the selected instance by its stable library key; if that instance is unavailable, choose another explicitly. Reopening CCL never starts a game automatically. No saved selection also requires choosing an instance. Use **Switch instance** for the searchable picker or **Library** for the full list. Select a list row to return to Play; its more button opens management and session launch options. Java overrides last for this launcher session. Save instance memory separately in its launch options; shared defaults are under Settings → Game & Java.
 
 Navigation shows icons until pointer hover or keyboard focus reveals labels. The CCL button provides explicit expansion for touch input. Expansion overlays the page and does not shift its contents. Management pages use solid reading surfaces and keep their page scroll positions when switching navigation. Instance names support Unicode and spaces; player-name restrictions are unchanged.
 
@@ -72,7 +72,7 @@ The download page keeps provider/type/search visible and puts version/loader/lim
 
 ## Installation and prerequisites
 
-Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). This guide targets v0.3.1; check GitHub Releases for published package availability. Developer releases are published separately. CLI archives use these names:
+Download the CLI archive for your system from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases). This guide targets v0.3.2; check GitHub Releases for published package availability. Developer releases are published separately. CLI archives use these names:
 
 | System | Archive |
 | --- | --- |
@@ -103,7 +103,7 @@ if ($actual -ne $expected) { throw "SHA-256 mismatch" }
 
 On Linux, verify with `sha256sum -c ccl-x86_64-unknown-linux-gnu.zip.sha256`. On macOS, run `shasum -a 256 -c ccl-aarch64-apple-darwin.zip.sha256`. Run each command in the directory containing both files; continue only when it reports a match. The checksums detect archive changes and transfer corruption, but do not independently authenticate who published the archive.
 
-Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. The v0.3.1 target also includes a desktop app; dev prereleases may contain newer GUI changes. See [launcher updates](#maintenance) for update integrity limits.
+Extract the whole CLI archive folder and keep its executable, README files, `docs/` directory, `LICENSE`, and third-party notice files together. The program is `ccl.exe` on Windows and `ccl` on macOS/Linux. Run `.\ccl.exe --help` in PowerShell or `./ccl --help` on macOS/Linux from that folder. If the Unix executable bit was lost during extraction, run `chmod u+x ./ccl` once. Keep the extracted folder in a location you can write to: the CLI updater stores transaction files in a sibling `.ccl-update` directory beside the executable. You can add the folder to `PATH` or invoke the executable by its full path. CLI archives do not contain the desktop application. The v0.3.2 target also includes a desktop app; dev prereleases may contain newer GUI changes. See [launcher updates](#maintenance) for update integrity limits.
 
 You do not need to install Java to install CCL. On first launch CCL can download a Java runtime matching the Minecraft version and system architecture. For manual Java selection, install a compatible runtime and pass its executable or Java home with `--java PATH`. A network connection is needed to discover versions and download game files, managed Java, loaders, packs, or updates. Provide write access to the selected game directory and CCL configuration/data directories. On Linux, Microsoft login and saved CurseForge keys additionally need an available OS credential service; Microsoft login specifically requires an unlocked Secret Service reachable through the session D-Bus.
 
@@ -114,7 +114,7 @@ The targets above describe build and package coverage, not certification of each
 
 The macOS build configuration uses an ad-hoc signature over the complete `.app`, including its Info.plist and resources. This is not a Developer ID signature or Apple notarization. After installing a trusted package, macOS may still require **System Settings → Privacy & Security → Open Anyway**; see [Apple's instructions](https://support.apple.com/en-us/102445). The updater manifest signature does not replace this OS check.
 
-The original v0.2.0 macOS DMG and updater archive have an incomplete linker-only signature and can display “app is damaged”. A matching download checksum does not repair that signature. The v0.2.1 build configuration corrects this and packaging verifies the full bundle, DMG and update archive; existing v0.2.0 assets are unchanged. Install a package from v0.2.1 or later to obtain the corrected bundle; the v0.3.1 target retains this fix. For an already downloaded copy whose checksum you have verified against that release, you can repair its bundle signature locally with the commands below, substituting the actual installed path. This creates a local ad-hoc signature; it does not establish Apple publisher trust. If verification fails, stop and replace the copy. Then use Apple's per-app approval if offered; do not disable Gatekeeper globally.
+The original v0.2.0 macOS DMG and updater archive have an incomplete linker-only signature and can display “app is damaged”. A matching download checksum does not repair that signature. The v0.2.1 build configuration corrects this and packaging verifies the full bundle, DMG and update archive; existing v0.2.0 assets are unchanged. Install a package from v0.2.1 or later to obtain the corrected bundle; the v0.3.2 target retains this fix. For an already downloaded copy whose checksum you have verified against that release, you can repair its bundle signature locally with the commands below, substituting the actual installed path. This creates a local ad-hoc signature; it does not establish Apple publisher trust. If verification fails, stop and replace the copy. Then use Apple's per-app approval if offered; do not disable Gatekeeper globally.
 
 ```sh
 codesign --force --sign - "/Applications/CialloCraftLauncher.app"
@@ -175,7 +175,9 @@ The configuration fields and defaults are:
 | `downloads.max_parallel` | `8` | Integer from 1 to 64 |
 | `auth.microsoft_client_id` | `null` | Public OAuth client ID or `null` |
 | `launch.java` | `null` | Java executable path, Java home, or `null` |
-| `launch.max_memory_mb` | `2048` | Integer from 256 to 131072 MiB |
+| `launch.auto_memory` | `true` | Use automatic allocation by default |
+| `launch.max_memory_mb` | `2048` | Retained manual limit, 256–131072 MiB; used when auto_memory is false |
+| `launch.instance_memory` | `{}` | Saved per-profile overrides, managed with settings memory |
 | `launch.auto_install_java` | `true` | `true` or `false` |
 
 For example, this complete configuration uses all defaults:
@@ -196,6 +198,8 @@ For example, this complete configuration uses all defaults:
   "launch": {
     "java": null,
     "max_memory_mb": 2048,
+    "auto_memory": true,
+    "instance_memory": {},
     "auto_install_java": true
   }
 }
@@ -203,11 +207,39 @@ For example, this complete configuration uses all defaults:
 
 For mapped Minecraft endpoints, `auto` tries official URLs before the configured mirror; `official` uses only official URLs; `mirror` tries the mirror before official URLs. Unknown hosts retain their original URLs. OptiFine uses the configured mirror endpoint. These settings do not redirect Modrinth, CurseForge, or GitHub requests.
 
-You can omit fields; omitted fields use these defaults. `--memory` overrides `launch.max_memory_mb` for one launch and accepts 256–131072 MiB. Version listing and installation use the official version manifest and metadata. Installation downloads the client, libraries, natives, asset index, and assets; it verifies using available metadata hashes and sizes, limits parallel work, retries transient failures, resumes only validated partial transfers, reuses valid cached files, and writes through temporary files before replacement. Concurrent processes use a version lock, and cancellation is supported. Existing conflicting version JSON causes a conflict error rather than being overwritten.
+You can omit fields; omitted fields use these defaults. `--memory auto` or `--memory 4096` overrides the saved instance/global policy for one launch. Numeric limits accept 256–131072 MiB. Version listing and installation use the official version manifest and metadata. Installation downloads the client, libraries, natives, asset index, and assets; it verifies using available metadata hashes and sizes, limits parallel work, retries transient failures, resumes only validated partial transfers, reuses valid cached files, and writes through temporary files before replacement. Concurrent processes use a version lock, and cancellation is supported. Existing conflicting version JSON causes a conflict error rather than being overwritten.
+
+### Automatic and manual memory (v0.3.2)
+
+**Automatic** is the default. In the GUI, Settings → Game & Java → Memory allocation selects automatic/manual; only manual mode displays the maximum-heap input. Instance details → Launch options offers Use global setting / Automatic / Manual. Click Save instance memory setting to persist it; unsaved edits do not affect launches. The home page adds no permanent memory readout; launch task logs and dry-run show the actual result.
+
+```sh
+# One launch: explicitly automatic, or manually 4 GiB
+ccl launch "中文实例 with spaces" --offline --memory auto --dry-run
+ccl launch "中文实例 with spaces" --offline --memory 4096
+# Global automatic default; max_memory_mb retains the manual value only
+ccl settings set launch.auto_memory true
+# Switch the global default to manual
+ccl settings set launch.max_memory_mb 4096
+ccl settings set launch.auto_memory false
+# Inspect, save and clear a profile override
+ccl settings memory "中文实例 with spaces"
+ccl settings memory "中文实例 with spaces" --set auto
+ccl settings memory "中文实例 with spaces" --set 6144
+ccl settings memory "中文实例 with spaces" --set inherit
+# Revision-backed CCL instances use --instance, without a game version
+ccl settings memory --instance "整合包 A" --set auto
+```
+
+Precedence is one-launch --memory → saved instance override → global settings. Overrides live in the shared core config's launch.instance_memory map, keyed by the actual game directory and stable instance ID rather than display name. Display-name changes preserve them; CLI and GUI share them. Copies/moves do not copy overrides; stale records after deletion do not affect other directories/IDs. The GUI rejects an override changed externally; reload before saving.
+
+At the end of launch preparation, sample available physical memory and reserve 1 GiB. Allocate 80% of the remaining budget up to 8 GiB, plus 20% of the excess, capped at 16 GiB and rounded down to 256 MiB. The cap applies only to automatic mode; manual supports up to 128 GiB. Linux also considers the process's cgroup and ancestor limits/current usage. macOS estimates reclaimable physical memory without treating compressed memory or swap as additional capacity. Insufficient headroom returns memory_allocation_failed, suggesting closing other apps or choosing a manual value; the budget is never inflated to a minimum. Detection failure falls back to 2048 MiB with a task-log/dry-run indication; that fallback is not a guarantee of available memory.
+
+The result controls maximum Java heap (-Xmx), not total game-process memory or an immediate allocation. Native, mod and graphics allocations are additional. The launcher does not raise -Xms to match it; conflicting metadata maximum-heap arguments and initial-heap values above the budget are filtered. It does not resize a running game or infer needs from mod count. Other processes can change memory availability after sampling, and no budget guarantees every modpack can run.
 
 CurseForge API requests require a user-provided key authorized for the relevant API and file downloads. [CurseForge's API documentation](https://docs.curseforge.com/rest-api/) describes its key process; access depends on provider authorization. Run `ccl credentials curseforge set` to enter an issued key through a hidden terminal prompt. CCL saves it in the OS credential vault, scoped to the selected configuration path, never in `config.json`. `ccl credentials curseforge status` shows whether a key is saved and whether an environment override is active; `ccl credentials curseforge remove` deletes the saved key. `CCL_CURSEFORGE_API_KEY` remains a temporary environment override and takes precedence over the saved key. Avoid command arguments, shell history, logs, and repository files for secrets. The OS vault must be available (on Linux, this generally requires a running Secret Service session); CCL does not fall back to plaintext storage. CurseForge archive import requires a key only when selected remote files must be resolved; overrides-only archives without selected remote files need no key. The key is sent only to approved provider API/CDN requests. Fixture coverage of header scoping does not establish live provider authorization. See [imports](user-guide.en.md#imports) and [online content](user-guide.en.md#online).
 
-Launch settings are `launch.java` (optional executable or Java home), `launch.max_memory_mb` (default `2048`), and `launch.auto_install_java` (default `true`). The selected Java setting can be overridden with `--java`; `--no-java-download` skips managed Java installation for that run. Managed Java runtimes are installed under `<game-directory>/.ccl/runtimes` from official runtime manifests and verified artifacts. `auth.microsoft_client_id` is an optional public OAuth application ID, not a client secret. It is shown in the GUI only under Settings → Advanced settings; GUI sign-in is temporarily unavailable. The experimental CLI flow still uses it. See [account setup](user-guide.en.md#accounts).
+Launch settings are `launch.java` (optional executable or Java home), `launch.auto_memory` (default `true`), `launch.max_memory_mb` (retained manual value, default `2048`), and `launch.auto_install_java` (default `true`). The selected Java setting can be overridden with `--java`; `--no-java-download` skips managed Java installation for that run. Managed Java runtimes are installed under `<game-directory>/.ccl/runtimes` from official runtime manifests and verified artifacts. `auth.microsoft_client_id` is an optional public OAuth application ID, not a client secret. It is shown in the GUI only under Settings → Advanced settings; GUI sign-in is temporarily unavailable. The experimental CLI flow still uses it. See [account setup](user-guide.en.md#accounts).
 
 `settings get` and `settings show` redact proxy username/password. The config file stores the configured proxy URL for network use; keep that file private. On Unix, files written by the launcher use owner-only permissions. Configuration updates are validated and written atomically, with a lock to coordinate simultaneous CLI processes. `settings reset --all` also recovers a malformed configuration by replacing it with defaults.
 
@@ -472,9 +504,9 @@ ccl --network-offline launch --instance my-world --offline
 
 ## Launcher updates and diagnostics
 
-The v0.2.1 release added the GUI workflow fixes, macOS bundle sealing and signed-manifest updater. The v0.2.2 release added the unified library and metadata-only library actions; v0.2.3 fixes existing Forge profile launch preparation and runtime directories. v0.3.1 adds the wallpaper home, overlay navigation, saved recent selection and local appearance settings. CLI builds predating signed manifests still require a manual bootstrap. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
+The v0.2.1 release added the GUI workflow fixes, macOS bundle sealing and signed-manifest updater. The v0.2.2 release added the unified library and metadata-only library actions; v0.2.3 fixes existing Forge profile launch preparation and runtime directories. v0.3.0 introduced the wallpaper home, overlay navigation, saved recent selection and local appearance settings; v0.3.1 reduced package size and optimized downloads/rendering; v0.3.2 adds automatic memory allocation. CLI builds predating signed manifests still require a manual bootstrap. CLI builds that predate detached signed-manifest updates cannot update themselves across that protocol change. Bootstrap once by downloading the current CLI ZIP from the [GitHub Releases page](https://github.com/WinstonMeursault/CialloCraftLauncher/releases) and verifying its `.sha256` file before replacing the old executable. Later updates use the signed manifest. Existing settings, account metadata, credentials and instances remain in the usual user data locations; compatibility checks cover known legacy formats, not every historical data set.
 
-CCL checks for its own updates only when you run an update command. The stable channel follows `main`; v0.3.1 is this guide’s target version; check GitHub Releases for availability. The dev channel follows `dev` and may include newer GUI changes not yet in stable. Stable releases use version tags such as `v0.3.1`. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
+CCL checks for its own updates only when you run an update command. The stable channel follows `main`; v0.3.2 is this guide’s target version; check GitHub Releases for availability. The dev channel follows `dev` and may include newer GUI changes not yet in stable. Stable releases use version tags such as `v0.3.2`. A dev release is published for a dev commit after all three supported CI targets complete validation and packaging; the ten newest developer releases are retained.
 
 ```sh
 ccl update check
