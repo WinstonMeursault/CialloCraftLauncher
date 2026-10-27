@@ -1,10 +1,10 @@
 .saved-accounts { width:min(860px,100%); margin:0 auto; padding:0; color:var(--text); }
 .saved-accounts-head { margin:0 0 14px; }
 .saved-accounts-head h1 { margin:0; font-size:22px; font-weight:650; letter-spacing:-.02em; }
-.saved-accounts button { padding:7px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); font:inherit; font-size:13px; cursor:pointer; }
+.saved-accounts button { padding:7px 10px; border:1px solid var(--line); border-radius: var(--radius-control); background:var(--panel); color:var(--text); font:inherit; font-size:13px; cursor:pointer; }
 .saved-accounts button:disabled { cursor:default; opacity:.5; }
-.saved-accounts-list { display:grid; gap:0; }
-.saved-accounts-row { display:flex; align-items:center; gap:12px; min-width:0; padding:12px 0; border-bottom:1px solid var(--line); }
+.saved-accounts-list { display:grid; gap:4px; }
+.saved-accounts-row { display:flex; align-items:center; gap:12px; min-width:0; padding:12px; border-radius:var(--radius-control); }
 .saved-accounts-row.is-selected { background:var(--accent-soft); }
 .saved-accounts-info { display:grid; min-width:0; flex:1; gap:4px; }
 .saved-accounts-info strong { overflow:hidden; text-overflow:ellipsis; font-size:14px; }
@@ -18,7 +18,7 @@
 .saved-accounts-add summary { color:var(--text); font-size:14px; font-weight:600; cursor:pointer; }
 .saved-accounts-form { display:grid; grid-template-columns:minmax(100px, .3fr) minmax(160px, 1fr) auto; align-items:center; gap:10px; margin-top:12px; }
 .saved-accounts-form label { color:var(--muted); font-size:13px; }
-.saved-accounts-form input { min-width:0; padding:8px 9px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); font:inherit; font-size:14px; }
+.saved-accounts-form input { min-width:0; padding:8px 9px; border:1px solid var(--line); border-radius: var(--radius-control); background:var(--panel); color:var(--text); font:inherit; font-size:14px; }
 .saved-accounts-form button { border-color:var(--accent); background:var(--accent); color:var(--accent-contrast,#fff); }
 .saved-accounts-error { margin:10px 0; color:var(--danger,#d34e4e); font-size:13px; }
 .saved-accounts-unavailable { margin-top:16px; color:var(--muted); font-size:13px; }

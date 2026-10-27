@@ -1,3 +1,4 @@
+import { Select } from './Select'
 import { InstanceMemorySettings } from './MemorySettings'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -288,6 +289,10 @@ export default function App() {
     })().catch(captureError)
     return()=>{disposed=true;stops.forEach(stop=>stop())}
   },[desktop,captureError])
+
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -658,10 +663,10 @@ function CreateModal({ error, t, versions, versionsLoading, versionId, setVersio
   return <ModalFrame closeLabel={t.close} title={t.newInstance} close={close}>
     <form className="modal-form" onSubmit={submit}>{error && <div className="alert" role="alert">{error}</div>}
       <label className="field"><span>{t.name}</span><input required value={instanceId} onChange={event => setInstanceId(event.target.value)} autoComplete="off"/></label>
-      <label className="field"><span>{t.version}</span><select required value={versionId} disabled={versionsLoading || !versions.length} onChange={event => setVersionId(event.target.value)}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</select></label>
-      <label className="field"><span>{t.versionKind}</span><select value={versionKind} onChange={event => { const kind = event.target.value; setVersionKind(kind); if (kind !== 'all' && !versions.some(item => item.id === versionId && item.kind === kind)) setVersionId(versions.find(item => item.kind === kind)?.id ?? '') }}><option value="all">{t.all}</option>{kinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}</select></label>
-      <label className="field"><span>{t.softwareType}</span><select value={loader} onChange={event => changeLoader(event.target.value)}><option value="">Vanilla</option>{LOADERS.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
-      {loader && <label className="field"><span>{t.loaderVersion}</span><select value={loaderVersion} disabled={loaderLoading || !loaderVersions.length} onChange={event => setLoaderVersion(event.target.value)}><option value="">{loaderLoading ? t.loadingVersions : t.noVersions}</option>{loaderVersions.map(item => <option key={item.version} value={item.version}>{item.version}{item.stable ? '' : ' · preview'}</option>)}</select></label>}
+      <label className="field"><span>{t.version}</span><Select required value={versionId} disabled={versionsLoading || !versions.length} onValueChange={value => setVersionId(value)}><option value="">{versionsLoading ? t.loadingVersions : t.noVersions}</option>{visibleVersions.map(item => <option key={item.id} value={item.id}>{item.id} · {item.kind}</option>)}</Select></label>
+      <label className="field"><span>{t.versionKind}</span><Select value={versionKind} onValueChange={value => { const kind = value; setVersionKind(kind); if (kind !== 'all' && !versions.some(item => item.id === versionId && item.kind === kind)) setVersionId(versions.find(item => item.kind === kind)?.id ?? '') }}><option value="all">{t.all}</option>{kinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}</Select></label>
+      <label className="field"><span>{t.softwareType}</span><Select value={loader} onValueChange={value => changeLoader(value)}><option value="">Vanilla</option>{LOADERS.map(item => <option key={item} value={item}>{item}</option>)}</Select></label>
+      {loader && <label className="field"><span>{t.loaderVersion}</span><Select value={loaderVersion} disabled={loaderLoading || !loaderVersions.length} onValueChange={value => setLoaderVersion(value)}><option value="">{loaderLoading ? t.loadingVersions : t.noVersions}</option>{loaderVersions.map(item => <option key={item.version} value={item.version}>{item.version}{item.stable ? '' : ' · preview'}</option>)}</Select></label>}
       <div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t.close}</button><button className="button primary" disabled={working || versionsLoading || !versionId || (!!loader && (!loaderVersion || loaderLoading))}>{working ? t.starting : t.install}</button></div>
     </form>
   </ModalFrame>
@@ -705,7 +710,7 @@ function LogsPage({ t, entries, selectedKey, setSelectedKey, runs, selectedRunId
   return <>
     <PageHeading eyebrow={t.logs} title={t.logsTitle} description={t.logSaved}/>
     {logsPaused && <section className="logs-panel live-launch-panel"><div className="panel-heading"><div><h2>{t.currentLaunch}</h2><p>{liveEntry ? `${t.selected}: ${liveEntry} · ` : ''}{liveTask ? `${liveTask.phase} · #${liveTask.id}` : t.starting}</p></div><span className="state-tag state-running">{liveTask ? t.state[liveTask.state] : t.state.running}</span></div><pre className="run-log">{live.length ? live.join('\n') : t.noLogs}</pre></section>}
-    <section className={`logs-panel${logsPaused ? ' saved-logs-paused' : ''}`}><div className="log-controls"><label className="field"><span>{t.chooseEntry}</span><select value={selectedKey ?? ''} disabled={logsPaused} onChange={event => setSelectedKey(event.target.value)}><option value="">{t.chooseEntry}</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.id}</option>)}</select></label><label className="field"><span>{t.chooseRun}</span><select value={selectedRunId ?? ''} disabled={logsPaused || runs.length === 0} onChange={event => selectRun(event.target.value || null)}><option value="">{t.latestRun}</option>{runs.map(item => <option key={item.run_id} value={item.run_id}>{item.version} · {item.run_id}</option>)}</select></label><button className="button secondary" onClick={refresh} disabled={!selectedKey || logLoading || logsPaused}>{logLoading ? t.loading : t.refreshLogs}</button></div>
+    <section className={`logs-panel${logsPaused ? ' saved-logs-paused' : ''}`}><div className="log-controls"><label className="field"><span>{t.chooseEntry}</span><Select value={selectedKey ?? ''} disabled={logsPaused} onValueChange={value => setSelectedKey(value)}><option value="">{t.chooseEntry}</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.id}</option>)}</Select></label><label className="field"><span>{t.chooseRun}</span><Select value={selectedRunId ?? ''} disabled={logsPaused || runs.length === 0} onValueChange={value => selectRun(value || null)}><option value="">{t.latestRun}</option>{runs.map(item => <option key={item.run_id} value={item.run_id}>{item.version} · {item.run_id}</option>)}</Select></label><button className="button secondary" onClick={refresh} disabled={!selectedKey || logLoading || logsPaused}>{logLoading ? t.loading : t.refreshLogs}</button></div>
       {logsPaused && <p className="saved-logs-note">{t.savedPaused}</p>}
       {run && <dl className="run-metadata"><Meta label={t.gameVersion} value={run.version}/><Meta label={t.pid} value={run.pid === null ? '—' : String(run.pid)}/><Meta label={t.exitCode} value={run.exit_code === null ? '—' : String(run.exit_code)}/><Meta label={t.started} value={new Date(run.started_at_ms).toLocaleString()}/><Meta label={t.finished} value={run.finished_at_ms === null ? t.liveLog : new Date(run.finished_at_ms).toLocaleString()}/><Meta label={t.logFile} value={run.log_path}/></dl>}
       {!logsPaused && selected && runs.length === 0 && <p className="muted-copy">{t.noRuns}</p>}
