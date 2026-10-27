@@ -36,6 +36,10 @@ test('popup opens downward when there is room and upward at the bottom edge', ()
   assert.equal(up.bottom, 66)
   assert.equal(up.top, undefined)
   assert.equal(up.maxHeight, 320)
+  // A short menu fits below even when a full-height menu would need to flip.
+  const short = menuPosition({ top: 400, bottom: 436, left: 100, width: 240 }, viewport, 114)
+  assert.equal(short.top, 442)
+  assert.equal(short.bottom, undefined)
 })
 
 test('popup fits narrow windows and remains within viewport bounds', () => {

@@ -112,7 +112,11 @@ export function Select({ value, onValueChange, children, disabled = false, requi
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) { setOpen(false); return }
       const labels = popup.current?.querySelectorAll<HTMLElement>('.ccl-select-option > span:first-child') ?? []
       const contentWidth = Math.min(420, Math.max(0, ...[...labels].map(label => label.scrollWidth + 56)))
-      const next = menuPosition({ top: rect.top, bottom: rect.bottom, left: rect.left, width: Math.max(rect.width, contentWidth) }, { width: window.innerWidth, height: window.innerHeight }, 320)
+      const listHeight = popup.current?.querySelector<HTMLElement>('.ccl-select-list')?.scrollHeight ?? 0
+      const searchHeight = popup.current?.querySelector<HTMLElement>('.ccl-select-search')?.offsetHeight ?? 0
+      const emptyHeight = popup.current?.querySelector<HTMLElement>('.ccl-select-empty')?.offsetHeight ?? 0
+      const desiredHeight = Math.min(320, listHeight + searchHeight + emptyHeight + 12)
+      const next = menuPosition({ top: rect.top, bottom: rect.bottom, left: rect.left, width: Math.max(rect.width, contentWidth) }, { width: window.innerWidth, height: window.innerHeight }, desiredHeight)
       setPosition(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next)
     }
     update()
