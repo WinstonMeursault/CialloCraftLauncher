@@ -1,8 +1,8 @@
 //! Reusable asynchronous artifact downloader.
 
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -148,11 +148,12 @@ pub struct DownloadOutcome {
     pub reused_existing: bool,
 }
 
-/// Bounds simultaneous transfers across all calls made through this manager.
+/// Independently bounds simultaneous transfers and cached-file checks across shared clones.
 #[derive(Clone)]
 pub struct DownloadManager {
     client: reqwest::Client,
     permits: Arc<Semaphore>,
+    verification_permits: Arc<Semaphore>,
     retries_per_candidate: usize,
     base_backoff: Duration,
     offline: bool,
@@ -186,6 +187,7 @@ impl DownloadManager {
         Ok(Self {
             client,
             permits: Arc::new(Semaphore::new(config.max_parallel)),
+            verification_permits: Arc::new(Semaphore::new(config.max_parallel)),
             retries_per_candidate: 3,
             base_backoff: Duration::from_millis(250),
             offline: config.offline,
@@ -215,12 +217,14 @@ impl DownloadManager {
         check_cancelled(&request)?;
         let parent = parent_dir(&request.destination);
         fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
-        if let Ok(bytes) = fs::read(&request.destination)
-            && verify_bytes(&request, &bytes).is_ok()
+        if let Some(bytes) = self
+            .verify_cached_file(&request, &request.destination)
+            .await?
         {
+            check_cancelled(&request)?;
             return Ok(DownloadOutcome {
-                path: request.destination,
-                bytes: bytes.len() as u64,
+                path: request.destination.clone(),
+                bytes,
                 source_url: None,
                 reused_existing: true,
             });
@@ -294,12 +298,14 @@ impl DownloadManager {
         check_url_policy(request, &current_url)?;
         let partial = PartialFile::for_destination(&request.destination);
         let _partial_lock = partial.acquire(request).await?;
-        if let Ok(bytes) = fs::read(&request.destination)
-            && verify_bytes(request, &bytes).is_ok()
+        if let Some(bytes) = self
+            .verify_cached_file(request, &request.destination)
+            .await?
         {
+            check_cancelled(request)?;
             return Ok(DownloadOutcome {
                 path: request.destination.clone(),
-                bytes: bytes.len() as u64,
+                bytes,
                 source_url: None,
                 reused_existing: true,
             });
@@ -433,8 +439,11 @@ impl DownloadManager {
             .create_new(!resumed)
             .open(&partial.path)
             .map_err(|e| io_error(&partial.path, e))?;
-        let mut hasher = Sha1::new();
-        let mut sha512 = sha2::Sha512::new();
+        let mut hasher = request.expected_sha1.as_ref().map(|_| Sha1::new());
+        let mut sha512 = request
+            .expected_sha512
+            .as_ref()
+            .map(|_| sha2::Sha512::new());
         let mut completed = 0u64;
         if resumed {
             ensure_partial_identity(&file, &partial)?;
@@ -449,8 +458,12 @@ impl DownloadManager {
                 if count == 0 {
                     break;
                 }
-                hasher.update(&buffer[..count]);
-                sha512.update(&buffer[..count]);
+                if let Some(hasher) = &mut hasher {
+                    hasher.update(&buffer[..count]);
+                }
+                if let Some(sha512) = &mut sha512 {
+                    sha512.update(&buffer[..count]);
+                }
                 completed += count as u64;
             }
         }
@@ -480,8 +493,12 @@ impl DownloadManager {
             }
             file.write_all(&chunk)
                 .map_err(|e| io_error(&partial.path, e))?;
-            hasher.update(&chunk);
-            sha512.update(&chunk);
+            if let Some(hasher) = &mut hasher {
+                hasher.update(&chunk);
+            }
+            if let Some(sha512) = &mut sha512 {
+                sha512.update(&chunk);
+            }
             completed += chunk.len() as u64;
             if let Some(context) = &request.task_context {
                 context
@@ -513,7 +530,7 @@ impl DownloadManager {
             });
         }
         if let Some(expected) = &request.expected_sha1 {
-            let actual = format!("{:x}", hasher.finalize());
+            let actual = format!("{:x}", hasher.take().expect("SHA-1 requested").finalize());
             if !expected.eq_ignore_ascii_case(&actual) {
                 partial.discard()?;
                 return Err(DownloadError::Sha1Mismatch {
@@ -524,7 +541,7 @@ impl DownloadManager {
             }
         }
         if let Some(expected) = &request.expected_sha512 {
-            let actual = format!("{:x}", sha512.finalize());
+            let actual = format!("{:x}", sha512.take().expect("SHA-512 requested").finalize());
             if !expected.eq_ignore_ascii_case(&actual) {
                 partial.discard()?;
                 return Err(DownloadError::Sha512Mismatch {
@@ -551,6 +568,23 @@ impl DownloadManager {
             source_url: Some(url.into()),
             reused_existing: false,
         })
+    }
+
+    async fn verify_cached_file(
+        &self,
+        request: &DownloadRequest,
+        path: &Path,
+    ) -> Result<Option<u64>, DownloadError> {
+        let permit = loop {
+            check_cancelled(request)?;
+            tokio::select! {
+                permit = self.verification_permits.clone().acquire_owned() => {
+                    break permit.map_err(|_| DownloadError::Cancelled)?;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+        };
+        verify_file_async(request, path, permit).await
     }
 }
 
@@ -635,37 +669,98 @@ fn retryable_publish_error(_error: &std::io::Error) -> bool {
     false
 }
 
-fn verify_bytes(request: &DownloadRequest, bytes: &[u8]) -> Result<(), DownloadError> {
-    if let Some(expected) = request.expected_size
-        && expected != bytes.len() as u64
-    {
-        return Err(DownloadError::SizeMismatch {
-            path: request.destination.clone(),
-            expected,
-            actual: bytes.len() as u64,
-        });
-    }
-    if let Some(expected) = &request.expected_sha1 {
-        let actual = format!("{:x}", Sha1::digest(bytes));
-        if !expected.eq_ignore_ascii_case(&actual) {
-            return Err(DownloadError::Sha1Mismatch {
-                path: request.destination.clone(),
-                expected: expected.clone(),
-                actual,
-            });
+/// Verify a cached file without allocating a buffer proportional to its size. Hashing and
+/// filesystem reads run on Tokio's blocking pool; cancellation is checked between chunks.
+async fn verify_file_async(
+    request: &DownloadRequest,
+    path: &Path,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Result<Option<u64>, DownloadError> {
+    check_cancelled(request)?;
+    let path = path.to_path_buf();
+    let sha1 = request.expected_sha1.clone();
+    let sha512 = request.expected_sha512.clone();
+    let request_size = request.expected_size;
+    let cancellation = request
+        .task_context
+        .as_ref()
+        .map(|context| context.cancellation.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if cancellation
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return Err(DownloadError::Cancelled);
         }
-    }
-    if let Some(expected) = &request.expected_sha512 {
-        let actual = format!("{:x}", sha2::Sha512::digest(bytes));
-        if !expected.eq_ignore_ascii_case(&actual) {
-            return Err(DownloadError::Sha512Mismatch {
-                path: request.destination.clone(),
-                expected: expected.clone(),
-                actual,
-            });
+        let mut file = match File::open(&path) {
+            Ok(file) => file,
+            Err(_) => return Ok(None),
+        };
+        let metadata = match file.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => return Ok(None),
+        };
+        if request_size.is_some_and(|expected| expected != metadata.len()) {
+            return Ok(None);
         }
-    }
-    Ok(())
+        if sha1.is_none() && sha512.is_none() {
+            return Ok(Some(metadata.len()));
+        }
+        let mut sha1_hasher = sha1.as_ref().map(|_| Sha1::new());
+        let mut sha512_hasher = sha512.as_ref().map(|_| sha2::Sha512::new());
+        let mut buffer = [0u8; 64 * 1024];
+        let mut bytes_read = 0u64;
+        loop {
+            if cancellation
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+            {
+                return Err(DownloadError::Cancelled);
+            }
+            let count = match file.read(&mut buffer) {
+                Ok(count) => count,
+                Err(_) => return Ok(None),
+            };
+            if count == 0 {
+                break;
+            }
+            bytes_read += count as u64;
+            if let Some(hasher) = &mut sha1_hasher {
+                hasher.update(&buffer[..count]);
+            }
+            if let Some(hasher) = &mut sha512_hasher {
+                hasher.update(&buffer[..count]);
+            }
+        }
+        let sha1_matches = match (sha1, sha1_hasher) {
+            (Some(expected), Some(hasher)) => {
+                expected.eq_ignore_ascii_case(&format!("{:x}", hasher.finalize()))
+            }
+            _ => true,
+        };
+        let sha512_matches = match (sha512, sha512_hasher) {
+            (Some(expected), Some(hasher)) => {
+                expected.eq_ignore_ascii_case(&format!("{:x}", hasher.finalize()))
+            }
+            _ => true,
+        };
+        if sha1_matches
+            && sha512_matches
+            && request_size.is_none_or(|expected| expected == bytes_read)
+        {
+            Ok(Some(bytes_read))
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|_| DownloadError::Request {
+        url: "local cache".into(),
+        message: "cache verification worker failed".into(),
+    })??;
+    check_cancelled(request)?;
+    Ok(result)
 }
 
 fn safe_url(url: &reqwest::Url) -> String {
@@ -964,32 +1059,62 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn verifies_sha1_and_size() {
+    #[tokio::test]
+    async fn verifies_cached_sha1_and_size_through_offline_download() {
         let path = test_path();
         let request = DownloadRequest::new(vec!["http://localhost".into()], &path)
             .with_sha1("a9993e364706816aba3e25717850c26c9cd0d89d")
             .with_size(3);
-        assert!(verify_bytes(&request, b"abc").is_ok());
-        assert!(matches!(
-            verify_bytes(&request, b"abd"),
-            Err(DownloadError::Sha1Mismatch { .. })
-        ));
-        assert!(matches!(
-            verify_bytes(&request, b"ab"),
-            Err(DownloadError::SizeMismatch { .. })
-        ));
+        let manager = DownloadManager::new(&crate::config::DownloadConfig {
+            offline: true,
+            ..Default::default()
+        })
+        .unwrap();
+        fs::write(&path, b"abc").unwrap();
+        assert!(
+            manager
+                .download(request.clone())
+                .await
+                .unwrap()
+                .reused_existing
+        );
+        for corrupt in [b"abd".as_slice(), b"ab".as_slice()] {
+            fs::write(&path, corrupt).unwrap();
+            assert!(matches!(
+                manager.download(request.clone()).await,
+                Err(DownloadError::OfflineCacheMiss(_))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), corrupt);
+        }
+        fs::remove_file(path).unwrap();
     }
 
-    #[test]
-    fn verifies_sha512_for_cached_bytes_and_url_policy() {
-        let request = DownloadRequest::new(vec![], test_path())
+    #[tokio::test]
+    async fn verifies_sha512_for_cached_files_and_url_policy() {
+        let path = test_path();
+        fs::write(&path, b"abc").unwrap();
+        let request = DownloadRequest::new(vec!["https://cdn.example/file".into()], &path)
             .with_sha512("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
             .with_allowed_hosts(vec!["cdn.example".into()]);
-        assert!(verify_bytes(&request, b"abc").is_err());
+        let manager = DownloadManager::new(&crate::config::DownloadConfig {
+            offline: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            manager.download(request.clone()).await,
+            Err(DownloadError::OfflineCacheMiss(_))
+        ));
         let mut request = request;
         request.expected_sha512 = Some(format!("{:x}", sha2::Sha512::digest(b"abc")));
-        assert!(verify_bytes(&request, b"abc").is_ok());
+        assert!(
+            manager
+                .download(request.clone())
+                .await
+                .unwrap()
+                .reused_existing
+        );
+        fs::remove_file(path).unwrap();
         assert!(
             check_url_policy(
                 &request,
@@ -1011,6 +1136,109 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn cached_file_verification_streams_requested_hashes_and_checks_size() {
+        let path = test_path();
+        let bytes = vec![0x5au8; 2 * 1024 * 1024];
+        fs::write(&path, &bytes).unwrap();
+        let sha1 = format!("{:x}", Sha1::digest(&bytes));
+        let sha512 = format!("{:x}", sha2::Sha512::digest(&bytes));
+        let manager = DownloadManager::new(&crate::config::DownloadConfig {
+            max_parallel: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        for request in [
+            DownloadRequest::new(vec![], &path).with_sha1(sha1.clone()),
+            DownloadRequest::new(vec![], &path).with_sha512(sha512.clone()),
+            DownloadRequest::new(vec![], &path)
+                .with_sha1(sha1)
+                .with_sha512(sha512),
+            DownloadRequest::new(vec![], &path).with_size(bytes.len() as u64),
+        ] {
+            assert!(
+                manager
+                    .verify_cached_file(&request, &path)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        let wrong_size = DownloadRequest::new(vec![], &path).with_size(bytes.len() as u64 + 1);
+        assert!(
+            manager
+                .verify_cached_file(&wrong_size, &path)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let corrupt = DownloadRequest::new(vec![], &path).with_sha1("00".repeat(20));
+        assert!(
+            manager
+                .verify_cached_file(&corrupt, &path)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_file_verification_observes_cancellation() {
+        let path = test_path();
+        fs::write(&path, vec![0x5au8; 1024]).unwrap();
+        let token = crate::task::CancellationToken::default();
+        token.cancel();
+        let request = DownloadRequest::new(vec![], &path)
+            .with_sha1(format!("{:x}", Sha1::digest(vec![0x5au8; 1024])))
+            .with_task_context(TaskContext::new(token, Arc::new(|_| {})));
+        let manager = DownloadManager::new(&crate::config::DownloadConfig::default()).unwrap();
+        assert!(matches!(
+            manager.verify_cached_file(&request, &path).await,
+            Err(DownloadError::Cancelled)
+        ));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_cached_file_verification_cancels_while_waiting_for_gate() {
+        let path = test_path();
+        fs::write(&path, b"cached").unwrap();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig {
+            max_parallel: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let held = manager
+            .verification_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let token = crate::task::CancellationToken::default();
+        let request = DownloadRequest::new(vec![], &path)
+            .with_task_context(TaskContext::new(token.clone(), Arc::new(|_| {})));
+        let task_manager = manager.clone();
+        let task_path = path.clone();
+        let task =
+            tokio::spawn(
+                async move { task_manager.verify_cached_file(&request, &task_path).await },
+            );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        token.cancel();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(DownloadError::Cancelled)
+        ));
+        drop(held);
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1072,6 +1300,46 @@ mod tests {
             .await
             .unwrap();
         assert!(result.reused_existing);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn single_parallel_download_can_recheck_cache_under_partial_lock() {
+        let body = b"one permit cache check";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let path = test_path();
+        let manager = DownloadManager::new(&crate::config::DownloadConfig {
+            max_parallel: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            manager.download(
+                DownloadRequest::new(vec![format!("http://{address}/artifact")], &path)
+                    .with_sha1(format!("{:x}", Sha1::digest(body))),
+            ),
+        )
+        .await
+        .expect("single-permit download deadlocked")
+        .unwrap();
+        worker.join().unwrap();
+        assert!(!outcome.reused_existing);
+        assert_eq!(outcome.bytes, body.len() as u64);
+        assert_eq!(fs::read(&path).unwrap(), body);
         fs::remove_file(path).unwrap();
     }
 
