@@ -581,17 +581,27 @@ fn append_argument(
     if enabled {
         for item in items {
             // Memory is an explicit launch option and must remain authoritative.
-            if item.starts_with("-Xmx") || xms_exceeds(item, max_memory_mb) {
+            if item.starts_with("-Xmx") || item.starts_with("-XX:MaxHeapSize=") {
                 continue;
             }
-            out.push(expand(item, vals)?);
+            let expanded = expand(item, vals)?;
+            if expanded.starts_with("-Xmx")
+                || expanded.starts_with("-XX:MaxHeapSize=")
+                || xms_exceeds(&expanded, max_memory_mb)
+            {
+                continue;
+            }
+            out.push(expanded);
         }
     }
     Ok(())
 }
 
 fn xms_exceeds(argument: &str, max_memory_mb: u32) -> bool {
-    let Some(amount) = argument.strip_prefix("-Xms") else {
+    let Some(amount) = argument
+        .strip_prefix("-Xms")
+        .or_else(|| argument.strip_prefix("-XX:InitialHeapSize="))
+    else {
         return false;
     };
     let split = amount
@@ -603,7 +613,8 @@ fn xms_exceeds(argument: &str, max_memory_mb: u32) -> bool {
     };
     let multiplier = match suffix.to_ascii_lowercase().as_str() {
         "k" | "kb" => 1.0 / 1024.0,
-        "m" | "mb" | "" => 1.0,
+        "m" | "mb" => 1.0,
+        "" => 1.0 / (1024.0 * 1024.0),
         "g" | "gb" => 1024.0,
         "t" | "tb" => 1024.0 * 1024.0,
         _ => return false,
@@ -974,7 +985,7 @@ mod tests {
     fn validates_version_and_memory_and_caps_metadata_heap_settings() {
         let (root, mut options) = setup();
         let metadata = VersionMetadata::parse(
-            r#"{"id":"v1","mainClass":"Main","arguments":{"jvm":["-Xms2G","-Xmx8G"]},"downloads":{"client":{}}}"#,
+            r#"{"id":"v1","mainClass":"Main","arguments":{"jvm":["-Xms2G","-Xmx8G","-XX:MaxHeapSize=8589934592","-XX:InitialHeapSize=2147483648","-Xms268435456"]},"downloads":{"client":{}}}"#,
         )
         .unwrap();
         options.max_memory_mb = 1024;
@@ -986,6 +997,21 @@ mod tests {
                 .any(|arg| arg == "-Xms2G" || arg == "-Xmx8G")
         );
         assert!(plan.arguments.iter().any(|arg| arg == "-Xmx1024M"));
+        assert!(plan.arguments.iter().any(|arg| arg == "-Xms268435456"));
+        assert!(
+            !plan
+                .arguments
+                .iter()
+                .any(|arg| arg.starts_with("-XX:MaxHeapSize=")
+                    || arg.starts_with("-XX:InitialHeapSize="))
+        );
+        assert_eq!(
+            plan.arguments
+                .iter()
+                .filter(|arg| arg.starts_with("-Xmx"))
+                .count(),
+            1
+        );
         options.version = "../escape".into();
         assert!(matches!(
             build_launch_plan(&metadata, &options),

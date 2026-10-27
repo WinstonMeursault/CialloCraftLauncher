@@ -1,3 +1,4 @@
+import { InstanceMemorySettings } from './MemorySettings'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -20,7 +21,7 @@ import defaultWallpaper from './assets/default-wallpaper.webp'
 import { LauncherLogs } from './LauncherLogs'
 
 type Modal = 'create' | 'import' | null
-type LaunchForm = { accountId: string; java: string; memory: string; autoInstallJava: boolean; dryRun: boolean }
+type LaunchForm = { accountId: string; java: string; autoInstallJava: boolean; dryRun: boolean }
 
 const LOADERS = ['fabric', 'quilt', 'legacyfabric', 'optifine', 'forge', 'neoforge'] as const
 const MemoInstanceDetails = memo(InstanceDetails)
@@ -99,7 +100,7 @@ export default function App() {
   const [updateExisting, setUpdateExisting] = useState(false)
   const [allowedHosts, setAllowedHosts] = useState<string[]>([])
   const [manualHosts, setManualHosts] = useState('')
-  const [launchForm, setLaunchForm] = useState<LaunchForm>({ accountId: '', java: '', memory: '', autoInstallJava: true, dryRun: false })
+  const [launchForm, setLaunchForm] = useState<LaunchForm>({ accountId: '', java: '', autoInstallJava: true, dryRun: false })
   const [pendingCancel, setPendingCancel] = useState<TaskSnapshot | null>(null)
   const [progressVisible, setProgressVisible] = useState(false)
   const [logSource, setLogSource] = useState<'game' | 'launcher'>('game')
@@ -194,7 +195,7 @@ export default function App() {
       setBootstrap(result)
       setTheme(result.preferences.theme); setLanguage(result.preferences.language)
       setSavedPreferences(result.preferences); setReduceTransparency(result.preferences.reduce_transparency); setReduceMotion(result.preferences.reduce_motion)
-      setLaunchForm(current => ({ ...current, java: result.launch_defaults.java ?? '', memory: String(result.launch_defaults.max_memory_mb), autoInstallJava: result.launch_defaults.auto_install_java }))
+      setLaunchForm(current => ({ ...current, java: result.launch_defaults.java ?? '', autoInstallJava: result.launch_defaults.auto_install_java }))
       setSelectedKey(result.entries.some(entry => entry.key === result.preferences.last_selected_instance) ? result.preferences.last_selected_instance : null)
       if (result.preferences.background_image) {
         void invoke<string | null>('background_image_data').then(setBackground).catch(() => setBackground(null))
@@ -499,10 +500,6 @@ export default function App() {
   const launch = async (event: FormEvent) => {
     event.preventDefault()
     if (!selected || working || activeTask) return
-    const memoryValue = launchForm.memory.trim() ? Number(launchForm.memory) : null
-    if (memoryValue !== null && (!Number.isSafeInteger(memoryValue) || memoryValue < 256 || memoryValue > 131_072)) {
-      captureError(language === 'zh-CN' ? '请在实例启动选项中输入 256–131072 MiB 之间的整数内存值。' : 'Enter a whole-number memory limit from 256 to 131072 MiB in the instance launch options.'); return
-    }
     const account = accountListing.accounts.find(item => item.id === launchForm.accountId)
     if (!account) { enterPage('accounts'); return }
     const request: LaunchRequest = {
@@ -511,7 +508,7 @@ export default function App() {
         ? { kind: 'offline', username: account.username, account_id: account.id }
         : { kind: 'microsoft', username: null, account_id: account.id },
       java: launchForm.java.trim() || null,
-      memory_mb: memoryValue,
+      memory: null,
       auto_install_java: launchForm.autoInstallJava,
       dry_run: launchForm.dryRun,
     }
@@ -612,7 +609,7 @@ export default function App() {
       <div className="page-messages">{error && <div className="alert" role="alert"><span>{error}</span><button className="icon-button" aria-label={t.close} onClick={() => setError(null)}>×</button></div>}{pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label={t.close} onClick={() => setPageNotice(null)}>×</button></div>}</div>
       {loading ? <div className="loading" role="status">{t.loading}</div> : !bootstrap ? <section className="connection-card"><h1>{t.error}</h1><button className="button secondary" onClick={() => void loadBootstrap()}>{t.refreshLogs}</button>{appearance}<MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={receiveTask}/></section> : !initialized ? page === 'logs' ? <LauncherLogs language={language}/> : page === 'settings' ? <>{appearance}<button className="button secondary" onClick={chooseRoot} disabled={working}>{t.changeRoot}</button></> : <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot}/> : <>
         <div hidden={page !== 'home'} className="page-surface home-surface"><Home language={language} entries={bootstrap.entries} selected={selected} accountListing={accountListing} accountId={launchForm.accountId} disabled={working || !!activeTask} task={task} launchPending={launchPending} missingSelection={!!savedPreferences?.last_selected_instance && !selected} onSelect={selectEntry} onAccount={accountSelect} onAccounts={onHomeAccounts} onManage={onManageSelected} onCreate={openCreate} onImport={openImport} onLibrary={onHomeLibrary} onLaunch={launch} onProgress={() => setProgressVisible(true)}/></div>
-        <div ref={librarySurface} hidden={page !== 'library'} className="page-surface" data-page="library"><div hidden={detailOpen}><MemoLibraryPage t={t} language={language} entries={entries} query={query} setQuery={setQuery} selectedKey={selectedKey} onManage={manageEntry} onRefresh={onRefreshLibrary} onPlay={onSelectEntryToPlay} openCreate={openCreate} openImport={openImport} disabled={working || !!activeTask}/></div>{detailOpen && <><button className="button back-button" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => { if (librarySurface.current) librarySurface.current.scrollTop = libraryScroll.current }) }}><Icon name="back"/>{t.library}</button><MemoInstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={onLibraryChanged}/><details className="launch-settings"><summary>{t.launchOptions}</summary><LaunchOptions t={t} form={launchForm} onChange={setLaunchForm}/><p className="muted-copy">{language === 'zh-CN' ? '这些值用于本次启动器会话。全局默认值可在设置中保存。' : 'These values apply to this launcher session. Save global defaults in Settings.'}</p><button className="button primary" disabled={!selected} onClick={() => enterPage('home')}>{language === 'zh-CN' ? '返回启动' : 'Back to play'}</button></details></>}{bootstrap.warnings.length > 0 && <details className="warnings"><summary>{t.warnings}</summary>{bootstrap.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}</div>
+        <div ref={librarySurface} hidden={page !== 'library'} className="page-surface" data-page="library"><div hidden={detailOpen}><MemoLibraryPage t={t} language={language} entries={entries} query={query} setQuery={setQuery} selectedKey={selectedKey} onManage={manageEntry} onRefresh={onRefreshLibrary} onPlay={onSelectEntryToPlay} openCreate={openCreate} openImport={openImport} disabled={working || !!activeTask}/></div>{detailOpen && <><button className="button back-button" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => { if (librarySurface.current) librarySurface.current.scrollTop = libraryScroll.current }) }}><Icon name="back"/>{t.library}</button><MemoInstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={onLibraryChanged}/><details className="launch-settings"><summary>{t.launchOptions}</summary>{selected && <InstanceMemorySettings key={selected.key} entry={selected} language={language} disabled={working || !!activeTask} onSaved={onLibraryChanged}/>}<LaunchOptions t={t} form={launchForm} onChange={setLaunchForm}/><p className="muted-copy">{language === 'zh-CN' ? 'Java 等选项用于本次启动器会话；实例内存设置需单独保存。全局默认值可在设置中修改。' : 'Java and other options apply to this launcher session; save instance memory separately. Change global defaults in Settings.'}</p><button className="button primary" disabled={!selected} onClick={() => enterPage('home')}>{language === 'zh-CN' ? '返回启动' : 'Back to play'}</button></details></>}{bootstrap.warnings.length > 0 && <details className="warnings"><summary>{t.warnings}</summary>{bootstrap.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}</div>
         <div hidden={page !== 'discover'} className="page-surface" data-page="discover"><MemoDiscover entries={bootstrap.entries} onSelectEntry={selectEntry} language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={onLibraryChanged}/></div>
         <div hidden={page !== 'accounts'} className="page-surface" data-page="accounts"><MemoAccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout}/></div>
         <div hidden={page !== 'logs'} className="page-surface" data-page="logs"><h1>{t.logs}</h1><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? 'CCL 日志' : 'CCL logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} active={page === 'logs'}/> : <MemoLogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={selectEntry} runs={runs} selectedRunId={selectedRunId} selectRun={onSelectRun} runLog={runLog} logLoading={logLoading} refresh={onRefreshRuns} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={currentLaunchName}/>}</div>
@@ -725,5 +722,5 @@ function ConfirmDialog({ t, task, working, cancel, confirm }: { t: ReturnType<ty
 function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <div className="page-heading"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div> }
 
 function LaunchOptions({ t, form, onChange }: { t: ReturnType<typeof getMessages>; form: LaunchForm; onChange: (value: LaunchForm) => void }) {
-  return <div className="launch-options-body"><label className="field"><span>{t.javaPath}</span><input value={form.java} onChange={event => onChange({ ...form, java: event.target.value })}/></label><label className="field"><span>{t.memory}</span><input type="number" min="256" max="131072" step="1" value={form.memory} onChange={event => onChange({ ...form, memory: event.target.value })}/></label><label className="check-row"><input type="checkbox" checked={form.autoInstallJava} onChange={event => onChange({ ...form, autoInstallJava: event.target.checked })}/>{t.autoInstallJava}</label><label className="check-row"><input type="checkbox" checked={form.dryRun} onChange={event => onChange({ ...form, dryRun: event.target.checked })}/>{t.dryRun}</label></div>
+  return <div className="launch-options-body"><label className="field"><span>{t.javaPath}</span><input value={form.java} onChange={event => onChange({ ...form, java: event.target.value })}/></label><label className="check-row"><input type="checkbox" checked={form.autoInstallJava} onChange={event => onChange({ ...form, autoInstallJava: event.target.checked })}/>{t.autoInstallJava}</label><label className="check-row"><input type="checkbox" checked={form.dryRun} onChange={event => onChange({ ...form, dryRun: event.target.checked })}/>{t.dryRun}</label></div>
 }

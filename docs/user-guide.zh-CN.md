@@ -58,7 +58,7 @@ ccl logs --lines 100
 
 ### 开发分支界面改版（尚未发布）
 
-当前开发分支默认打开“开始游戏”。静态图片铺满内容窗口，并延伸到毛玻璃导航栏背后。当前实例、账户选择和启动按钮位于右下角。程序通过稳定的游戏库 key 记住所选实例；若该实例不可用，需明确选择另一个。重新打开 CCL 不会自动启动游戏。尚无保存选择时也需要先选择实例。“切换实例”打开可搜索选择器，“游戏库”显示完整列表。点击列表行返回启动页，更多按钮进入管理和会话启动选项。这里的 Java/内存覆盖仅用于本次启动器会话；共享默认值在“设置 → 游戏与 Java”保存。
+当前开发分支默认打开“开始游戏”。静态图片铺满内容窗口，并延伸到毛玻璃导航栏背后。当前实例、账户选择和启动按钮位于右下角。程序通过稳定的游戏库 key 记住所选实例；若该实例不可用，需明确选择另一个。重新打开 CCL 不会自动启动游戏。尚无保存选择时也需要先选择实例。“切换实例”打开可搜索选择器，“游戏库”显示完整列表。点击列表行返回启动页，更多按钮进入管理和会话启动选项。Java 覆盖仅用于本次启动器会话；实例内存需单独保存，共享默认值在“设置 → 游戏与 Java”修改。
 
 导航默认显示图标，鼠标悬停或键盘聚焦时展开文字。CCL 按钮可供触摸操作明确展开。展开覆盖页面，不挤动内容。管理页面采用实色阅读区，切换导航时保留各页滚动位置。实例名称支持 Unicode 和空格，玩家名限制保持不变。
 
@@ -175,7 +175,9 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
 | `downloads.max_parallel` | `8` | 1 到 64 的整数 |
 | `auth.microsoft_client_id` | `null` | 公开 OAuth 客户端 ID 或 `null` |
 | `launch.java` | `null` | Java 可执行文件路径、Java 主目录或 `null` |
-| `launch.max_memory_mb` | `2048` | 256 到 131072 MiB 的整数 |
+| `launch.auto_memory` | `true` | 默认自动分配 |
+| `launch.max_memory_mb` | `2048` | 保留的手动值，256–131072 MiB；仅关闭自动分配时使用 |
+| `launch.instance_memory` | `{}` | 由 settings memory 管理的实例覆盖 |
 | `launch.auto_install_java` | `true` | `true` 或 `false` |
 
 以下完整配置使用所有默认值：
@@ -196,6 +198,8 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
   "launch": {
     "java": null,
     "max_memory_mb": 2048,
+    "auto_memory": true,
+    "instance_memory": {},
     "auto_install_java": true
   }
 }
@@ -203,11 +207,39 @@ HMCL 规范化的 Forge 配置可以使用 `${primary_jar_name}`，CCL 会将其
 
 对于支持映射的 Minecraft 地址，`auto` 先尝试官方地址再尝试配置的镜像；`official` 仅使用官方地址；`mirror` 先尝试镜像再尝试官方地址。未知主机保留原始地址。OptiFine 使用配置的镜像端点。这些设置不会重定向 Modrinth、CurseForge 或 GitHub 请求。
 
-配置中可省略字段，省略时使用默认值。`--memory` 可在单次启动中覆盖 `launch.max_memory_mb`，接受 256–131072 MiB。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+配置中可省略字段，省略时使用默认值。`--memory auto` 或 `--memory 4096` 可在本次启动覆盖已保存的实例/全局策略；数值接受 256–131072 MiB。版本列表和安装流程使用官方版本清单及元数据。安装会下载客户端、库、原生库、资源索引和资源文件；依据可用元数据中的哈希和大小校验，限制并发数，重试临时失败，仅在续传条件经过验证时继续下载，复用有效缓存文件，并先写入临时文件再替换目标。多个进程通过版本锁协调，也支持取消操作。已有版本 JSON 冲突时会返回冲突错误而不会覆盖。
+
+### 自动与手动内存分配（开发分支）
+
+默认使用**自动**。GUI 在“设置 → 游戏与 Java → 内存分配”选择自动/手动；只有手动模式显示最大堆内存输入框。实例详情 → 启动选项可选择“跟随全局 / 自动 / 手动”，点击“保存此实例内存设置”后才持久化；未保存的编辑不影响启动。首页不常驻显示数值，启动任务日志及 dry-run 显示实际结果。
+
+```sh
+# 仅本次启动：明确自动，或手动 4 GiB
+ccl launch "中文实例 with spaces" --offline --memory auto --dry-run
+ccl launch "中文实例 with spaces" --offline --memory 4096
+# 全局默认自动；max_memory_mb 只保留手动数值
+ccl settings set launch.auto_memory true
+# 切换到全局手动
+ccl settings set launch.max_memory_mb 4096
+ccl settings set launch.auto_memory false
+# 查看、保存及清除某一配置的覆盖
+ccl settings memory "中文实例 with spaces"
+ccl settings memory "中文实例 with spaces" --set auto
+ccl settings memory "中文实例 with spaces" --set 6144
+ccl settings memory "中文实例 with spaces" --set inherit
+# CCL 修订实例使用 --instance；不需指定游戏版本
+ccl settings memory --instance "整合包 A" --set auto
+```
+
+优先级为本次 `--memory` → 保存的实例覆盖 → 全局设置。实例覆盖保存在共享核心配置的 `launch.instance_memory` 中，键由实际游戏目录与稳定实例 ID 生成，不使用显示名称；改显示名称不会丢失，CLI 与 GUI 共用。复制、移动实例不复制覆盖；删除后遗留的覆盖不会影响其他目录/ID。GUI 遇到外部修改会拒绝覆盖，重新加载后再保存。
+
+每次启动准备末尾读取可用物理内存，扣除 1 GiB 余量。剩余预算 8 GiB 以内取 80%，超过部分取 20%；自动上限 16 GiB，向下取整到 256 MiB。这个上限只限制自动模式；手动最多 128 GiB。Linux 同时考虑当前 cgroup 及其祖先的内存限额和已用量；macOS 估计可回收物理内存，不把压缩内存/交换空间当作额外容量。余量不足时返回 `memory_allocation_failed`，建议关闭其他程序或选择手动值，不会强行抬高预算。检测失败时回退到 2048 MiB，并在任务日志及 dry-run 标记；回退值不是可用内存保证。
+
+分配的是 `-Xmx` 最大 Java 堆，不是整个游戏进程的内存上限，也不会立即占满；原生内存、模组和图形资源另有开销。不会把 `-Xms` 提高到最大值；元数据中的冲突最大堆参数、超过预算的初始堆参数会被过滤。游戏运行后不动态调整，不按模组数量猜测需求。内存快照可能随其他程序变化，无法保证任意整合包均有足够内存。
 
 CurseForge API 请求需要用户提供对相应 API 和文件下载有权限的密钥。[CurseForge API 文档](https://docs.curseforge.com/rest-api/)介绍密钥流程；实际访问取决于服务方授权。获得密钥后运行 `ccl credentials curseforge set`，通过隐藏输入的终端提示录入。CCL 将密钥保存到系统凭据库，按所选配置文件路径隔离，不写入 `config.json`。`ccl credentials curseforge status` 会显示是否已保存密钥及是否启用环境变量覆盖；`ccl credentials curseforge remove` 可删除。`CCL_CURSEFORGE_API_KEY` 仍可作临时环境变量覆盖，优先于已保存密钥。不要通过命令参数、shell 历史、日志或仓库文件传递密钥。必须有可用的系统凭据库（Linux 通常需要运行 Secret Service 会话）；CCL 不会降级为明文保存。仅当 CurseForge 归档选择的远程文件需要解析时才需要该密钥；不含所选远程文件的纯 overrides 归档无需密钥。密钥只会发送到获准的服务 API/CDN 请求。基于测试夹具的请求头范围检查不能证明已获得真实服务授权。参阅[导入](user-guide.zh-CN.md#imports)和[在线内容](user-guide.zh-CN.md#online)。
 
-启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.max_memory_mb`（默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。GUI 仅在“设置 → 高级设置”显示此项；GUI 登录暂时不可用。实验性的 CLI 流程仍使用该 ID。参阅[账户设置](user-guide.zh-CN.md#accounts)。
+启动设置还包括 `launch.java`（可选的 Java 可执行文件或主目录）、`launch.auto_memory`（默认 `true`）、`launch.max_memory_mb`（保留的手动值，默认 `2048`）以及 `launch.auto_install_java`（默认 `true`）。`--java` 可覆盖配置路径；`--no-java-download` 可在本次启动时跳过托管 Java 安装。托管运行时安装在 `<游戏目录>/.ccl/runtimes`，使用 Mojang 官方运行时清单和校验文件。`auth.microsoft_client_id` 是可选的公开 OAuth 应用 ID，不是客户端密钥。GUI 仅在“设置 → 高级设置”显示此项；GUI 登录暂时不可用。实验性的 CLI 流程仍使用该 ID。参阅[账户设置](user-guide.zh-CN.md#accounts)。
 
 `settings get` 和 `settings show` 会隐藏代理 URL 中的用户名和密码。为网络连接所需，配置文件仍会保存完整代理 URL，因此应保护该文件。在 Unix 系统上，启动器写入的配置文件仅允许文件所有者访问。设置会先校验，再通过原子替换写入；多个 CLI 进程之间使用锁协调更新。`settings reset --all` 也可将损坏的配置替换为默认值。
 
