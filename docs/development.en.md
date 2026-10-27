@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.3.0 release notes](#release-notes)
+- [v0.3.1 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -42,6 +42,16 @@ cargo run -p ccl-cli -- --help
 `Cargo.lock` pins workspace dependencies. Use `--locked` for release checks and builds so Cargo fails if manifests and the committed lockfile disagree. HTTP uses Rustls; the selected `keyring` backends include native credential-store dependencies and may compile vendored native sources, so install the platform build tools listed above.
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
+
+### Release builds and cache verification
+
+Release builds use Thin LTO, one code-generation unit and symbol stripping. They keep the default release optimization level and unwinding behavior; task panic handling, checksums, signatures, notices and supported archive formats remain enabled. Symbol stripping reduces executable symbol information, so use an unstripped local build for symbol-level debugging. ZIP uses the zlib-rs DEFLATE backend without the unused Zopfli encoder; normal DEFLATE import/export remains supported.
+
+Cached artifacts are checked with a bounded 64 KiB buffer on Tokio's blocking pool, with a separate cancellation-aware gate capped by `downloads.max_parallel`. The verification permit stays with the worker even if its waiting future is dropped. Size mismatches fail before content reads; requested digests are checked in one streaming pass. Network and resumed transfers compute only the requested SHA-1/SHA-512 digests. The under-lock cache recheck remains to protect concurrent publication, and offline mode still rejects invalid cache files.
+
+For a larger opt-in local measurement, run `cargo run --release --locked -p ccl-core --example artifact_benchmark -- --bytes 67108864 --iterations 3`. It generates a deterministic 64 MiB fixture, streams it from localhost, and measures cold/warm SHA-1, SHA-512, dual-hash and size-only requests. Every warm pass must reuse the file without network traffic. Run the identical harness in both revisions, alternate their order, and distinguish raw binaries, normalized compression and actual installer sizes. This fixture does not measure public-network performance or Minecraft gameplay.
+
+GUI management pages use React memoization with stable page inputs while retaining their mounted state and scroll positions. Task/log updates no longer require rerendering an unchanged library. The default wallpaper avoids an unnecessary background-image IPC read. Browser fixture component counts are separate evidence from native WebView startup time or GPU load; keep test probes out of normal frontend bundles.
 
 <a id="gui-preview"></a>
 <a id="gui-g3"></a>
@@ -329,7 +339,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.3.0 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.1 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -353,12 +363,30 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.3.0 release notes
+## v0.3.1 release notes
 
-These notes target v0.3.0 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.1 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.0
+# CialloCraftLauncher 0.3.1
+
+This patch reduces release package sizes and improves artifact downloading and desktop rendering.
+
+- Enable Thin LTO, a single code-generation unit and symbol stripping, and remove the unused Zopfli encoder while retaining standard DEFLATE support and bundled license notices.
+- Compute only requested SHA-1/SHA-512 digests during downloads and resumption. Verify cached files with bounded streaming buffers and a separate concurrency limit on the blocking pool.
+- Preserve cancellation, corrupt-cache rejection, offline checks, concurrent cache publication and update signature verification.
+- Avoid rerendering unchanged desktop management pages on task/log updates and skip unnecessary default-wallpaper image reads; retain selection, filters and page state.
+
+Compared with the preceding dev baseline, measured macOS DMG size fell about 22%, Linux DEB about 24%, Windows installer about 4%, and Linux AppImage about 3%. Deterministic installation/download fixtures improved, but small-file cache scheduling can cost more; these measurements do not promise faster Minecraft gameplay or every operation.
+
+The performance commit passed core and desktop validation on Windows x64, macOS arm64 and Linux x86_64, including packaging, frontend readiness and update rollback/recovery. The stable release workflow revalidates the version and uploaded assets before publication.
+
+CLI and GUI updater manifests retain detached release-key signatures. Installers lack OS publisher certificate signatures; macOS uses verified ad-hoc bundle signatures and is not notarized. GUI Microsoft sign-in remains temporarily unavailable. CurseForge requires a user-supplied API key. No game data migration is performed.
+<!-- release-notes:end -->
+
+### v0.3.0 historical release notes
+
+#### CialloCraftLauncher 0.3.0
 
 This release redesigns the desktop interface around continuing your current game.
 
@@ -373,7 +401,6 @@ This release redesigns the desktop interface around continuing your current game
 The UI development commit passed core and desktop CI on Windows x64, macOS arm64 and Linux x86_64, including packaging, WebView readiness, successful updates, failure rollback and interrupted recovery. Native Mac checks covered themes, language, minimum windows, backgrounds, accounts and an isolated fixture process; these do not establish physical gameplay or drag testing on every platform. The stable release workflow additionally revalidates this version and verifies uploaded packages.
 
 CLI and GUI updater manifests have detached release-key signatures. Installers still lack OS publisher certificate signatures; macOS retains full ad-hoc bundle verification and is not notarized. Microsoft GUI sign-in remains temporarily unavailable, and CurseForge requires a user-supplied API key. Instance directories and player files are not migrated.
-<!-- release-notes:end -->
 
 ### v0.2.3 historical release notes
 
@@ -427,7 +454,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.0; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.1; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 

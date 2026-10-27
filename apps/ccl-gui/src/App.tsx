@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { boundLogLines, boundLogText } from './types'
@@ -23,6 +23,11 @@ type Modal = 'create' | 'import' | null
 type LaunchForm = { accountId: string; java: string; memory: string; autoInstallJava: boolean; dryRun: boolean }
 
 const LOADERS = ['fabric', 'quilt', 'legacyfabric', 'optifine', 'forge', 'neoforge'] as const
+const MemoInstanceDetails = memo(InstanceDetails)
+const MemoDiscover = memo(Discover)
+const MemoAccountsPanel = memo(AccountsPanel)
+const MemoLibraryPage = memo(LibraryPage)
+const MemoLogsPage = memo(LogsPage)
 
 function isDesktopRuntime() { return '__TAURI_INTERNALS__' in window }
 function errorMessage(cause: unknown, fallback: string) { return formatGuiError(cause, fallback) }
@@ -191,7 +196,11 @@ export default function App() {
       setSavedPreferences(result.preferences); setReduceTransparency(result.preferences.reduce_transparency); setReduceMotion(result.preferences.reduce_motion)
       setLaunchForm(current => ({ ...current, java: result.launch_defaults.java ?? '', memory: String(result.launch_defaults.max_memory_mb), autoInstallJava: result.launch_defaults.auto_install_java }))
       setSelectedKey(result.entries.some(entry => entry.key === result.preferences.last_selected_instance) ? result.preferences.last_selected_instance : null)
-      void invoke<string | null>('background_image_data').then(setBackground).catch(() => setBackground(null))
+      if (result.preferences.background_image) {
+        void invoke<string | null>('background_image_data').then(setBackground).catch(() => setBackground(null))
+      } else {
+        setBackground(null)
+      }
       if (!result.setup_required) await loadAuxiliary()
     } catch (cause) { captureError(cause) }
     finally { setLoading(false) }
@@ -304,11 +313,11 @@ export default function App() {
     return () => cancelAnimationFrame(frame)
   }, [desktop, loading, hasRenderedBootstrap, captureError])
 
-  const entries = (bootstrap?.entries ?? []).filter(entry => {
+  const entries = useMemo(() => (bootstrap?.entries ?? []).filter(entry => {
     const displayName = entry.display_name
     const haystack = `${displayName} ${entry.id} ${entry.minecraft} ${entry.loader ?? ''} ${entry.game_directory}`.toLocaleLowerCase()
     return haystack.includes(query.toLocaleLowerCase().trim())
-  })
+  }), [bootstrap?.entries, query])
   const selected = resolveSelectedInstance(bootstrap?.entries ?? [], selectedKey)
 
   const startTask = async (operation: () => Promise<TaskSnapshot>) => {
@@ -345,7 +354,7 @@ export default function App() {
     finally { setWorking(false) }
   }
 
-  const openCreate = async () => {
+  const openCreate = useCallback(async () => {
     setModal('create'); setVersions([]); setVersionId(''); setInstanceId(''); setLoader(''); setLoaderVersions([]); setLoaderVersion(''); setVersionKind('all')
     loaderRequest.current += 1; setLoaderLoading(false)
     setVersionsLoading(true); setError(null)
@@ -355,7 +364,7 @@ export default function App() {
       setVersionId(items[0]?.id ?? '')
     } catch (cause) { captureError(cause) }
     finally { setVersionsLoading(false) }
-  }
+  }, [captureError])
 
   const changeLoader = async (nextLoader: string, minecraft = versionId) => {
     const sequence = ++loaderRequest.current
@@ -382,7 +391,7 @@ export default function App() {
     if (result) setModal(null)
   }
 
-  const inspectImport = async () => {
+  const inspectImport = useCallback(async () => {
     if (working || activeTask) return
     setWorking(true)
     setError(null)
@@ -392,7 +401,7 @@ export default function App() {
       setImportPreview(preview); setImportId(importIdFromPath(preview.path)); setAllowedHosts([]); setManualHosts(''); setIncludeOptional(false); setReplaceModified(false)
     } catch (cause) { captureError(cause) }
     finally { setWorking(false) }
-  }
+  }, [working, activeTask?.id, captureError])
 
   const importInstance = async (event: FormEvent) => {
     event.preventDefault()
@@ -417,20 +426,20 @@ export default function App() {
     catch (cause) { if (sequence === accountReadSequence.current) captureError(cause) }
   }, [captureError])
 
-  const selectEntry = (key: string) => {
+  const selectEntry = useCallback((key: string) => {
     setSelectedKey(key)
     selectionQueue.current = selectionQueue.current.catch(() => {}).then(() => invoke<Preferences>('select_instance', { key })).then(value => {
       if (value) setSavedPreferences(current => current ? { ...current, last_selected_instance: key } : current)
     }).catch(captureError)
-  }
+  }, [captureError])
 
-  const enterPage = (next: Page) => {
+  const enterPage = useCallback((next: Page) => {
     setPage(next); setPageNotice(null)
     if (next === 'accounts' && !bootstrap?.setup_required) void loadAccounts()
     if (next === 'logs' && !bootstrap?.setup_required) void refreshTaskState()
-  }
+  }, [bootstrap?.setup_required, loadAccounts, refreshTaskState])
 
-  const accountSelect = async (id: string) => {
+  const accountSelect = useCallback(async (id: string) => {
     if (accountMutating.current) return
     accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
@@ -440,8 +449,8 @@ export default function App() {
     }
     catch (cause) { captureError(cause) }
     finally { accountMutating.current = false; setWorking(false) }
-  }
-  const accountLogout = async (id: string) => {
+  }, [captureError])
+  const accountLogout = useCallback(async (id: string) => {
     if (accountMutating.current) return
     accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
@@ -451,8 +460,8 @@ export default function App() {
     }
     catch (cause) { captureError(cause) }
     finally { accountMutating.current = false; setWorking(false) }
-  }
-  const addOfflineAccount = async (username: string) => {
+  }, [captureError])
+  const addOfflineAccount = useCallback(async (username: string) => {
     if (accountMutating.current) return
     accountMutating.current = true; accountReadSequence.current += 1
     setWorking(true); setError(null)
@@ -462,7 +471,7 @@ export default function App() {
       setLaunchForm(current => ({ ...current, accountId: listing.selected ?? '' }))
     } catch (cause) { captureError(cause); throw cause }
     finally { accountMutating.current = false; setWorking(false) }
-  }
+  }, [captureError])
   useEffect(() => {
     if (bootstrap && !bootstrap.setup_required) void loadAccounts()
   }, [bootstrap?.config_path, bootstrap?.setup_required, loadAccounts])
@@ -568,9 +577,23 @@ export default function App() {
     if (['login', 'refresh'].includes(task.kind)) void loadAccounts()
   }, [task?.id, task?.revision, task?.kind, task?.state, refreshBootstrap, loadAccounts])
 
-  const openImport = () => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false); setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }
-  const manageEntry = (key: string) => { libraryScroll.current = librarySurface.current?.scrollTop ?? 0; selectEntry(key); setDetailOpen(true); enterPage('library') }
-  const receiveTask = (incoming: TaskSnapshot) => { applyTask(incoming); setProgressVisible(true) }
+  const openImport = useCallback(() => { setModal('import'); setImportPreview(null); setImportId(''); setIncludeOptional(false); setReplaceModified(false); setUpdateExisting(false); setAllowedHosts([]); setManualHosts(''); void inspectImport() }, [inspectImport])
+  const manageEntry = useCallback((key: string) => { libraryScroll.current = librarySurface.current?.scrollTop ?? 0; selectEntry(key); setDetailOpen(true); enterPage('library') }, [enterPage, selectEntry])
+  const receiveTask = useCallback((incoming: TaskSnapshot) => { applyTask(incoming); setProgressVisible(true) }, [applyTask])
+  const onLibraryChanged = useCallback(() => { void refreshBootstrap() }, [refreshBootstrap])
+  const onSelectEntryToPlay = useCallback((key: string) => { selectEntry(key); enterPage('home') }, [selectEntry, enterPage])
+  const onManageSelected = useCallback(() => { if (selected) manageEntry(selected.key) }, [manageEntry, selected])
+  const onHomeAccounts = useCallback(() => enterPage('accounts'), [enterPage])
+  const onHomeLibrary = useCallback(() => { setDetailOpen(false); enterPage('library') }, [enterPage])
+  const onRefreshLibrary = useCallback(() => { void refreshBootstrap() }, [refreshBootstrap])
+  const onSelectRun = useCallback((runId: string | null) => {
+    setSelectedRunId(runId)
+    if (selectedKey) void readLog(selectedKey, runId, 500)
+  }, [readLog, selectedKey])
+  const onRefreshRuns = useCallback(() => {
+    if (selectedKey) void loadRuns(selectedKey, selectedRunId)
+  }, [loadRuns, selectedKey, selectedRunId])
+  const currentLaunchName = useMemo(() => bootstrap?.entries.find(entry => entry.key === currentLaunchKey)?.display_name ?? null, [bootstrap?.entries, currentLaunchKey])
   const appearance = <AppearanceSettings language={language} theme={theme} setTheme={setTheme} setLanguage={setLanguage} reduceTransparency={reduceTransparency} setReduceTransparency={setReduceTransparency} reduceMotion={reduceMotion} setReduceMotion={setReduceMotion} working={working || !!activeTask} hasUnsaved={hasUnsavedPreferences} save={savePreferences} changeBackground={async (reset) => {
     setWorking(true); setError(null)
     try {
@@ -588,15 +611,15 @@ export default function App() {
     <main className={`main${page === 'home' ? ' home-main' : ''}`}>
       <div className="page-messages">{error && <div className="alert" role="alert"><span>{error}</span><button className="icon-button" aria-label={t.close} onClick={() => setError(null)}>×</button></div>}{pageNotice && <div className="notice" role="status">{pageNotice}<button className="icon-button" aria-label={t.close} onClick={() => setPageNotice(null)}>×</button></div>}</div>
       {loading ? <div className="loading" role="status">{t.loading}</div> : !bootstrap ? <section className="connection-card"><h1>{t.error}</h1><button className="button secondary" onClick={() => void loadBootstrap()}>{t.refreshLogs}</button>{appearance}<MaintenancePanel language={language} busy={working} entry={null} onChanged={() => void loadBootstrap()} onTask={receiveTask}/></section> : !initialized ? page === 'logs' ? <LauncherLogs language={language}/> : page === 'settings' ? <>{appearance}<button className="button secondary" onClick={chooseRoot} disabled={working}>{t.changeRoot}</button></> : <SetupPage t={t} bootstrap={bootstrap} working={working} chooseRoot={chooseRoot} initializeRoot={initializeRoot}/> : <>
-        <div hidden={page !== 'home'} className="page-surface home-surface"><Home language={language} entries={bootstrap.entries} selected={selected} accountListing={accountListing} accountId={launchForm.accountId} disabled={working || !!activeTask} task={task} launchPending={launchPending} missingSelection={!!savedPreferences?.last_selected_instance && !selected} onSelect={selectEntry} onAccount={accountSelect} onAccounts={() => enterPage('accounts')} onManage={() => selected && manageEntry(selected.key)} onCreate={openCreate} onImport={openImport} onLibrary={() => { setDetailOpen(false); enterPage('library') }} onLaunch={launch} onProgress={() => setProgressVisible(true)}/></div>
-        <div ref={librarySurface} hidden={page !== 'library'} className="page-surface" data-page="library"><div hidden={detailOpen}><LibraryPage t={t} language={language} entries={entries} query={query} setQuery={setQuery} selectedKey={selectedKey} onManage={manageEntry} onRefresh={() => void refreshBootstrap()} onPlay={key => { selectEntry(key); enterPage('home') }} openCreate={openCreate} openImport={openImport} disabled={working || !!activeTask}/></div>{detailOpen && <><button className="button back-button" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => { if (librarySurface.current) librarySurface.current.scrollTop = libraryScroll.current }) }}><Icon name="back"/>{t.library}</button><InstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={() => void refreshBootstrap()}/><details className="launch-settings"><summary>{t.launchOptions}</summary><LaunchOptions t={t} form={launchForm} onChange={setLaunchForm}/><p className="muted-copy">{language === 'zh-CN' ? '这些值用于本次启动器会话。全局默认值可在设置中保存。' : 'These values apply to this launcher session. Save global defaults in Settings.'}</p><button className="button primary" disabled={!selected} onClick={() => enterPage('home')}>{language === 'zh-CN' ? '返回启动' : 'Back to play'}</button></details></>}{bootstrap.warnings.length > 0 && <details className="warnings"><summary>{t.warnings}</summary>{bootstrap.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}</div>
-        <div hidden={page !== 'discover'} className="page-surface" data-page="discover"><Discover entries={bootstrap.entries} onSelectEntry={selectEntry} language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={() => void refreshBootstrap()}/></div>
-        <div hidden={page !== 'accounts'} className="page-surface" data-page="accounts"><AccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout}/></div>
-        <div hidden={page !== 'logs'} className="page-surface" data-page="logs"><h1>{t.logs}</h1><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? 'CCL 日志' : 'CCL logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} active={page === 'logs'}/> : <LogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={selectEntry} runs={runs} selectedRunId={selectedRunId} selectRun={runId => { setSelectedRunId(runId); if (selectedKey) void readLog(selectedKey, runId, 500) }} runLog={runLog} logLoading={logLoading} refresh={() => selectedKey && void loadRuns(selectedKey, selectedRunId)} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={bootstrap.entries.find(entry => entry.key === currentLaunchKey)?.display_name ?? null}/>}</div>
+        <div hidden={page !== 'home'} className="page-surface home-surface"><Home language={language} entries={bootstrap.entries} selected={selected} accountListing={accountListing} accountId={launchForm.accountId} disabled={working || !!activeTask} task={task} launchPending={launchPending} missingSelection={!!savedPreferences?.last_selected_instance && !selected} onSelect={selectEntry} onAccount={accountSelect} onAccounts={onHomeAccounts} onManage={onManageSelected} onCreate={openCreate} onImport={openImport} onLibrary={onHomeLibrary} onLaunch={launch} onProgress={() => setProgressVisible(true)}/></div>
+        <div ref={librarySurface} hidden={page !== 'library'} className="page-surface" data-page="library"><div hidden={detailOpen}><MemoLibraryPage t={t} language={language} entries={entries} query={query} setQuery={setQuery} selectedKey={selectedKey} onManage={manageEntry} onRefresh={onRefreshLibrary} onPlay={onSelectEntryToPlay} openCreate={openCreate} openImport={openImport} disabled={working || !!activeTask}/></div>{detailOpen && <><button className="button back-button" onClick={() => { setDetailOpen(false); requestAnimationFrame(() => { if (librarySurface.current) librarySurface.current.scrollTop = libraryScroll.current }) }}><Icon name="back"/>{t.library}</button><MemoInstanceDetails language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={onLibraryChanged}/><details className="launch-settings"><summary>{t.launchOptions}</summary><LaunchOptions t={t} form={launchForm} onChange={setLaunchForm}/><p className="muted-copy">{language === 'zh-CN' ? '这些值用于本次启动器会话。全局默认值可在设置中保存。' : 'These values apply to this launcher session. Save global defaults in Settings.'}</p><button className="button primary" disabled={!selected} onClick={() => enterPage('home')}>{language === 'zh-CN' ? '返回启动' : 'Back to play'}</button></details></>}{bootstrap.warnings.length > 0 && <details className="warnings"><summary>{t.warnings}</summary>{bootstrap.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}</div>
+        <div hidden={page !== 'discover'} className="page-surface" data-page="discover"><MemoDiscover entries={bootstrap.entries} onSelectEntry={selectEntry} language={language} entry={selected} busy={working || !!activeTask} onTask={receiveTask} onChanged={onLibraryChanged}/></div>
+        <div hidden={page !== 'accounts'} className="page-surface" data-page="accounts"><MemoAccountsPanel language={language} accounts={accountListing.accounts} selected={accountListing.selected} disabled={working || !!activeTask} onAddOffline={addOfflineAccount} onSelect={accountSelect} onRemove={accountLogout}/></div>
+        <div hidden={page !== 'logs'} className="page-surface" data-page="logs"><h1>{t.logs}</h1><div className="segmented log-source-switch"><button className={logSource === 'game' ? 'selected' : ''} onClick={() => setLogSource('game')}>{language === 'zh-CN' ? '游戏日志' : 'Game logs'}</button><button className={logSource === 'launcher' ? 'selected' : ''} onClick={() => setLogSource('launcher')}>{language === 'zh-CN' ? 'CCL 日志' : 'CCL logs'}</button></div>{logSource === 'launcher' ? <LauncherLogs language={language} active={page === 'logs'}/> : <MemoLogsPage t={t} entries={bootstrap.entries} selectedKey={selectedKey} setSelectedKey={selectEntry} runs={runs} selectedRunId={selectedRunId} selectRun={onSelectRun} runLog={runLog} logLoading={logLoading} refresh={onRefreshRuns} liveTask={activeLaunch} logsPaused={pauseSavedLogs} liveEntry={currentLaunchName}/>}</div>
         <div hidden={page !== 'settings'} className="page-surface" data-page="settings"><h1>{t.settings}</h1><nav className="settings-tabs" aria-label={language === 'zh-CN' ? '设置类别' : 'Settings categories'}>{[['appearance','外观','Appearance'],['game','游戏与 Java','Game & Java'],['downloads','下载与网络','Downloads & network'],['updates','更新','Updates'],['advanced','高级与诊断','Advanced & diagnostics'],['about','关于','About']].map(([key,cn,en]) => <button key={key} aria-current={settingsCategory === key ? 'page' : undefined} className={settingsCategory === key ? 'active' : ''} onClick={() => setSettingsCategory(key)}>{language === 'zh-CN' ? cn : en}</button>)}</nav>
           <div hidden={settingsCategory !== 'appearance'}>{appearance}</div>
           {settingsCategory === 'game' && <section className="settings-card"><h2>{t.root}</h2><div className="setting-row"><code className="settings-path">{bootstrap.root}</code><button className="button secondary" onClick={chooseRoot} disabled={working || !!activeTask}>{t.changeRoot}</button></div>{bootstrap.hidden_entries > 0 && <div className="setting-row"><span>{t.hiddenInstances} · {bootstrap.hidden_entries}</span><button className="button secondary" disabled={working || !!activeTask} onClick={restoreHidden}>{t.restoreHidden}</button></div>}</section>}
-          {page === 'settings' && settingsCategory !== 'appearance' && <MaintenancePanel category={settingsCategory} language={language} busy={working || !!activeTask} entry={selected} onChanged={() => void loadBootstrap()} onTask={receiveTask}/>}
+          {page === 'settings' && settingsCategory !== 'appearance' && <MaintenancePanel category={settingsCategory} language={language} busy={working || !!activeTask} entry={selected} onChanged={onLibraryChanged} onTask={receiveTask}/>}
         </div>
       </>}
     </main>

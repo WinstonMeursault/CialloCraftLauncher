@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.3.0 发行说明](#release-notes)
+- [v0.3.1 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -39,9 +39,19 @@ cargo build --workspace
 cargo run -p ccl-cli -- --help
 ```
 
-`Cargo.lock` 固定工作区依赖版本。发行检查和构建应使用 `--locked`，让 Cargo 在清单与已提交锁文件不一致时直接失败。`keyring` 使用系统原生凭据库后端；HTTP 使用 Rustls，因此构建启动器不需要 OpenSSL。
+`Cargo.lock` 固定工作区依赖版本。发行检查和构建应使用 `--locked`，让 Cargo 在清单与已提交锁文件不一致时直接失败。HTTP 使用 Rustls；所选 `keyring` 后端包含原生凭据库依赖，可能编译随附的原生源码，因此仍需安装上述平台构建工具。
 
 用户流程见[使用指南](user-guide.zh-CN.md)，命令、输出及核心服务见 [API 文档](api.zh-CN.md)。
+
+### 发行构建与缓存校验
+
+release 构建使用 Thin LTO、单代码生成单元和符号裁剪，保留默认发行优化等级及展开栈行为；任务 panic 处理、校验和、签名、声明文件及支持的归档格式保持启用。符号裁剪会减少可执行文件中的符号信息，需要符号级调试时应使用本机未裁剪构建。ZIP 采用 zlib-rs DEFLATE 后端，不再链接未使用的 Zopfli 编码器；普通 DEFLATE 导入与导出继续支持。
+
+缓存文件在 Tokio 阻塞工作池中以有界 64 KiB 缓冲区校验，使用独立且响应取消的门控，并发上限为 `downloads.max_parallel`。即使等待的 future 被丢弃，许可也会随实际工作线程持有。尺寸不符时在读取内容前拒绝；所要求的摘要在同一流式遍历中校验。联网和断点续传只计算要求的 SHA-1/SHA-512 摘要。为保护并发发布，仍保留锁内缓存复核；离线模式继续拒绝无效缓存。
+
+较大文件的本地测量可显式运行 `cargo run --release --locked -p ccl-core --example artifact_benchmark -- --bytes 67108864 --iterations 3`。它生成确定的 64 MiB 夹具，从 localhost 流式传输，测量 SHA-1、SHA-512、双摘要和仅尺寸请求的冷/热缓存。每次热缓存必须零网络复用。对两个版本使用完全相同的测量程序、交替执行，并区分原始二进制、规范化压缩及实际安装包大小。该夹具不测量公网或 Minecraft 游戏运行性能。
+
+GUI 管理页通过 React memo 和稳定页面输入减少重渲染，仍保留已挂载状态及滚动位置；任务和日志更新不再要求重新渲染未变的游戏库。默认背景避免一次不必要的图片 IPC 读取。浏览器夹具中的组件调用次数，与原生 WebView 启动时间或 GPU 负载是不同证据；测试探针不能进入正常前端包。
 
 <a id="gui-preview"></a>
 <a id="gui-g3"></a>
@@ -333,7 +343,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-本文档对应 v0.3.0 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.3.1 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -357,12 +367,30 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.3.0 发行说明
+## v0.3.1 发行说明
 
-以下说明对应 v0.3.0，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.3.1，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.0
+# CialloCraftLauncher 0.3.1
+
+本次补丁缩小发行包，并优化文件下载和桌面界面渲染。
+
+- 启用 Thin LTO、单代码生成单元及符号裁剪，移除未使用的 Zopfli 编码器，保留标准 DEFLATE 支持及依赖许可证声明。
+- 下载与续传仅计算请求需要的 SHA-1/SHA-512 摘要；缓存校验采用有界流式缓冲，在阻塞工作池中使用独立并发限制。
+- 保留取消、损坏缓存拒绝、离线校验、并发缓存发布保护及更新签名验证。
+- 任务与日志变化不再要求未变化的管理页重新渲染；默认背景跳过多余图片读取，保留实例选择、筛选和页面状态。
+
+与此前 dev 基线比较，实测 macOS DMG 缩小约 22%、Linux DEB 约 24%、Windows 安装包约 4%、Linux AppImage 约 3%。确定的安装与下载夹具有所改善，但小文件缓存调度可能增加开销；这些结果不保证 Minecraft 游戏或每个操作都更快。
+
+性能提交已通过 Windows x64、macOS arm64、Linux x86_64 核心与桌面验证，包括打包、前端就绪及更新回滚恢复。正式发行流程会在发布前重新验证版本和上传资产。
+
+CLI 与 GUI 更新清单继续使用独立发行密钥签名。安装包无操作系统发布者证书签名；macOS 使用经过验证的 ad-hoc 应用包签名且未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 仍需用户自备 API key。不迁移游戏数据。
+<!-- release-notes:end -->
+
+### v0.3.0 历史发行说明
+
+#### CialloCraftLauncher 0.3.0
 
 本版本重设计桌面界面，让常用的继续游戏操作更简洁。
 
@@ -377,7 +405,6 @@ git push origin dev
 UI 开发提交已通过 Windows x64、macOS arm64、Linux x86_64 的核心与桌面 CI，包括打包、WebView 就绪、正常更新、失败回滚及中断恢复。本机验收覆盖主题、语言、最小窗口、背景、账户和隔离夹具进程；不代表物理机游戏世界或所有平台拖拽实测。正式发行流程还将对本版本重新验证并校验上传的程序包。
 
 CLI 与 GUI 更新清单均有独立发行密钥签名。安装程序仍无操作系统发布者证书签名，macOS 保留完整 ad-hoc 应用包密封校验且未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 仍需用户自备 API key。实例目录和玩家文件不迁移。
-<!-- release-notes:end -->
 
 ### v0.2.3 历史发行说明
 
@@ -431,7 +458,7 @@ CLI 和 GUI 更新清单具有发行密钥的独立签名。安装程序不具�
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.0；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.1；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

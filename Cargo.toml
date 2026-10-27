@@ -25,4 +25,10 @@ thiserror = "2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "process", "io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-zip = { version = "9.0", default-features = false, features = ["deflate"] }
+# Keep standard DEFLATE read/write without the unused Zopfli encoder.
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
