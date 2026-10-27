@@ -193,19 +193,37 @@ pub fn probe() -> Result<MemorySnapshot, String> {
         );
         let page_size = libc::sysconf(libc::_SC_PAGESIZE);
         mach_port_deallocate(mach_task_self_, host);
-        if result != libc::KERN_SUCCESS || count < libc::HOST_VM_INFO64_COUNT || page_size <= 0 {
-            return Err("Cannot read macOS available memory".into());
+        if result != libc::KERN_SUCCESS || page_size <= 0 {
+            return Err(format!(
+                "Cannot read macOS available memory (status {result}, count {count})"
+            ));
         }
-        // Match HMCL's conservative free + inactive + speculative estimate;
-        // compressed/swapped memory is not counted as additional capacity.
-        let pages = u64::from(stats.free_count)
-            + u64::from(stats.inactive_count)
-            + u64::from(stats.speculative_count);
-        Ok(MemorySnapshot {
-            total_bytes: total,
-            available_bytes: pages.saturating_mul(page_size as u64).min(total),
-        })
+        mac_snapshot(&stats, count, page_size as u64, total)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn mac_snapshot(
+    stats: &libc::vm_statistics64,
+    count: u32,
+    page_size: u64,
+    total: u64,
+) -> Result<MemorySnapshot, String> {
+    // Older kernels return a shorter, valid revision. Only require the prefix we
+    // actually read, not the size of the newest libc/SDK statistics structure.
+    let needed = (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
+        + std::mem::size_of::<libc::natural_t>())
+    .div_ceil(std::mem::size_of::<libc::integer_t>()) as u32;
+    if count < needed || page_size == 0 {
+        return Err("Truncated macOS memory statistics".into());
+    }
+    // XNU's free_count ALREADY includes speculative_count. vm_stat splits them
+    // for display; adding speculative_count again would overstate capacity.
+    let pages = u64::from(stats.free_count) + u64::from(stats.inactive_count);
+    Ok(MemorySnapshot {
+        total_bytes: total,
+        available_bytes: pages.saturating_mul(page_size).min(total),
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -377,6 +395,26 @@ mod tests {
         assert_eq!(s.available_bytes, 0);
         assert!(parse_meminfo("MemTotal: 10 MB\nMemAvailable: 10 MB").is_err());
     }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_older_mach_replies_without_double_counting_speculative_pages() {
+        // SAFETY: this C statistics struct consists of integer counters.
+        let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+        stats.free_count = 100;
+        stats.inactive_count = 50;
+        stats.speculative_count = 30; // already part of free_count
+        let old_count = (std::mem::offset_of!(libc::vm_statistics64, decompressions)
+            / std::mem::size_of::<libc::integer_t>()) as u32;
+        assert!(old_count < libc::HOST_VM_INFO64_COUNT);
+        assert_eq!(
+            mac_snapshot(&stats, old_count, 4096, 1000 * 4096)
+                .unwrap()
+                .available_bytes,
+            150 * 4096
+        );
+        assert!(mac_snapshot(&stats, 2, 4096, 1000 * 4096).is_err());
+    }
+
     #[test]
     fn native_probe_reports_sensible_physical_values() {
         let s = probe().expect("native memory probe");

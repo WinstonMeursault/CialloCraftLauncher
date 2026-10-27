@@ -502,6 +502,7 @@ async fn instance_launch_logs_cancellation_and_launch_lock_use_real_core_service
         .unwrap();
     let decision = &automatic["prepared"]["memory"];
     assert_eq!(decision["policy"], "auto");
+    assert_eq!(decision["fallback"], false);
     let heap = decision["max_memory_mb"].as_u64().unwrap();
     assert!((256..=16384).contains(&heap));
     assert!(

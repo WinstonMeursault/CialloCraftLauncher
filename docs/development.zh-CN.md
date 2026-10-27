@@ -47,6 +47,8 @@ cargo run -p ccl-cli -- --help
 
 `memory` 模块负责纯预算函数、可序列化策略/结果和平台检测。Windows 使用 GlobalMemoryStatusEx；macOS 通过少量原生 FFI 调用 sysctl 和 Mach 统计；Linux 读取 procfs，解析 v1/v2 cgroup 挂载/成员关系及祖先限额。不增加监控后台任务、shell 内存命令或硬件清单依赖。libc 仅作为 macOS 直接依赖；windows-sys 启用内存状态功能。
 
+macOS 按实际读取的计数字段前缀校验 Mach 回复长度，接受旧系统的有效结构修订。XNU free_count 已包含推测页，不能再次相加。参阅 [Apple 主机统计实现](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c)。
+
 核心配置将手动值与 auto_memory=true 分开保留，实例策略存入 instance_memory。ConfigStore 提供进程锁与原子写入；GUI expected 比较拒绝过期实例编辑。启动服务在资源准备后、原生库提取/构建参数前解析最终预算；PlanOptions 继续接受已解析的数值上限。核心配置、CLI、GUI 的默认启动行为均为自动。
 
 测试覆盖余量/取整/上限/低内存与回退、Linux 字节单位/限额、各 CI 主机原生检测、设置优先级与持久化、CLI auto/数值/inherit、GUI 请求形状及实例过期编辑拒绝，以及冲突 JVM 堆参数别名。GUI 验收需检查自动默认值、隐藏手动输入、明确保存、全局/实例切换，以及首页布局不变。测试窗口和数据应隔离，不在 Applications 安装 QA 应用。
