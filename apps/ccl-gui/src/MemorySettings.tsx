@@ -1,3 +1,4 @@
+import { Select } from './Select'
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { formatGuiError, type Language, type LibraryEntry, type MemoryPolicy } from './types'
@@ -29,7 +30,7 @@ export function InstanceMemorySettings({ entry, language, disabled, onSaved }: {
     finally { setPending(false) }
   }
   return <section className="instance-memory-settings" aria-label={zh ? '实例内存' : 'Instance memory'}>
-    <label className="field"><span>{zh ? '内存分配' : 'Memory allocation'}</span><select value={mode} disabled={disabled || pending} onChange={event => { setMode(event.target.value as typeof mode); setNotice('') }}><option value="inherit">{zh ? '跟随全局' : 'Use global setting'}</option><option value="auto">{zh ? '自动' : 'Automatic'}</option><option value="manual">{zh ? '手动' : 'Manual'}</option></select></label>
+    <label className="field"><span>{zh ? '内存分配' : 'Memory allocation'}</span><Select value={mode} disabled={disabled || pending} onValueChange={value => { setMode(value as typeof mode); setNotice('') }}><option value="inherit">{zh ? '跟随全局' : 'Use global setting'}</option><option value="auto">{zh ? '自动' : 'Automatic'}</option><option value="manual">{zh ? '手动' : 'Manual'}</option></Select></label>
     {mode === 'manual' && <label className="field"><span>{zh ? '最大堆内存（MiB）' : 'Maximum heap (MiB)'}</span><input type="number" min="256" max="131072" step="1" value={manual} disabled={disabled || pending} onChange={event => { setManual(event.target.value); setNotice('') }}/></label>}
     {mode === 'auto' && <p className="muted-copy">{zh ? '启动时按可用内存计算，自动分配最高 16 GiB。' : 'Calculated from available memory at launch, up to 16 GiB.'}</p>}
     {!valid && <p role="alert">{zh ? '请输入 256–131072 MiB 之间的整数。' : 'Enter a whole number from 256 to 131072 MiB.'}</p>}
