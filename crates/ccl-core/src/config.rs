@@ -73,7 +73,10 @@ pub struct AuthConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
     pub java: Option<PathBuf>,
+    /// Retained manual heap size, used only when auto_memory is false.
     pub max_memory_mb: u32,
+    pub auto_memory: bool,
+    pub instance_memory: std::collections::BTreeMap<String, crate::memory::MemoryPolicy>,
     pub auto_install_java: bool,
 }
 
@@ -82,8 +85,34 @@ impl Default for LaunchConfig {
         Self {
             java: None,
             max_memory_mb: 2048,
+            auto_memory: true,
+            instance_memory: Default::default(),
             auto_install_java: true,
         }
+    }
+}
+
+impl LaunchConfig {
+    pub fn memory_policy(
+        &self,
+        directory: &Path,
+        id: &str,
+        explicit: Option<crate::memory::MemoryPolicy>,
+    ) -> Result<crate::memory::MemoryPolicy> {
+        if let Some(policy) = explicit {
+            return Ok(policy);
+        }
+        let key = crate::memory::profile_key(directory, id).map_err(|source| Error::Io {
+            path: directory.into(),
+            source,
+        })?;
+        Ok(self.instance_memory.get(&key).copied().unwrap_or({
+            if self.auto_memory {
+                crate::memory::MemoryPolicy::AUTO
+            } else {
+                crate::memory::MemoryPolicy::Manual(self.max_memory_mb)
+            }
+        }))
     }
 }
 
@@ -156,6 +185,17 @@ impl LauncherConfig {
             return Err(Error::InvalidConfig(format!(
                 "launch.max_memory_mb must be in {MIN_LAUNCH_MEMORY_MB}..={MAX_LAUNCH_MEMORY_MB} MiB"
             )));
+        }
+        for (key, policy) in &self.launch.instance_memory {
+            if !key.strip_prefix("memory:").is_some_and(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            }) {
+                return Err(Error::InvalidConfig("Invalid instance memory key".into()));
+            }
+            policy.validate().map_err(Error::InvalidConfig)?;
         }
         if let Some(id) = &self.auth.microsoft_client_id
             && !is_public_client_id(id)
@@ -415,6 +455,65 @@ mod tests {
             std::process::id(),
             TEMP_ID.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn automatic_default_and_explicit_instance_global_precedence() {
+        use crate::memory::MemoryPolicy;
+        let directory = std::env::temp_dir().join(format!(
+            "ccl-memory-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let mut config = LauncherConfig::default();
+        assert!(config.launch.auto_memory);
+        let id = "中文实例 with spaces";
+        assert_eq!(
+            config.launch.memory_policy(&directory, id, None).unwrap(),
+            MemoryPolicy::AUTO
+        );
+        config.launch.auto_memory = false;
+        config.launch.max_memory_mb = 3072;
+        assert_eq!(
+            config.launch.memory_policy(&directory, id, None).unwrap(),
+            MemoryPolicy::Manual(3072)
+        );
+        let key = crate::memory::profile_key(&directory, id).unwrap();
+        config
+            .launch
+            .instance_memory
+            .insert(key.clone(), MemoryPolicy::AUTO);
+        assert_eq!(
+            config.launch.memory_policy(&directory, id, None).unwrap(),
+            MemoryPolicy::AUTO
+        );
+        assert_eq!(
+            config
+                .launch
+                .memory_policy(&directory, id, Some(MemoryPolicy::Manual(6144)))
+                .unwrap(),
+            MemoryPolicy::Manual(6144)
+        );
+        let path = directory.join("config.json");
+        ConfigStore::new(&path)
+            .update(|stored| {
+                *stored = config.clone();
+                Ok(())
+            })
+            .unwrap();
+        let restored = LauncherConfig::read(&path).unwrap();
+        assert_eq!(restored.launch.instance_memory[&key], MemoryPolicy::AUTO);
+        assert_eq!(restored.launch.max_memory_mb, 3072);
+        config
+            .launch
+            .instance_memory
+            .insert(key, MemoryPolicy::Manual(0));
+        assert!(config.validate().is_err());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

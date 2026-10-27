@@ -17,6 +17,7 @@ pub mod java;
 pub mod launch;
 pub mod launch_plan;
 pub mod loaders;
+pub mod memory;
 pub mod metadata;
 pub mod modpack_format;
 pub mod modpacks;

@@ -536,6 +536,7 @@ dependencies = [
  "fs2",
  "getrandom 0.2.17",
  "keyring",
+ "libc",
  "md-5",
  "minisign",
  "regex",
