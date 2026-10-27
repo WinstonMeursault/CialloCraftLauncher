@@ -1123,7 +1123,7 @@ mod tests {
             version: "runtime-cache-test".into(),
             username: "RuntimeCacheTest".into(),
             java: None,
-            max_memory_mb: 1024,
+            memory: crate::memory::MemoryPolicy::Manual(1024),
             identity: None,
             auto_install_java: false,
         };

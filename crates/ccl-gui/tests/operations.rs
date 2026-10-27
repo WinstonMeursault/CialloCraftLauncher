@@ -200,7 +200,7 @@ fn frontend_launch_request_shape_deserializes_as_owned_dto() {
         "key": "instance:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "identity": {"kind":"offline", "username":"Player_1", "account_id":null},
         "java": null,
-        "memory_mb": 4096,
+        "memory": 4096,
         "auto_install_java": true,
         "dry_run": true
     }))
@@ -211,7 +211,10 @@ fn frontend_launch_request_shape_deserializes_as_owned_dto() {
     );
     assert!(matches!(request.identity.kind, LaunchIdentityKind::Offline));
     assert_eq!(request.identity.username.as_deref(), Some("Player_1"));
-    assert_eq!(request.memory_mb, Some(4096));
+    assert_eq!(
+        request.memory,
+        Some(ccl_core::memory::MemoryPolicy::Manual(4096))
+    );
 }
 
 #[tokio::test]
@@ -310,7 +313,7 @@ async fn launch_resolves_only_library_keys_and_log_history_is_bounded_shape() {
                     account_id: None,
                 },
                 java: None,
-                memory_mb: None,
+                memory: None,
                 auto_install_java: false,
                 dry_run: true,
             },
@@ -432,7 +435,7 @@ async fn instance_launch_logs_cancellation_and_launch_lock_use_real_core_service
                         account_id: None,
                     },
                     java: Some(java),
-                    memory_mb: Some(1024),
+                    memory: Some(ccl_core::memory::MemoryPolicy::Manual(1024)),
                     auto_install_java: false,
                     dry_run: false,
                 },
@@ -479,6 +482,36 @@ async fn instance_launch_logs_cancellation_and_launch_lock_use_real_core_service
     );
     assert!(instances.acquire_launch("fixture-world").is_ok());
 
+    let automatic = operations
+        .launch(
+            LaunchRequest {
+                key: fixture_key.clone(),
+                identity: LaunchIdentity {
+                    kind: LaunchIdentityKind::Offline,
+                    username: Some("FixturePlayer".into()),
+                    account_id: None,
+                },
+                java: Some(temp.path().join("fixture-java")),
+                memory: None,
+                auto_install_java: false,
+                dry_run: true,
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+    let decision = &automatic["prepared"]["memory"];
+    assert_eq!(decision["policy"], "auto");
+    let heap = decision["max_memory_mb"].as_u64().unwrap();
+    assert!((256..=16384).contains(&heap));
+    assert!(
+        automatic["prepared"]["plan"]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == &json!(format!("-Xmx{heap}M")))
+    );
+
     let java = temp.path().join("fixture-java-sleeper");
     fixture_java(&java, true);
     let token = CancellationToken::default();
@@ -501,7 +534,7 @@ async fn instance_launch_logs_cancellation_and_launch_lock_use_real_core_service
                     account_id: None,
                 },
                 java: Some(java.clone()),
-                memory_mb: Some(1024),
+                memory: Some(ccl_core::memory::MemoryPolicy::Manual(1024)),
                 auto_install_java: false,
                 dry_run: false,
             },
@@ -659,7 +692,7 @@ async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
                     account_id: None,
                 },
                 java: Some(java.clone()),
-                memory_mb: Some(1024),
+                memory: Some(ccl_core::memory::MemoryPolicy::Manual(1024)),
                 auto_install_java: false,
                 dry_run: true,
             },
@@ -679,7 +712,7 @@ async fn unicode_instance_name_roundtrips_through_library_and_dry_run_launch() {
                     account_id: None,
                 },
                 java: Some(java),
-                memory_mb: Some(1024),
+                memory: Some(ccl_core::memory::MemoryPolicy::Manual(1024)),
                 auto_install_java: false,
                 dry_run: true,
             },

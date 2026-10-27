@@ -21,11 +21,13 @@ pub struct LibraryEntry {
     pub loader: Option<ccl_core::loaders::LoaderKind>,
     pub game_directory: PathBuf,
     pub launch_version: String,
+    pub memory_override: Option<ccl_core::memory::MemoryPolicy>,
 }
 #[derive(Serialize)]
 pub struct LaunchDefaults {
     pub java: Option<PathBuf>,
     pub max_memory_mb: u32,
+    pub auto_memory: bool,
     pub auto_install_java: bool,
     pub network_offline: bool,
 }
@@ -73,6 +75,7 @@ pub fn bootstrap(
         launch_defaults: LaunchDefaults {
             java: None,
             max_memory_mb: 2048,
+            auto_memory: true,
             auto_install_java: false,
             network_offline: false,
         },
@@ -92,6 +95,7 @@ pub fn bootstrap(
     result.launch_defaults = LaunchDefaults {
         java: config.launch.java.clone(),
         max_memory_mb: config.launch.max_memory_mb,
+        auto_memory: config.launch.auto_memory,
         auto_install_java: config.launch.auto_install_java,
         network_offline: config.downloads.offline,
     };
@@ -100,7 +104,12 @@ pub fn bootstrap(
     }
     let catalog = LibraryCatalog::new(result.root.clone());
     match discover_entries_state(&result.root, &config.downloads) {
-        Ok((entries, busy)) => {
+        Ok((mut entries, busy)) => {
+            for entry in &mut entries {
+                let key = ccl_core::memory::profile_key(&entry.game_directory, &entry.id)
+                    .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
+                entry.memory_override = config.launch.instance_memory.get(&key).copied();
+            }
             result.entries = entries;
             if busy {
                 result.warnings.push(
@@ -162,6 +171,7 @@ fn discover_entries_state(
             loader,
             game_directory: directory,
             launch_version,
+            memory_override: None,
         });
     }
     let (instances, busy) = match InstanceService::new(root.clone(), config.clone())
@@ -195,6 +205,7 @@ fn discover_entries_state(
             loader: instance.loader,
             game_directory: directory,
             launch_version,
+            memory_override: None,
         });
     }
     entries.sort_by(|left, right| {
@@ -387,6 +398,40 @@ pub fn update_library(
                 })?;
             catalog.hide(&key, &entry.display_name)?;
         }
+        CatalogRequest::Memory {
+            key,
+            memory,
+            expected,
+        } => {
+            let entry = current
+                .entries
+                .iter()
+                .find(|entry| entry.key == key)
+                .ok_or_else(|| {
+                    GuiError::new(
+                        "library_entry_missing",
+                        "This library entry is no longer available.",
+                    )
+                })?;
+            let key = ccl_core::memory::profile_key(&entry.game_directory, &entry.id)
+                .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
+            ccl_core::config::ConfigStore::new(config_path)
+                .update(|config| {
+                    if config.launch.instance_memory.get(&key).copied() != expected {
+                        return Err(ccl_core::Error::InvalidConfig(
+                            "Instance memory changed in another process; reload before saving"
+                                .into(),
+                        ));
+                    }
+                    if let Some(policy) = memory {
+                        config.launch.instance_memory.insert(key, policy);
+                    } else {
+                        config.launch.instance_memory.remove(&key);
+                    }
+                    Ok(())
+                })
+                .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
+        }
         CatalogRequest::RestoreAll => catalog.restore_all()?,
     }
     bootstrap(store, config_path, explicit)
@@ -426,6 +471,100 @@ mod tests {
             serde_json::to_vec(&metadata).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn instance_memory_persists_is_shared_and_rejects_stale_edits() {
+        use ccl_core::{config::LauncherConfig, memory::MemoryPolicy};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("games");
+        fs::create_dir_all(&root).unwrap();
+        write_root_version(
+            &root,
+            "中文 with spaces",
+            json!({"id":"中文 with spaces", "mainClass":"Main"}),
+        );
+        let original =
+            fs::read(root.join("versions/中文 with spaces/中文 with spaces.json")).unwrap();
+        let config = temp.path().join("config.json");
+        let store = PreferencesStore::new(temp.path().join("preferences"));
+        store.select_root(root.clone()).unwrap();
+        let initial = bootstrap(&store, &config, None).unwrap();
+        assert!(initial.launch_defaults.auto_memory);
+        let key = initial.entries[0].key.clone();
+        assert_eq!(initial.entries[0].memory_override, None);
+        let saved = update_library(
+            &store,
+            &config,
+            None,
+            CatalogRequest::Memory {
+                key: key.clone(),
+                memory: Some(MemoryPolicy::Manual(6144)),
+                expected: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            saved.entries[0].memory_override,
+            Some(MemoryPolicy::Manual(6144))
+        );
+        let loaded = LauncherConfig::read(&config).unwrap();
+        assert_eq!(
+            loaded
+                .launch
+                .memory_policy(&root, "中文 with spaces", None)
+                .unwrap(),
+            MemoryPolicy::Manual(6144)
+        );
+        assert!(
+            update_library(
+                &store,
+                &config,
+                None,
+                CatalogRequest::Memory {
+                    key: key.clone(),
+                    memory: Some(MemoryPolicy::AUTO),
+                    expected: None
+                }
+            )
+            .is_err()
+        );
+        update_library(
+            &store,
+            &config,
+            None,
+            CatalogRequest::Rename {
+                key: key.clone(),
+                name: "New display name".into(),
+            },
+        )
+        .unwrap();
+        let reopened = bootstrap(
+            &PreferencesStore::new(temp.path().join("preferences")),
+            &config,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.entries[0].memory_override,
+            Some(MemoryPolicy::Manual(6144))
+        );
+        let inherited = update_library(
+            &store,
+            &config,
+            None,
+            CatalogRequest::Memory {
+                key,
+                memory: None,
+                expected: Some(MemoryPolicy::Manual(6144)),
+            },
+        )
+        .unwrap();
+        assert_eq!(inherited.entries[0].memory_override, None);
+        assert_eq!(
+            fs::read(root.join("versions/中文 with spaces/中文 with spaces.json")).unwrap(),
+            original
+        );
     }
 
     #[test]

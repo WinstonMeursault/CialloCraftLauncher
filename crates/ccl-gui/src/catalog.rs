@@ -29,8 +29,18 @@ pub struct CatalogRecord {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CatalogRequest {
-    Rename { key: String, name: String },
-    Hide { key: String },
+    Memory {
+        key: String,
+        memory: Option<ccl_core::memory::MemoryPolicy>,
+        expected: Option<ccl_core::memory::MemoryPolicy>,
+    },
+    Rename {
+        key: String,
+        name: String,
+    },
+    Hide {
+        key: String,
+    },
     RestoreAll,
 }
 

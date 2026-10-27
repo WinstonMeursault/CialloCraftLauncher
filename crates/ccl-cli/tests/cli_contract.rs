@@ -774,3 +774,53 @@ fn network_offline_is_distinct_from_player_identity_and_blocks_online_catalog() 
     assert!(!root.join("versions").exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn memory_overrides_are_shared_persistent_and_default_to_auto() {
+    let root = sandbox();
+    let game = root.join("games");
+    fs::create_dir(&game).unwrap();
+    let config = root.join("config.json");
+    fs::write(&config, "{}").unwrap();
+    let id = "测试实例 with spaces";
+    write_instance(&game, id, 21);
+    let run = |args: &[&str]| {
+        command(&root)
+            .arg("--json")
+            .arg("--config")
+            .arg(&config)
+            .arg("--game-dir")
+            .arg(&game)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let output = run(&["settings", "show"]);
+    assert_eq!(
+        json_output(&output)["settings"]["launch"]["auto_memory"],
+        true
+    );
+    for (value, expected) in [
+        ("4096", serde_json::json!(4096)),
+        ("auto", serde_json::json!("auto")),
+        ("inherit", serde_json::Value::Null),
+    ] {
+        let output = run(&["settings", "memory", id, "--set", value]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(json_output(&output)["override"], expected);
+    }
+    assert_eq!(
+        json_output(&run(&["settings", "memory", id]))["effective"],
+        "auto"
+    );
+    let output = run(&["launch", id, "--offline", "--memory", "255", "--dry-run"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("memory"));
+    let output = run(&["launch", "--help"]);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("auto"));
+    fs::remove_dir_all(root).unwrap();
+}
