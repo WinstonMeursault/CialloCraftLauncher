@@ -43,6 +43,16 @@ cargo run -p ccl-cli -- --help
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
+### Performance branch: release builds and cache verification
+
+The performance branch uses Thin LTO, one code-generation unit and symbol stripping for release builds. It keeps the default release optimization level and unwinding behavior; task panic handling, checksums, signatures, notices and supported archive formats remain enabled. Symbol stripping reduces executable symbol information, so use an unstripped local build for symbol-level debugging. ZIP uses the zlib-rs DEFLATE backend without the unused Zopfli encoder; normal DEFLATE import/export remains supported.
+
+Cached artifacts are checked with a bounded 64 KiB buffer on Tokio's blocking pool, with a separate cancellation-aware gate capped by `downloads.max_parallel`. The verification permit stays with the worker even if its waiting future is dropped. Size mismatches fail before content reads; requested digests are checked in one streaming pass. Network and resumed transfers compute only the requested SHA-1/SHA-512 digests. The under-lock cache recheck remains to protect concurrent publication, and offline mode still rejects invalid cache files.
+
+For a larger opt-in local measurement, run `cargo run --release --locked -p ccl-core --example artifact_benchmark -- --bytes 67108864 --iterations 3`. It generates a deterministic 64 MiB fixture, streams it from localhost, and measures cold/warm SHA-1, SHA-512, dual-hash and size-only requests. Every warm pass must reuse the file without network traffic. Run the identical harness in both revisions, alternate their order, and distinguish raw binaries, normalized compression and actual installer sizes. This fixture does not measure public-network performance or Minecraft gameplay.
+
+GUI management pages use React memoization with stable page inputs while retaining their mounted state and scroll positions. Task/log updates no longer require rerendering an unchanged library. The default wallpaper avoids an unnecessary background-image IPC read. Browser fixture component counts are separate evidence from native WebView startup time or GPU load; keep test probes out of normal frontend bundles.
+
 <a id="gui-preview"></a>
 <a id="gui-g3"></a>
 
