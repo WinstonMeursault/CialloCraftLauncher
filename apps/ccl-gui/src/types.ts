@@ -1,9 +1,10 @@
+export type MemoryPolicy = "auto" | number
 export type Theme = 'system' | 'light' | 'dark'
 export type Language = 'en' | 'zh-CN'
 
 export interface Preferences { theme: Theme; language: Language; reduce_transparency: boolean; reduce_motion: boolean; last_selected_instance: string | null; background_image: string | null }
-export interface LaunchDefaults { java: string | null; max_memory_mb: number; auto_install_java: boolean; network_offline: boolean }
-export interface LibraryEntry { key: string; id: string; display_name: string; has_revision_storage: boolean; minecraft: string; loader: string | null; game_directory: string; launch_version: string }
+export interface LaunchDefaults { java: string | null; max_memory_mb: number; auto_memory: boolean; auto_install_java: boolean; network_offline: boolean }
+export interface LibraryEntry { key: string; id: string; display_name: string; has_revision_storage: boolean; minecraft: string; loader: string | null; game_directory: string; memory_override: MemoryPolicy | null; launch_version: string }
 export interface Bootstrap {
   root: string
   root_exists: boolean
@@ -118,7 +119,7 @@ export interface LaunchRequest {
   key: string
   identity: LaunchIdentity
   java: string | null
-  memory_mb: number | null
+  memory: MemoryPolicy | null
   auto_install_java: boolean
   dry_run: boolean
 }
