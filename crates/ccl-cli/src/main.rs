@@ -1509,6 +1509,20 @@ fn print_human(value: &Value) {
         println!("{}", serde_json::to_string_pretty(value).unwrap());
         return;
     }
+    if let Some(effective) = value.get("effective") {
+        let describe = |policy: &Value| match policy {
+            Value::String(value) if value == "auto" => "automatic".to_owned(),
+            Value::Number(value) => format!("{value} MiB"),
+            _ => "inherit".to_owned(),
+        };
+        println!(
+            "Memory for {}: {} (instance override: {})",
+            value["id"].as_str().unwrap_or("?"),
+            describe(effective),
+            describe(&value["override"])
+        );
+        return;
+    }
     if value.get("settings").is_some()
         || value.get("key").is_some()
         || value.get("accounts").is_some()

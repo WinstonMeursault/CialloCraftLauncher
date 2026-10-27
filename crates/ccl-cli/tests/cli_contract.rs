@@ -817,6 +817,18 @@ fn memory_overrides_are_shared_persistent_and_default_to_auto() {
         json_output(&run(&["settings", "memory", id]))["effective"],
         "auto"
     );
+    let human = command(&root)
+        .arg("--config")
+        .arg(&config)
+        .arg("--game-dir")
+        .arg(&game)
+        .args(["settings", "memory", id])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    assert!(
+        String::from_utf8_lossy(&human.stdout).contains("automatic (instance override: inherit)")
+    );
     let output = run(&["launch", id, "--offline", "--memory", "255", "--dry-run"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("memory"));
