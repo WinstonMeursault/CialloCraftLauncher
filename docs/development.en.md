@@ -68,6 +68,8 @@ GUI management pages use React memoization with stable page inputs while retaini
 
 ## Desktop GUI and package updates
 
+UI primitives use shared radius tokens: `--radius-control` (8 px), `--radius-surface` (12 px), and `--radius-dialog` (16 px). Interactive row highlights use the control radius with internal padding; transparent layout sections and separators remain plain. All single-choice dropdowns use `Select.tsx` rather than native `<select>` popups. Its controlled `value` / `onValueChange` API accepts option children as data, preserves empty values and required-field validation, and supports disabled items, keyboard selection, long-list search and focus restoration. Popup positioning is event-driven, constrained to the viewport and measured for label width; it scrolls only its own list. A dialog owns its popup DOM so focus trapping and nested Esc handling remain intact. Popup surfaces are opaque and introduce no blur, animation loop or new runtime dependency. Keep options textual and unique by value. Unit checks cover search/navigation/positioning; rendered acceptance must also check both themes, bottom-edge opening, modal Tab/Esc, required submission and long labels. `pnpm test` runs all frontend test files.
+
 The desktop application is a separate Tauri product named `ccl-gui`, sharing the core with the CLI while keeping a distinct product identity and updater manifest. CLI release ZIPs remain available alongside these desktop package formats:
 
 | Target | Distribution package | In-app update payload | Install method |
