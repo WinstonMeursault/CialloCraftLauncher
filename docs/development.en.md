@@ -43,6 +43,14 @@ cargo run -p ccl-cli -- --help
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
+### Automatic memory (development branch)
+
+`memory` owns the pure budget function, serializable policy/decision and platform probes. Windows uses GlobalMemoryStatusEx; macOS uses sysctl and Mach statistics through small native FFI calls; Linux reads procfs and resolves v1/v2 cgroup mounts/membership plus ancestor limits. No monitoring daemon, shell memory command or hardware inventory dependency is added. libc is a macOS-only direct dependency; windows-sys enables the memory-status feature.
+
+The core config retains the manual value separately from auto_memory=true and stores per-profile policies under instance_memory. ConfigStore provides atomic, process-locked edits; GUI expected-value checks prevent stale instance edits. The launch service resolves the final budget after resource preparation and before native extraction/plan construction. PlanOptions continues to accept a numeric resolved maximum. Default launch behavior is automatic in core config, CLI and GUI.
+
+Tests cover reserve/rounding/cap/low-memory and fallback cases, Linux byte units/limits, native probes on each CI host, setting precedence and persistence, CLI auto/numeric/inherit, GUI request shape and per-instance stale-edit rejection, and conflicting JVM heap aliases. GUI acceptance should verify automatic defaults, hidden manual input, explicit save, global/instance switching and unchanged home layout. Keep test windows and data isolated; do not install a QA app into Applications.
+
 ### Performance branch: release builds and cache verification
 
 The performance branch uses Thin LTO, one code-generation unit and symbol stripping for release builds. It keeps the default release optimization level and unwinding behavior; task panic handling, checksums, signatures, notices and supported archive formats remain enabled. Symbol stripping reduces executable symbol information, so use an unstripped local build for symbol-level debugging. ZIP uses the zlib-rs DEFLATE backend without the unused Zopfli encoder; normal DEFLATE import/export remains supported.
