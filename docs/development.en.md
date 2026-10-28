@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.2.3 release notes](#release-notes)
+- [v0.3.4 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -43,7 +43,7 @@ cargo run -p ccl-cli -- --help
 
 User workflows are in the [user guide](user-guide.en.md); commands, output and core services are in the [API reference](api.en.md).
 
-### Automatic memory (development branch)
+### Automatic memory (v0.3.2)
 
 `memory` owns the pure budget function, serializable policy/decision and platform probes. Windows uses GlobalMemoryStatusEx; macOS uses sysctl and Mach statistics through small native FFI calls; Linux reads procfs and resolves v1/v2 cgroup mounts/membership plus ancestor limits. No monitoring daemon, shell memory command or hardware inventory dependency is added. libc is a macOS-only direct dependency; windows-sys enables the memory-status feature.
 
@@ -53,9 +53,9 @@ The core config retains the manual value separately from auto_memory=true and st
 
 Tests cover reserve/rounding/cap/low-memory and fallback cases, Linux byte units/limits, native probes on each CI host, setting precedence and persistence, CLI auto/numeric/inherit, GUI request shape and per-instance stale-edit rejection, and conflicting JVM heap aliases. GUI acceptance should verify automatic defaults, hidden manual input, explicit save, global/instance switching and unchanged home layout. Keep test windows and data isolated; do not install a QA app into Applications.
 
-### Performance branch: release builds and cache verification
+### Release builds and cache verification
 
-The performance branch uses Thin LTO, one code-generation unit and symbol stripping for release builds. It keeps the default release optimization level and unwinding behavior; task panic handling, checksums, signatures, notices and supported archive formats remain enabled. Symbol stripping reduces executable symbol information, so use an unstripped local build for symbol-level debugging. ZIP uses the zlib-rs DEFLATE backend without the unused Zopfli encoder; normal DEFLATE import/export remains supported.
+Release builds use Thin LTO, one code-generation unit and symbol stripping. They keep the default release optimization level and unwinding behavior; task panic handling, checksums, signatures, notices and supported archive formats remain enabled. Symbol stripping reduces executable symbol information, so use an unstripped local build for symbol-level debugging. ZIP uses the zlib-rs DEFLATE backend without the unused Zopfli encoder; normal DEFLATE import/export remains supported.
 
 Cached artifacts are checked with a bounded 64 KiB buffer on Tokio's blocking pool, with a separate cancellation-aware gate capped by `downloads.max_parallel`. The verification permit stays with the worker even if its waiting future is dropped. Size mismatches fail before content reads; requested digests are checked in one streaming pass. Network and resumed transfers compute only the requested SHA-1/SHA-512 digests. The under-lock cache recheck remains to protect concurrent publication, and offline mode still rejects invalid cache files.
 
@@ -100,9 +100,9 @@ Maintenance stores CurseForge keys only through the config-scoped OS vault; `CCL
 
 The launcher log is separate from game/task output. It records an allowlisted startup version/platform/commit, task start and terminal events, `GuiError` codes, and optional fixed-category navigation events. It never persists arbitrary request/response payloads, credentials, paths or JavaScript exception text. Five files rotate at 5 MiB each. The Logs page reads at most 1,000 lines/256 KiB and can export the displayed content locally; it does not upload logs. `frontend_diagnostic` accepts only fixed event categories. Debug navigation logging is off by default. The log directory is `<GUI data directory>/logs`. GUI preference files and launcher logs are separate from the shared core config and account metadata; this UI work adds no config/account schema fields.
 
-### Unreleased UI redesign implementation
+### v0.3.0 UI implementation
 
-The current UI branch splits Play from the full Library. `Home.tsx` owns the bottom-right launch cluster and searchable switcher; `Navigation.tsx` owns the overlay rail with hover/focus and an explicit touch toggle; `AppearanceSettings.tsx` edits local appearance. `App.tsx` continues to coordinate the real bootstrap, account selection, task snapshots, and launch commands. Main navigation surfaces remain mounted and own their scrolling; instance details are entered on demand. No frontend demo data is used for production state.
+The v0.3.0 UI splits Play from the full Library. `Home.tsx` owns the bottom-right launch cluster and searchable switcher; `Navigation.tsx` owns the overlay rail with hover/focus and an explicit touch toggle; `AppearanceSettings.tsx` edits local appearance. `App.tsx` continues to coordinate the real bootstrap, account selection, task snapshots, and launch commands. Main navigation surfaces remain mounted and own their scrolling; instance details are entered on demand. No frontend demo data is used for production state.
 
 GUI-local `Preferences` additionally persist reduced transparency/motion, the recent stable instance key, and a managed background filename. Appearance saves update only appearance fields under the existing preference lock, preserving independently changed selection/background. Wallpaper imports bound input/decode/cache sizes and produce a JPEG copy; the frontend loads its data URL once per change, with default-image fallback. The default WebP wallpaper is static and its provenance is recorded in `apps/ccl-gui/src/assets/README.en.md`. No new fields are added to core configuration or account schemas. Navigation is the only backdrop-filter surface, with opaque fallback and system/user accessibility preferences. macOS keeps native window controls/title bar; wallpaper fills the WebView content, not OS-owned window chrome. Native window minimum is 520×480; small-screen layouts stack launch controls.
 
@@ -195,6 +195,8 @@ Version lists and game files have separate source settings, each supporting `aut
 The `loaders` service discovers compatible Fabric, Quilt, Legacy Fabric, Forge, NeoForge, and OptiFine releases and installs supported profiles. The `forge` engine interprets modern installer client processors, reports output through task events, and checks declared output hashes. Forge supports processor based and supported legacy metadata formats; NeoForge uses processor based installers. Inherited profiles retain the vanilla client archive's owning directory; child library versions override matching parent artifacts while keeping distinct native classifiers. Provider compatibility metadata is a preflight check, not proof that all third-party mod combinations launch successfully. See [loaders and instances](user-guide.en.md#loaders).
 
 The `instances` service owns `<game root>/.ccl/instances/<id>/game`. Installation and update build a separate staging revision and commit only after success. A journal supports recovery from an interrupted revision switch; the previous successful revision remains available for rollback. Loader updates and loader removal preserve current user data. Pack imports/updates and content edits use the same staged-generation transaction and cross-process instance lock as launches, so a running game cannot be replaced underneath a mutation.
+
+The `profiles` service manages existing `versions/<ID>` profiles without moving their data. Discovery is read-only. Runtime directories use the same HMCL-compatible resolver as launch, separately from shared resources. Explicit edits use a locked private workspace under `.ccl/profile-workspaces`, retain management snapshots under `.ccl/profiles`, detect concurrent source changes, and publish back to the original layout. Deletion removes only owned paths and refuses referenced profiles; shared/custom runtime data outside the profile remains. CLI selectors `version:ID` and `instance:ID`, and GUI library keys, prevent ambiguous IDs from targeting the wrong storage.
 
 Instance lifecycle operations can rename, copy, delete, list and restore retained revisions, report logical disk usage, and preview or apply cleanup of archived revisions and unfinished stages. Cleanup keeps active worlds/content out of scope by design; hard links mean reported logical bytes are not physical disk usage or guaranteed reclaimed space. See [instance lifecycle](user-guide.en.md#instances).
 
@@ -351,7 +353,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.2.3 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.4 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -375,12 +377,99 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.2.3 release notes
+## v0.3.4 release notes
 
-These notes target v0.2.3 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.4 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.2.3
+# CialloCraftLauncher 0.3.4
+
+This patch fixes management of existing Minecraft profiles and online content installation across the CLI and desktop app.
+
+- Manage existing profiles in place: copy, delete owned disk files, edit content and loaders, inspect storage, and retain/restore management history. Discovery keeps files in their original locations.
+- Separate shared resources, profile metadata and the actual game directory. Deletion lists the full removed scope and preserved paths; shared resources and external game directories remain, and dependent profiles block destructive changes.
+- Keep CLI and GUI targets unambiguous when IDs collide. The CLI supports explicit `version:ID` and `instance:ID` selectors; the GUI passes the exact library key.
+- Install provider-identified resource packs and shaders as ZIPs into `resourcepacks` and `shaderpacks`; mods remain JARs in `mods`.
+- Enforce new-pack creation versus existing-pack update in the backend, including hidden or concurrently created instances, and preserve safe retry of interrupted imports.
+- Ignore stale dependency previews after changing the selected version or other resolution inputs.
+- Filter saved game logs by stable profile identity and share CurseForge credential precedence between online discovery and local archive import.
+
+Local macOS validation: 435 workspace/desktop tests passed, 9 ignored; 20 frontend tests, production build, formatting and strict Clippy passed. The release workflow additionally validates and packages Windows x64, macOS arm64 and Linux x64.
+
+CLI and GUI update manifests retain detached release-key signatures. OS publisher signing and Microsoft GUI sign-in availability are unchanged.
+<!-- release-notes:end -->
+
+### v0.3.3 historical release notes
+
+#### CialloCraftLauncher 0.3.3
+
+This patch makes desktop controls consistent across the application’s light and dark themes.
+
+- Use shared rounded corners for buttons, fields, account selection, library selection, search results, panels and dialogs. Add internal spacing to selected rows while keeping plain layout sections simple.
+- Replace all 23 native dropdowns with one themed control, including home accounts, game/loader versions, downloads, logs, updates and memory settings. Menus use opaque surfaces with no new runtime dependency or blur.
+- Add search when a menu contains more than eight options, matching names and identifiers including Unicode text. Keep long lists internally scrollable, widen menus for labels within viewport limits, and reveal the current selection when opening.
+- Support keyboard navigation, disabled options, Enter confirmation, Esc cancellation, focus restoration and required-field validation. Selecting a home account does not submit the launch form.
+- Position menus using their content height and available space. Preserve dialog focus and let Esc close the menu before the dialog; Tab and Shift+Tab move between the owning dialog’s controls.
+
+The feature passed 16 frontend tests, TypeScript/Vite production builds, and core/desktop CI on Windows x64, macOS arm64 and Linux x86_64. Desktop checks covered packaging, frontend readiness and update rollback/recovery. Isolated rendered checks covered actual account, home, settings and dialog components with synthetic data; they do not establish interactive physical-machine acceptance on all three operating systems. The stable workflow revalidates the tagged release and uploaded assets.
+
+CLI behavior and game data are unchanged by this UI patch; automatic memory remains the default. CLI and GUI updater manifests retain release-key signatures. Installers lack OS publisher certificate signatures; macOS bundles retain verified ad-hoc signatures and are not notarized. GUI Microsoft sign-in remains temporarily unavailable, and CurseForge requires a user-provided API key.
+
+### v0.3.2 historical release notes
+
+#### CialloCraftLauncher 0.3.2
+
+This release adds automatic Minecraft heap allocation to the core, CLI and desktop GUI. Automatic is the default.
+
+- Compute the maximum Java heap at launch from available physical memory, with a 1 GiB reserve, a segmented budget, a 16 GiB automatic cap and 256 MiB rounding. Manual allocation remains available up to 128 GiB.
+- Share global defaults and saved per-instance overrides between CLI and GUI. A one-launch override takes precedence; instances inherit global settings unless explicitly saved.
+- Support `--memory auto` and numeric limits, plus `settings memory` to inspect, save or clear instance policies. Normal CLI output reports the effective policy.
+- Add automatic/manual controls under Settings → Game & Java and global/automatic/manual choices in instance launch options. Show numeric inputs only in manual mode and keep the home page unchanged.
+- Detect memory natively on Windows, macOS and Linux, including Linux cgroup limits and older macOS statistics replies. Avoid double-counting macOS speculative pages.
+- Preserve one authoritative maximum-heap argument, reject insufficient automatic headroom, and clearly report a 2048 MiB fallback when detection fails. Task logs and dry-run expose the decision; game logs record the actual heap limit.
+
+The feature passed core CI and desktop packaging/readiness/update-recovery checks on Windows x64, macOS arm64 and Linux x86_64. Native probe tests, budget boundaries, setting precedence/persistence, stale-edit protection, Unicode profile names, non-fallback automatic dry-run and JVM argument conflicts were covered. Isolated browser checks covered the actual setting components. The stable workflow revalidates this tagged release and uploaded assets.
+
+Automatic allocation is a heuristic, not a total-process memory cap or a guarantee every modpack fits. It does not resize a running game. CLI/GUI updater manifests retain release-key signatures; installers lack OS publisher certificate signatures and macOS is not notarized. GUI Microsoft login remains temporarily unavailable; CurseForge requires a user-provided API key. Game data is not migrated.
+
+### v0.3.1 historical release notes
+
+#### CialloCraftLauncher 0.3.1
+
+This patch reduces release package sizes and improves artifact downloading and desktop rendering.
+
+- Enable Thin LTO, a single code-generation unit and symbol stripping, and remove the unused Zopfli encoder while retaining standard DEFLATE support and bundled license notices.
+- Compute only requested SHA-1/SHA-512 digests during downloads and resumption. Verify cached files with bounded streaming buffers and a separate concurrency limit on the blocking pool.
+- Preserve cancellation, corrupt-cache rejection, offline checks, concurrent cache publication and update signature verification.
+- Avoid rerendering unchanged desktop management pages on task/log updates and skip unnecessary default-wallpaper image reads; retain selection, filters and page state.
+
+Compared with the preceding dev baseline, measured macOS DMG size fell about 22%, Linux DEB about 24%, Windows installer about 4%, and Linux AppImage about 3%. Deterministic installation/download fixtures improved, but small-file cache scheduling can cost more; these measurements do not promise faster Minecraft gameplay or every operation.
+
+The performance commit passed core and desktop validation on Windows x64, macOS arm64 and Linux x86_64, including packaging, frontend readiness and update rollback/recovery. The stable release workflow revalidates the version and uploaded assets before publication.
+
+CLI and GUI updater manifests retain detached release-key signatures. Installers lack OS publisher certificate signatures; macOS uses verified ad-hoc bundle signatures and is not notarized. GUI Microsoft sign-in remains temporarily unavailable. CurseForge requires a user-supplied API key. No game data migration is performed.
+
+### v0.3.0 historical release notes
+
+#### CialloCraftLauncher 0.3.0
+
+This release redesigns the desktop interface around continuing your current game.
+
+- Full-window static wallpaper with the current instance, account and launch controls at the bottom right; home no longer shows a permanent instance list or technical parameters.
+- Icon navigation expands as an overlay on hover or keyboard focus, with an explicit click toggle, light/dark themes, localized glass and reduced transparency/motion options.
+- Remember the recently selected instance locally. A missing selection requires choosing again rather than silently launching another instance. Unicode, spaces and long instance names remain supported.
+- Import a local JPG, PNG or WebP background into a bounded cache copy. Moving the source does not remove it; missing or corrupt images fall back to the default.
+- Open the library, instance details, downloads, accounts and settings on demand. Dependency identifiers stay in technical disclosures; online modpacks distinguish new and existing instance destinations.
+- Discard stale account/log responses, stop hidden launcher-log reads and remove dismissed terminal progress chips.
+- Match update-acceptance manifests to the actual GUI package version, preserving strict identity checks and retaining rollback diagnostics.
+
+The UI development commit passed core and desktop CI on Windows x64, macOS arm64 and Linux x86_64, including packaging, WebView readiness, successful updates, failure rollback and interrupted recovery. Native Mac checks covered themes, language, minimum windows, backgrounds, accounts and an isolated fixture process; these do not establish physical gameplay or drag testing on every platform. The stable release workflow additionally revalidates this version and verifies uploaded packages.
+
+CLI and GUI updater manifests have detached release-key signatures. Installers still lack OS publisher certificate signatures; macOS retains full ad-hoc bundle verification and is not notarized. Microsoft GUI sign-in remains temporarily unavailable, and CurseForge requires a user-supplied API key. Instance directories and player files are not migrated.
+
+### v0.2.3 historical release notes
+
+#### CialloCraftLauncher 0.2.3
 
 This patch fixes launching existing Forge modpacks and preserves each profile’s runtime data.
 
@@ -393,7 +482,6 @@ This patch fixes launching existing Forge modpacks and preserves each profile’
 Validation before publication: 378 workspace tests passed with 9 ignored, desktop-feature compilation and warnings-denied Clippy passed. Four real macOS Forge profiles passed online and offline launch preparation (eight successful preparations). These checks did not enter a game world or establish successful Minecraft main-menu startup for every profile. The stable workflow additionally validates and packages Windows x64, macOS arm64 and Linux x64.
 
 CLI and GUI updater manifests have detached release-key signatures. Installers do not have OS publisher certificate signatures; the macOS bundle retains ad-hoc signature verification. Microsoft login availability and user-supplied CurseForge key requirements are unchanged.
-<!-- release-notes:end -->
 
 ### v0.2.2 historical release notes
 
@@ -431,7 +519,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.2.3; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.4; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 
