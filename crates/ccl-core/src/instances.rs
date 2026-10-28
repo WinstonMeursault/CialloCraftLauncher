@@ -103,6 +103,14 @@ pub struct InstanceService {
     root: PathBuf,
     config: DownloadConfig,
     vanilla_installer: Option<InstallService>,
+    runtime_subdirectory: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackTransactionMode {
+    Upsert,
+    CreateOnly,
+    UpdateExisting,
 }
 
 impl InstanceService {
@@ -127,7 +135,11 @@ impl InstanceService {
             fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
         }
         clone_game_generation(&game, &stage)?;
-        let result = edit(&stage)?;
+        let edit_root = self.runtime_path_for(&stage);
+        if !edit_root.is_dir() {
+            fs::create_dir_all(&edit_root).map_err(|e| io(&edit_root, e))?;
+        }
+        let result = edit(&edit_root)?;
         mark_content_revision(&stage)?;
         commit_generation(&path, &stage, &game, &path.join("previous"), &metadata)?;
         Ok(result)
@@ -138,7 +150,7 @@ impl InstanceService {
         &self,
         id: &str,
         fingerprint: &str,
-        create_only: bool,
+        mode: PackTransactionMode,
         operation: F,
     ) -> Result<T, E>
     where
@@ -148,11 +160,13 @@ impl InstanceService {
     {
         let path = self.instance_path(id)?;
         let _lock = self.lock_instance(id)?;
-        if create_only && path.exists() {
-            return Err(InstanceError::Conflict(format!("instance already exists: {id}")).into());
+        let existed_before_transaction = path.exists();
+        if mode == PackTransactionMode::UpdateExisting && !existed_before_transaction {
+            return Err(InstanceError::NotFound(id.into()).into());
         }
-        fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
-        recover_instance(&path)?;
+        if existed_before_transaction {
+            recover_instance(&path)?;
+        }
         let metadata_path = path.join("instance.json");
         reject_symlink(&metadata_path)?;
         let current = if metadata_path.is_file() {
@@ -160,12 +174,25 @@ impl InstanceService {
         } else {
             None
         };
+        if mode == PackTransactionMode::CreateOnly && current.is_some() {
+            return Err(InstanceError::Conflict(format!("instance already exists: {id}")).into());
+        }
+        if mode == PackTransactionMode::UpdateExisting && current.is_none() {
+            return Err(InstanceError::NotFound(id.into()).into());
+        }
         let game = path.join("game");
         let stage = path.join(".stage");
         reject_symlink(&stage)?;
         let marker = stage.join(".ccl/pack-request.json");
         reject_symlink(&marker)?;
         let resume = fs::read_to_string(&marker).ok().as_deref() == Some(fingerprint);
+        if mode == PackTransactionMode::CreateOnly
+            && existed_before_transaction
+            && !is_resumable_pack_create(&path, &game, &stage, &marker, resume)?
+        {
+            return Err(InstanceError::Conflict(format!("instance already exists: {id}")).into());
+        }
+        fs::create_dir_all(&path).map_err(|e| io(&path, e))?;
         if stage.exists() && !resume {
             fs::remove_dir_all(&stage).map_err(|e| io(&stage, e))?;
         }
@@ -201,7 +228,30 @@ impl InstanceService {
             root,
             config,
             vanilla_installer: None,
+            runtime_subdirectory: None,
         })
+    }
+
+    pub fn with_runtime_subdirectory(mut self, relative: PathBuf) -> InstanceResult<Self> {
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(InstanceError::InvalidId(
+                "runtime subdirectory must be a safe relative path".into(),
+            ));
+        }
+        self.runtime_subdirectory = Some(relative);
+        Ok(self)
+    }
+
+    pub(crate) fn runtime_path_for(&self, game_root: &Path) -> PathBuf {
+        self.runtime_subdirectory
+            .as_ref()
+            .map(|relative| game_root.join(relative))
+            .unwrap_or_else(|| game_root.to_path_buf())
     }
 
     /// Use a configured vanilla installer, for example one pointed at a private metadata mirror.
@@ -970,6 +1020,36 @@ fn recover_instance(instance: &Path) -> InstanceResult<()> {
     Ok(())
 }
 
+fn is_resumable_pack_create(
+    instance: &Path,
+    game: &Path,
+    stage: &Path,
+    marker: &Path,
+    matching_fingerprint: bool,
+) -> InstanceResult<bool> {
+    if !matching_fingerprint || game.exists() || !stage.is_dir() || !marker.is_file() {
+        return Ok(false);
+    }
+    for name in [
+        "instance.json",
+        "previous.json",
+        "previous",
+        ".commit.json",
+        ".rollback.json",
+    ] {
+        if instance.join(name).exists() {
+            return Ok(false);
+        }
+    }
+    for entry in fs::read_dir(instance).map_err(|e| io(instance, e))? {
+        let entry = entry.map_err(|e| io(instance, e))?;
+        if entry.file_name() != ".stage" {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn recover_rollback(instance: &Path) -> InstanceResult<()> {
     let journal_path = instance.join(".rollback.json");
     recover_atomic_file(&journal_path)?;
@@ -1595,6 +1675,56 @@ mod tests {
             loader_version: None,
             game_directory: directory.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn create_only_pack_transaction_resumes_matching_incomplete_stage_but_rejects_active_instance()
+     {
+        let temp = Temp::new();
+        let service = InstanceService::new(temp.0.clone(), DownloadConfig::default()).unwrap();
+        let interrupted: Result<(), InstanceError> = service
+            .transact_pack(
+                "test",
+                "same-fingerprint",
+                PackTransactionMode::CreateOnly,
+                |_stage, current| async move {
+                    assert!(current.is_none());
+                    Err(InstanceError::Conflict("simulated cancelled import".into()))
+                },
+            )
+            .await;
+        assert!(interrupted.is_err());
+
+        service
+            .transact_pack(
+                "test",
+                "same-fingerprint",
+                PackTransactionMode::CreateOnly,
+                |stage, current| async move {
+                    assert!(current.is_none());
+                    fs::write(stage.join("pack.txt"), b"resumed").map_err(|e| io(&stage, e))?;
+                    Ok::<_, InstanceError>((metadata("1.21", &stage), ()))
+                },
+            )
+            .await
+            .unwrap();
+        let instance = service.metadata("test").unwrap();
+        assert_eq!(
+            fs::read(instance.game_directory.join("pack.txt")).unwrap(),
+            b"resumed"
+        );
+
+        let duplicate: Result<(), InstanceError> = service
+            .transact_pack(
+                "test",
+                "same-fingerprint",
+                PackTransactionMode::CreateOnly,
+                |_stage, _current| async move {
+                    panic!("create-only must reject the committed instance before import")
+                },
+            )
+            .await;
+        assert!(matches!(duplicate, Err(InstanceError::Conflict(_))));
     }
 
     #[test]

@@ -156,6 +156,8 @@ pub struct ProjectHit {
     pub description: String,
     pub downloads: u64,
     pub icon_url: Option<String>,
+    #[serde(default)]
+    pub content_kind: Option<OnlineContentKind>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,6 +165,9 @@ pub struct VersionHit {
     pub provider: Provider,
     pub id: String,
     pub project_id: String,
+    /// Provider-declared project type, verified from the provider project endpoint.
+    #[serde(default)]
+    pub content_kind: OnlineContentKind,
     pub name: String,
     pub version_number: String,
     pub game_versions: Vec<String>,
@@ -173,6 +178,49 @@ pub struct VersionHit {
     pub incompatible_dependencies: Vec<String>,
     pub pinned_dependencies: std::collections::BTreeMap<String, String>,
     pub dependency_requirements: Vec<DependencyRequirement>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlineContentKind {
+    #[default]
+    Mod,
+    ResourcePack,
+    ShaderPack,
+    Modpack,
+}
+
+impl OnlineContentKind {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::Mod => "mods",
+            Self::ResourcePack => "resourcepacks",
+            Self::ShaderPack => "shaderpacks",
+            Self::Modpack => "modpacks",
+        }
+    }
+    fn from_modrinth(value: &str) -> Result<Self, OnlineError> {
+        match value {
+            "mod" => Ok(Self::Mod),
+            "resourcepack" => Ok(Self::ResourcePack),
+            "shader" => Ok(Self::ShaderPack),
+            "modpack" => Ok(Self::Modpack),
+            other => Err(OnlineError::Invalid(format!(
+                "unsupported Modrinth project type `{other}`"
+            ))),
+        }
+    }
+    fn from_curseforge(class_id: u64) -> Result<Self, OnlineError> {
+        match class_id {
+            6 => Ok(Self::Mod),
+            12 => Ok(Self::ResourcePack),
+            6552 => Ok(Self::ShaderPack),
+            4471 => Ok(Self::Modpack),
+            other => Err(OnlineError::Invalid(format!(
+                "unsupported CurseForge project class `{other}`"
+            ))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -210,6 +258,32 @@ pub struct OnlineInstallRequest {
     pub version_id: Option<String>,
 }
 
+/// Controls whether a downloaded pack may update an existing managed instance.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackImportMode {
+    #[default]
+    CreateNew,
+    UpdateExisting,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PackInstallOptions {
+    #[serde(default)]
+    pub include_optional: bool,
+    #[serde(default)]
+    pub mode: PackImportMode,
+}
+
+/// Identifies a private profile workspace where an imported pack may be safely merged.
+#[derive(Clone, Debug)]
+pub struct PackMergeTarget {
+    pub root: PathBuf,
+    pub config: DownloadConfig,
+    pub profile_id: String,
+    pub runtime_subdirectory: PathBuf,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContentConflict {
     pub path: String,
@@ -240,6 +314,7 @@ pub struct OnlineContentService {
     config: OnlineConfig,
     modrinth_api: String,
     curseforge_api: String,
+    runtime_subdirectory: Option<PathBuf>,
 }
 
 impl OnlineContentService {
@@ -262,6 +337,7 @@ impl OnlineContentService {
             config,
             modrinth_api: MODRINTH_API.into(),
             curseforge_api: CURSEFORGE_API.into(),
+            runtime_subdirectory: None,
         })
     }
 
@@ -273,6 +349,13 @@ impl OnlineContentService {
     ) -> Self {
         self.modrinth_api = modrinth.into().trim_end_matches('/').into();
         self.curseforge_api = curseforge.into().trim_end_matches('/').into();
+        self
+    }
+
+    /// Route instance content operations through a profile workspace's runtime subdirectory.
+    /// An empty relative path selects the workspace root runtime.
+    pub fn with_runtime_subdirectory(mut self, relative: PathBuf) -> Self {
+        self.runtime_subdirectory = (!relative.as_os_str().is_empty()).then_some(relative);
         self
     }
     /// Build online settings from launcher download configuration and a caller-owned provider key.
@@ -342,6 +425,25 @@ impl OnlineContentService {
     ) -> Result<(), OnlineError> {
         self.online()?;
         check_context(&context)?;
+        if versions
+            .iter()
+            .any(|version| version.content_kind == OnlineContentKind::Modpack)
+        {
+            return Err(OnlineError::Invalid(
+                "modpacks must be installed through pack import".into(),
+            ));
+        }
+        for version in versions {
+            let actual_kind = self
+                .project_kind(version.provider, &version.project_id)
+                .await?;
+            if actual_kind != version.content_kind {
+                return Err(OnlineError::Invalid(format!(
+                    "provider project type changed for {} (expected {:?}, found {:?})",
+                    version.project_id, version.content_kind, actual_kind
+                )));
+            }
+        }
         let conflicts = Self::analyze_conflicts(versions);
         if !conflicts.is_empty() {
             return Err(OnlineError::Conflicts(conflicts));
@@ -377,7 +479,7 @@ impl OnlineContentService {
                 }
                 let mut owned = std::collections::BTreeMap::new();
                 for file in files {
-                    validate_mod_name(&file.filename)?;
+                    validate_online_filename(version.content_kind, &file.filename)?;
                     if file.sha1.is_none() && file.sha512.is_none() {
                         return Err(OnlineError::Invalid(format!(
                             "file {} has no supported integrity hash",
@@ -425,8 +527,10 @@ impl OnlineContentService {
                     manager.download(request).await?;
                     check_context(&context)?;
                     let hash = file_sha512(&destination)?;
-                    owned.insert(file.filename.clone(), hash.clone());
-                    downloads.push((file.filename.clone(), destination, hash));
+                    let relative =
+                        format!("{}/{}", version.content_kind.directory(), file.filename);
+                    owned.insert(relative.clone(), hash.clone());
+                    downloads.push((relative, destination, hash));
                 }
                 records.push(OnlineInstalledVersion {
                     provider: version.provider,
@@ -445,6 +549,7 @@ impl OnlineContentService {
                 records,
                 &downloads,
                 context.as_ref(),
+                self.runtime_subdirectory.clone(),
             )
         }
         .await;
@@ -492,7 +597,7 @@ impl OnlineContentService {
         } = request;
         self.online()?;
         check_context(&context)?;
-        let instances = InstanceService::new(root.clone(), config.clone())?;
+        let instances = self.instance_service(root.clone(), config)?;
         let metadata = instances.metadata(&instance_id)?;
         let loader = metadata.loader.map(|kind| match kind {
             crate::loaders::LoaderKind::Fabric => "fabric",
@@ -524,10 +629,26 @@ impl OnlineContentService {
         config: &DownloadConfig,
         instance_id: &str,
         version: &VersionHit,
-        include_optional: bool,
+        options: PackInstallOptions,
         context: Option<TaskContext>,
     ) -> Result<crate::instances::InstanceMetadata, OnlineError> {
+        let runtime_subdirectory = self.runtime_subdirectory.clone().unwrap_or_default();
+        let include_optional = options.include_optional;
+        let mode = options.mode;
         self.online()?;
+        if version.content_kind != OnlineContentKind::Modpack {
+            return Err(OnlineError::Invalid(
+                "selected provider project is not a modpack".into(),
+            ));
+        }
+        let actual_kind = self
+            .project_kind(version.provider, &version.project_id)
+            .await?;
+        if actual_kind != OnlineContentKind::Modpack {
+            return Err(OnlineError::Invalid(
+                "provider project is not a modpack".into(),
+            ));
+        }
         let curseforge_api_key = self.config.curseforge_api_key.clone();
         let file = version
             .files
@@ -574,37 +695,184 @@ impl OnlineContentService {
         let result = async {
             DownloadManager::new(config)?.download(request).await?;
             match version.provider {
-                Provider::Modrinth => ModpackService::new(root, config.clone())?
-                    .import(
-                        instance_id,
-                        &path,
-                        &ImportOptions {
-                            include_optional,
-                            ..Default::default()
-                        },
-                        context,
-                    )
-                    .await
-                    .map_err(OnlineError::from),
-                Provider::CurseForge => ImportFormatService::new(root, config.clone())
-                    .import(
-                        instance_id,
-                        &path,
-                        &ImportOptionsExt {
-                            include_optional,
-                            replace_modified: false,
-                            curseforge_api_key,
-                            allowed_hosts: Vec::new(),
-                        },
-                        context,
-                    )
-                    .await
-                    .map_err(OnlineError::from),
+                Provider::Modrinth => {
+                    let service = ModpackService::new_with_runtime_subdirectory(
+                        root,
+                        config.clone(),
+                        runtime_subdirectory.clone(),
+                    )?;
+                    let options = ImportOptions {
+                        include_optional,
+                        ..Default::default()
+                    };
+                    match mode {
+                        PackImportMode::CreateNew => {
+                            service
+                                .import_new(instance_id, &path, &options, context)
+                                .await
+                        }
+                        PackImportMode::UpdateExisting => {
+                            service
+                                .import_existing(instance_id, &path, &options, context)
+                                .await
+                        }
+                    }
+                    .map_err(OnlineError::from)
+                }
+                Provider::CurseForge => {
+                    let service = ImportFormatService::new_with_runtime_subdirectory(
+                        root,
+                        config.clone(),
+                        runtime_subdirectory.clone(),
+                    );
+                    let options = ImportOptionsExt {
+                        include_optional,
+                        replace_modified: false,
+                        curseforge_api_key,
+                        allowed_hosts: Vec::new(),
+                    };
+                    match mode {
+                        PackImportMode::CreateNew => {
+                            service
+                                .import_new(instance_id, &path, &options, context)
+                                .await
+                        }
+                        PackImportMode::UpdateExisting => {
+                            service
+                                .import_existing(instance_id, &path, &options, context)
+                                .await
+                        }
+                    }
+                    .map_err(OnlineError::from)
+                }
             }
         }
         .await;
         let _ = fs::remove_file(path);
         result
+    }
+
+    /// Import a provider pack into a private workspace for an ordinary root profile that has
+    /// no prior CCL pack receipt. Existing files are accepted only when their bytes match the
+    /// pack's recorded hashes; the active profile is updated later by ProfileWorkspace::commit.
+    pub async fn download_and_merge_pack_into_profile(
+        &self,
+        root: PathBuf,
+        config: &DownloadConfig,
+        profile_id: &str,
+        version: &VersionHit,
+        options: PackInstallOptions,
+        context: Option<TaskContext>,
+    ) -> Result<crate::instances::InstanceMetadata, OnlineError> {
+        if !crate::instances::is_valid_id(profile_id) {
+            return Err(OnlineError::Invalid(
+                "invalid profile ID for pack merge".into(),
+            ));
+        }
+        let scratch_id = format!(
+            "ccl-profile-pack-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let _imported = self
+            .download_and_import_pack(
+                root.clone(),
+                config,
+                &scratch_id,
+                version,
+                PackInstallOptions {
+                    mode: PackImportMode::CreateNew,
+                    ..options
+                },
+                context,
+            )
+            .await?;
+        let result = Self::merge_imported_pack_into_profile(
+            PackMergeTarget {
+                root: root.clone(),
+                config: config.clone(),
+                profile_id: profile_id.to_owned(),
+                runtime_subdirectory: self.runtime_subdirectory.clone().unwrap_or_default(),
+            },
+            &scratch_id,
+        );
+        if let Ok(instances) = InstanceService::new(root, config.clone()) {
+            let _ = instances.delete(&scratch_id);
+        }
+        result
+    }
+
+    /// Merge a just-imported scratch pack into an ordinary profile workspace with no receipt.
+    /// Existing files are retained only when their contents match the imported ownership hashes.
+    pub fn merge_imported_pack_into_profile(
+        target: PackMergeTarget,
+        imported_id: &str,
+    ) -> Result<crate::instances::InstanceMetadata, OnlineError> {
+        let PackMergeTarget {
+            root,
+            config,
+            profile_id,
+            runtime_subdirectory,
+        } = target;
+        if !crate::instances::is_valid_id(&profile_id)
+            || !crate::instances::is_valid_id(imported_id)
+        {
+            return Err(OnlineError::Invalid(
+                "invalid profile ID for pack merge".into(),
+            ));
+        }
+        let instances = InstanceService::new(root.clone(), config.clone())?;
+        let profile = instances.metadata(&profile_id)?;
+        let runtime_directory = profile.game_directory.join(&runtime_subdirectory);
+        let imported = instances.metadata(imported_id)?;
+        let receipt = ModpackService::new(root.clone(), config.clone())?.show(imported_id)?;
+        let instance_dir = root.join(".ccl/instances").join(&profile_id);
+        let game_root = instance_dir.join("game");
+        if !runtime_directory.starts_with(&instance_dir)
+            || !runtime_directory.starts_with(&game_root)
+                && runtime_directory != instance_dir.join("runtime")
+        {
+            return Err(OnlineError::Invalid(
+                "profile runtime directory is outside its private workspace".into(),
+            ));
+        }
+        let existing_receipt = runtime_directory.join(".ccl/modpack.json");
+        match fs::symlink_metadata(&existing_receipt) {
+            Ok(_) => {
+                return Err(OnlineError::Conflict {
+                    path: existing_receipt.display().to_string(),
+                    reason: "profile already has a pack receipt; use the update path".into(),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(OnlineError::Io(error.to_string())),
+        }
+        merge_pack_owned_files(
+            &imported.game_directory,
+            &runtime_directory,
+            &receipt.owned_files,
+        )?;
+        let receipt_source = imported.game_directory.join(".ccl/modpack.json");
+        let receipt_target = runtime_directory.join(".ccl/modpack.json");
+        create_safe_parent(&runtime_directory, &receipt_target)?;
+        fs::copy(&receipt_source, &receipt_target).map_err(|e| OnlineError::Io(e.to_string()))?;
+        let metadata_path = instance_dir.join("instance.json");
+        let metadata_fs =
+            fs::symlink_metadata(&metadata_path).map_err(|e| OnlineError::Io(e.to_string()))?;
+        if metadata_fs.file_type().is_symlink() || !metadata_fs.is_file() {
+            return Err(OnlineError::Conflict {
+                path: metadata_path.display().to_string(),
+                reason: "profile workspace metadata is not a regular file".into(),
+            });
+        }
+        let metadata = crate::instances::InstanceMetadata {
+            id: profile_id,
+            game_directory: game_root,
+            ..imported
+        };
+        fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)
+            .map_err(|e| OnlineError::Io(e.to_string()))?;
+        Ok(metadata)
     }
 
     async fn resolve_graph_from_context(
@@ -646,6 +914,7 @@ impl OnlineContentService {
                 let selected = if let Some(id) = pin {
                     let exact = await_or_cancel(self.modrinth_version_by_id(&id), context).await?;
                     if exact.project_id != project
+                        || exact.content_kind != OnlineContentKind::Mod
                         || !exact.game_versions.iter().any(|x| x == game_version)
                         || !exact.loaders.iter().any(|x| x == loader)
                     {
@@ -673,6 +942,11 @@ impl OnlineContentService {
                         ))
                     })?
                 };
+                if selected.content_kind != OnlineContentKind::Mod {
+                    return Err(OnlineError::Invalid(format!(
+                        "dependency {project} is not a mod"
+                    )));
+                }
                 todo.push(selected)
             }
             resolved.push(version)
@@ -711,6 +985,11 @@ impl OnlineContentService {
                         "no compatible CurseForge dependency version found for project {dep}"
                     ))
                 })?;
+                if selected.content_kind != OnlineContentKind::Mod {
+                    return Err(OnlineError::Invalid(format!(
+                        "CurseForge dependency {dep} is not a mod"
+                    )));
+                }
                 todo.push(selected)
             }
             resolved.push(version)
@@ -764,9 +1043,9 @@ impl OnlineContentService {
                 if let Some(t) = &query.project_type {
                     let id = match t.as_str() {
                         "mod" => "6",
-                        "modpack" => "4471",
                         "resourcepack" => "12",
                         "shader" => "6552",
+                        "modpack" => "4471",
                         _ => {
                             return Err(OnlineError::Invalid(format!(
                                 "unsupported CurseForge project type `{t}`"
@@ -808,6 +1087,10 @@ impl OnlineContentService {
         loader: Option<&str>,
     ) -> Result<Vec<VersionHit>, OnlineError> {
         self.online()?;
+        let content_kind = self.project_kind(provider, project_id).await?;
+        let loader = (content_kind == OnlineContentKind::Mod)
+            .then_some(loader)
+            .flatten();
         match provider {
             Provider::Modrinth => {
                 let mut request = self.client.get(format!(
@@ -826,7 +1109,14 @@ impl OnlineContentService {
                     .json()
                     .await
                     .map_err(|e| OnlineError::Request(e.to_string()))?;
-                Ok(values.into_iter().map(from_mr_version).collect())
+                Ok(values
+                    .into_iter()
+                    .map(from_mr_version)
+                    .map(|mut value| {
+                        value.content_kind = content_kind;
+                        value
+                    })
+                    .collect())
             }
             Provider::CurseForge => {
                 let id = project_id.parse::<u64>().map_err(|_| {
@@ -864,11 +1154,53 @@ impl OnlineContentService {
                     .data
                     .into_iter()
                     .map(|f| from_cf_version(project_id, f))
+                    .map(|mut value| {
+                        value.content_kind = content_kind;
+                        value
+                    })
                     .filter(|v| {
                         game_version.is_none_or(|g| v.game_versions.iter().any(|x| x == g))
                             && loader.is_none_or(|l| v.loaders.iter().any(|x| x == l))
                     })
                     .collect())
+            }
+        }
+    }
+
+    async fn project_kind(
+        &self,
+        provider: Provider,
+        project_id: &str,
+    ) -> Result<OnlineContentKind, OnlineError> {
+        match provider {
+            Provider::Modrinth => {
+                let response = self
+                    .send(self.client.get(format!(
+                        "{}/project/{}",
+                        self.modrinth_api,
+                        encode(project_id)
+                    )))
+                    .await?;
+                let value: MrProject = response
+                    .json()
+                    .await
+                    .map_err(|e| OnlineError::Request(e.to_string()))?;
+                OnlineContentKind::from_modrinth(&value.project_type)
+            }
+            Provider::CurseForge => {
+                let id = project_id.parse::<u64>().map_err(|_| {
+                    OnlineError::Invalid("CurseForge project ID must be numeric".into())
+                })?;
+                let request = self.authorize_curseforge(
+                    self.client
+                        .get(format!("{}/mods/{id}", self.curseforge_api)),
+                )?;
+                let response = self.send(request).await?;
+                let value: CfEnvelope<CfProject> = response
+                    .json()
+                    .await
+                    .map_err(|e| OnlineError::Request(e.to_string()))?;
+                OnlineContentKind::from_curseforge(value.data.class_id)
             }
         }
     }
@@ -978,11 +1310,17 @@ impl OnlineContentService {
         .ok_or_else(|| {
             OnlineError::Invalid("no compatible requested provider version was found".into())
         })?;
-        if loader.is_none() && !root.loaders.is_empty() {
+        if root.content_kind == OnlineContentKind::Mod
+            && loader.is_none()
+            && !root.loaders.is_empty()
+        {
             return Err(OnlineError::Invalid(
                 "the target instance has no mod loader, but the selected project requires one"
                     .into(),
             ));
+        }
+        if root.content_kind != OnlineContentKind::Mod {
+            return Ok(vec![root]);
         }
         match provider {
             Provider::Modrinth => {
@@ -1008,7 +1346,11 @@ impl OnlineContentService {
             .json()
             .await
             .map_err(|e| OnlineError::Request(e.to_string()))?;
-        Ok(from_mr_version(value))
+        let mut version = from_mr_version(value);
+        version.content_kind = self
+            .project_kind(Provider::Modrinth, &version.project_id)
+            .await?;
+        Ok(version)
     }
 
     /// Resolve CurseForge required dependencies using the same version filters as the root project.
@@ -1082,10 +1424,14 @@ impl OnlineContentService {
         config: &DownloadConfig,
         instance_id: &str,
     ) -> Result<Vec<(OnlineInstalledVersion, VersionHit)>, OnlineError> {
-        let instances = InstanceService::new(root, config.clone())?;
+        let instances = self.instance_service(root, config)?;
         let game = instances.game_directory(instance_id)?;
         let receipt_path = game.join(ONLINE_RECEIPT);
-        let bytes = fs::read(&receipt_path).map_err(|e| OnlineError::Io(e.to_string()))?;
+        let bytes = match fs::read(&receipt_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(OnlineError::Io(error.to_string())),
+        };
         let receipt: OnlineReceipt = serde_json::from_slice(&bytes)?;
         let metadata = instances.metadata(instance_id)?;
         let loader = metadata.loader.map(|kind| match kind {
@@ -1136,11 +1482,15 @@ impl OnlineContentService {
         config: &DownloadConfig,
         instance_id: &str,
     ) -> Result<Vec<ContentConflict>, OnlineError> {
-        let instances = InstanceService::new(root, config.clone())?;
+        let instances = self.instance_service(root, config)?;
         let game = instances.game_directory(instance_id)?;
-        let receipt: OnlineReceipt = serde_json::from_slice(
-            &fs::read(game.join(ONLINE_RECEIPT)).map_err(|e| OnlineError::Io(e.to_string()))?,
-        )?;
+        let receipt_path = game.join(ONLINE_RECEIPT);
+        let bytes = match fs::read(&receipt_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(OnlineError::Io(error.to_string())),
+        };
+        let receipt: OnlineReceipt = serde_json::from_slice(&bytes)?;
         let metadata = instances.metadata(instance_id)?;
         let mut selected = Vec::new();
         for installed in receipt.versions {
@@ -1273,7 +1623,10 @@ impl OnlineContentService {
                     .cloned()
                     .unwrap_or_else(|| format!("unverified:{}:{}", version.project_id, version.id));
                 paths
-                    .entry(file.filename.to_ascii_lowercase())
+                    .entry(
+                        format!("{}/{}", version.content_kind.directory(), file.filename)
+                            .to_ascii_lowercase(),
+                    )
                     .or_default()
                     .push((version.version_number.clone(), digest));
             }
@@ -1353,6 +1706,18 @@ impl OnlineContentService {
             Ok(())
         }
     }
+
+    fn instance_service(
+        &self,
+        root: PathBuf,
+        config: &DownloadConfig,
+    ) -> Result<InstanceService, OnlineError> {
+        let instances = InstanceService::new(root, config.clone())?;
+        match &self.runtime_subdirectory {
+            Some(relative) => Ok(instances.with_runtime_subdirectory(relative.clone())?),
+            None => Ok(instances),
+        }
+    }
 }
 
 pub(crate) fn curseforge_download_hosts() -> Vec<String> {
@@ -1372,6 +1737,154 @@ fn validate_mod_name(name: &str) -> Result<(), OnlineError> {
     }
     crate::modpack_format::validate_content_path(&format!("mods/{name}"))
         .map_err(|e| OnlineError::Invalid(e.to_string()))
+}
+fn validate_online_filename(kind: OnlineContentKind, name: &str) -> Result<(), OnlineError> {
+    if name.contains(['/', '\\']) || name.is_empty() {
+        return Err(OnlineError::Invalid(format!(
+            "unsafe online content filename: {name}"
+        )));
+    }
+    let valid_extension = match kind {
+        OnlineContentKind::Mod => name.to_ascii_lowercase().ends_with(".jar"),
+        OnlineContentKind::ResourcePack | OnlineContentKind::ShaderPack => {
+            name.to_ascii_lowercase().ends_with(".zip")
+        }
+        OnlineContentKind::Modpack => false,
+    };
+    if !valid_extension {
+        return Err(OnlineError::Invalid(format!(
+            "unexpected filename for {kind:?}: {name}"
+        )));
+    }
+    if kind == OnlineContentKind::Mod {
+        return validate_mod_name(name);
+    }
+    crate::modpack_format::validate_content_path(&format!("{}/{name}", kind.directory()))
+        .map_err(|e| OnlineError::Invalid(e.to_string()))
+}
+fn validate_online_path(path: &str) -> Result<String, OnlineError> {
+    let (directory, name) = path.split_once('/').unwrap_or(("mods", path));
+    let kind = match directory {
+        "mods" => OnlineContentKind::Mod,
+        "resourcepacks" => OnlineContentKind::ResourcePack,
+        "shaderpacks" => OnlineContentKind::ShaderPack,
+        _ => {
+            return Err(OnlineError::Invalid(format!(
+                "unsafe online content path: {path}"
+            )));
+        }
+    };
+    validate_online_filename(kind, name)?;
+    Ok(format!("{directory}/{name}"))
+}
+
+fn merge_pack_owned_files(
+    source_game: &std::path::Path,
+    target_runtime: &std::path::Path,
+    owned_files: &std::collections::BTreeMap<String, String>,
+) -> Result<(), OnlineError> {
+    for (relative, expected_hash) in owned_files {
+        crate::modpack_format::validate_content_path(relative)
+            .map_err(|e| OnlineError::Invalid(e.to_string()))?;
+        let source = source_game.join(relative);
+        let target = target_runtime.join(relative);
+        let source_metadata =
+            fs::symlink_metadata(&source).map_err(|error| OnlineError::Io(error.to_string()))?;
+        if source_metadata.file_type().is_symlink()
+            || !source_metadata.is_file()
+            || file_sha512(&source)? != *expected_hash
+        {
+            return Err(OnlineError::Invalid(format!(
+                "imported pack file failed its ownership check: {relative}"
+            )));
+        }
+        create_safe_parent(target_runtime, &target)?;
+        reject_case_alias(target.parent().unwrap(), target.file_name().unwrap())?;
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || file_sha512(&target)? != *expected_hash
+                {
+                    return Err(OnlineError::Conflict {
+                        path: relative.clone(),
+                        reason: "pack file conflicts with existing profile content".into(),
+                    });
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::copy(&source, &target).map_err(|e| OnlineError::Io(e.to_string()))?;
+            }
+            Err(error) => return Err(OnlineError::Io(error.to_string())),
+        }
+    }
+    Ok(())
+}
+
+fn create_safe_parent(root: &std::path::Path, target: &std::path::Path) -> Result<(), OnlineError> {
+    if !target.starts_with(root) {
+        return Err(OnlineError::Invalid(
+            "profile output escapes its runtime directory".into(),
+        ));
+    }
+    let root_metadata =
+        fs::symlink_metadata(root).map_err(|error| OnlineError::Io(error.to_string()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(OnlineError::Conflict {
+            path: root.display().to_string(),
+            reason: "profile runtime root is not a safe directory".into(),
+        });
+    }
+    let relative_parent = target
+        .parent()
+        .and_then(|parent| parent.strip_prefix(root).ok())
+        .ok_or_else(|| {
+            OnlineError::Invalid("profile output escapes its runtime directory".into())
+        })?;
+    let mut current = root.to_path_buf();
+    for component in relative_parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(OnlineError::Invalid("unsafe profile output path".into()));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(OnlineError::Conflict {
+                    path: current.display().to_string(),
+                    reason: "profile output parent is not a safe directory".into(),
+                });
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|e| OnlineError::Io(e.to_string()))?;
+            }
+            Err(error) => return Err(OnlineError::Io(error.to_string())),
+        }
+    }
+    Ok(())
+}
+
+fn reject_case_alias(
+    parent: &std::path::Path,
+    filename: &std::ffi::OsStr,
+) -> Result<(), OnlineError> {
+    let requested = filename.to_string_lossy();
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OnlineError::Io(error.to_string())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| OnlineError::Io(e.to_string()))?;
+        let existing = entry.file_name();
+        if existing.to_string_lossy().eq_ignore_ascii_case(&requested) && existing != filename {
+            return Err(OnlineError::Conflict {
+                path: parent.join(filename).display().to_string(),
+                reason: "pack path collides with existing profile content".into(),
+            });
+        }
+    }
+    Ok(())
 }
 fn file_sha512(path: &std::path::Path) -> Result<String, OnlineError> {
     use std::io::Read;
@@ -1402,12 +1915,16 @@ fn apply_downloads(
     records: Vec<OnlineInstalledVersion>,
     downloads: &[(String, PathBuf, String)],
     context: Option<&TaskContext>,
+    runtime_subdirectory: Option<PathBuf>,
 ) -> Result<(), OnlineError> {
-    let instances = InstanceService::new(root, config.clone())?;
+    let mut instances = InstanceService::new(root, config.clone())?;
+    if let Some(relative) = runtime_subdirectory {
+        instances = instances.with_runtime_subdirectory(relative)?;
+    }
     instances.edit_content(id, |game| -> Result<(), OnlineError> {
         check_context_ref(context)?;
         let receipt_path = game.join(ONLINE_RECEIPT);
-        let old = match fs::read(&receipt_path) {
+        let mut old = match fs::read(&receipt_path) {
             Ok(bytes) => serde_json::from_slice::<OnlineReceipt>(&bytes)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => OnlineReceipt::default(),
             Err(e) => return Err(OnlineError::Io(e.to_string())),
@@ -1417,8 +1934,41 @@ fn apply_downloads(
                 "unsupported online receipt schema".into(),
             ));
         }
+        let mut legacy_paths = std::collections::BTreeMap::new();
+        for record in &mut old.versions {
+            let directory = record
+                .metadata
+                .as_ref()
+                .map_or("mods", |m| m.content_kind.directory());
+            let mut normalized = std::collections::BTreeMap::new();
+            for (name, hash) in std::mem::take(&mut record.files) {
+                let path = if name.contains('/') {
+                    name.clone()
+                } else {
+                    format!("{directory}/{name}")
+                };
+                legacy_paths.insert(name, path.clone());
+                normalized.insert(path, hash);
+            }
+            record.files = normalized;
+        }
+        old.owned_files = std::mem::take(&mut old.owned_files)
+            .into_iter()
+            .map(|(name, hash)| {
+                (
+                    legacy_paths.get(&name).cloned().unwrap_or_else(|| {
+                        if name.contains('/') {
+                            name.clone()
+                        } else {
+                            format!("mods/{name}")
+                        }
+                    }),
+                    hash,
+                )
+            })
+            .collect();
         for name in old.owned_files.keys() {
-            validate_mod_name(name)?;
+            validate_online_path(name)?;
         }
         let mut retained = old
             .versions
@@ -1438,31 +1988,35 @@ fn apply_downloads(
         if !conflicts.is_empty() {
             return Err(OnlineError::Conflicts(conflicts));
         }
-        let mods = game.join("mods");
-        fs::create_dir_all(&mods).map_err(|e| OnlineError::Io(e.to_string()))?;
         let mut desired = std::collections::BTreeMap::new();
         let mut folded = std::collections::BTreeMap::new();
         for record in &retained {
             for (name, hash) in &record.files {
-                validate_mod_name(name)?;
+                let name = validate_online_path(name)?;
                 if let Some((prior_name, prior_hash)) =
                     folded.insert(name.to_ascii_lowercase(), (name.clone(), hash.clone()))
-                    && (prior_hash != *hash || prior_name != *name)
+                    && (prior_hash != *hash || prior_name != name)
                 {
                     return Err(OnlineError::Invalid(format!(
                         "colliding installed filename: {name}"
                     )));
                 }
-                desired.insert(name.clone(), hash.clone());
+                desired.insert(name, hash.clone());
             }
         }
         for (name, _, _) in downloads {
-            validate_mod_name(name)?;
-            for entry in fs::read_dir(&mods).map_err(|e| OnlineError::Io(e.to_string()))? {
+            let name = validate_online_path(name)?;
+            let (directory, filename) = name.split_once('/').unwrap();
+            let collection = game.join(directory);
+            if !collection.exists() {
+                continue;
+            }
+            for entry in fs::read_dir(&collection).map_err(|e| OnlineError::Io(e.to_string()))? {
                 let entry = entry.map_err(|e| OnlineError::Io(e.to_string()))?;
                 let existing = entry.file_name().to_string_lossy().into_owned();
-                if existing.eq_ignore_ascii_case(name)
-                    && (!old.owned_files.contains_key(&existing) || existing != *name)
+                let existing_path = format!("{directory}/{existing}");
+                if existing.eq_ignore_ascii_case(filename)
+                    && (!old.owned_files.contains_key(&existing_path) || existing != filename)
                 {
                     return Err(OnlineError::Invalid(format!(
                         "unmanaged or case-colliding local file: {existing}"
@@ -1475,7 +2029,8 @@ fn apply_downloads(
             if desired.get(name) == Some(hash) {
                 continue;
             }
-            let target = mods.join(name);
+            let relative = validate_online_path(name)?;
+            let target = game.join(relative);
             if !target.is_file() || file_sha512(&target)? != *hash {
                 return Err(OnlineError::Conflict {
                     path: name.clone(),
@@ -1496,7 +2051,10 @@ fn apply_downloads(
         check_context_ref(context)?;
         for (name, source, hash) in downloads {
             check_context_ref(context)?;
-            let target = mods.join(name);
+            let relative = validate_online_path(name)?;
+            let target = game.join(&relative);
+            fs::create_dir_all(target.parent().unwrap())
+                .map_err(|e| OnlineError::Io(e.to_string()))?;
             if target.exists() {
                 if file_sha512(&target)? != *hash {
                     return Err(OnlineError::Conflict {
@@ -1566,6 +2124,10 @@ struct MrSearch {
     hits: Vec<MrHit>,
 }
 #[derive(Deserialize)]
+struct MrProject {
+    project_type: String,
+}
+#[derive(Deserialize)]
 struct MrHit {
     project_id: String,
     slug: String,
@@ -1573,6 +2135,8 @@ struct MrHit {
     description: String,
     downloads: u64,
     icon_url: Option<String>,
+    #[serde(default)]
+    project_type: Option<String>,
 }
 #[derive(Deserialize)]
 struct MrVersion {
@@ -1647,6 +2211,7 @@ fn from_mr_version(v: MrVersion) -> VersionHit {
         provider: Provider::Modrinth,
         id: v.id,
         project_id: v.project_id,
+        content_kind: OnlineContentKind::Mod,
         name: v.name,
         version_number: v.version_number,
         game_versions: v.game_versions,
@@ -1690,6 +2255,11 @@ struct CfVersion {
     dependencies: Vec<CfVersionDependency>,
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfProject {
+    class_id: u64,
+}
+#[derive(Deserialize)]
 struct CfHash {
     value: String,
     algo: u32,
@@ -1709,6 +2279,8 @@ struct CfMod {
     summary: String,
     download_count: u64,
     logo: Option<CfLogo>,
+    #[serde(default)]
+    class_id: Option<u64>,
 }
 #[derive(Deserialize)]
 struct CfLogo {
@@ -1727,6 +2299,10 @@ fn project_hits_from_modrinth(value: MrSearch, provider: Provider) -> Vec<Projec
             description: h.description,
             downloads: h.downloads,
             icon_url: h.icon_url,
+            content_kind: h
+                .project_type
+                .as_deref()
+                .and_then(|value| OnlineContentKind::from_modrinth(value).ok()),
         })
         .collect()
 }
@@ -1745,6 +2321,9 @@ fn project_hits_from_curseforge(
             description: h.summary,
             downloads: h.download_count,
             icon_url: h.logo.map(|x| x.url),
+            content_kind: h
+                .class_id
+                .and_then(|id| OnlineContentKind::from_curseforge(id).ok()),
         })
         .collect()
 }
@@ -1774,6 +2353,7 @@ fn from_cf_version(project_id: &str, f: CfVersion) -> VersionHit {
         provider: Provider::CurseForge,
         id: f.id.to_string(),
         project_id: project_id.into(),
+        content_kind: OnlineContentKind::Mod,
         name: f.display_name.clone(),
         version_number: f.display_name,
         game_versions,

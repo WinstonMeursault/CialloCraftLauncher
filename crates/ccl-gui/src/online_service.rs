@@ -5,16 +5,17 @@
 
 use crate::{GuiError, GuiResult};
 use ccl_core::{
-    accounts::OsProviderKeyStore,
     config::LauncherConfig,
     online_content::{
-        OnlineContentService, OnlineError, OnlineInstallRequest, Provider, SearchQuery,
+        OnlineContentService, OnlineError, OnlineInstallRequest, PackImportMode,
+        PackInstallOptions, Provider, SearchQuery,
     },
+    profiles::{ProfileWorkspace, RootProfile},
     task::{TaskContext, TaskEvent},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -52,6 +53,15 @@ pub enum OnlineQuery {
     },
 }
 
+impl OnlineQuery {
+    pub fn target_id(&self) -> Option<&str> {
+        match self {
+            Self::Updates { id } | Self::Analyze { id } => Some(id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OnlineMutation {
@@ -68,7 +78,20 @@ pub enum OnlineMutation {
         version: Option<String>,
         #[serde(default)]
         include_optional: bool,
+        #[serde(default)]
+        mode: PackImportMode,
     },
+}
+
+impl OnlineMutation {
+    pub fn target_id(&self) -> Option<&str> {
+        match self {
+            Self::Install { id, .. } => Some(id),
+            Self::PackInstall { id, mode, .. } => {
+                (*mode == PackImportMode::UpdateExisting).then_some(id)
+            }
+        }
+    }
 }
 
 fn default_kind() -> String {
@@ -84,6 +107,7 @@ pub struct OnlineService {
     config_path: PathBuf,
     config: LauncherConfig,
     endpoints: Option<(String, String)>,
+    profile: Option<RootProfile>,
 }
 
 impl OnlineService {
@@ -95,7 +119,13 @@ impl OnlineService {
             config_path,
             config,
             endpoints: None,
+            profile: None,
         })
+    }
+
+    pub fn with_profile(mut self, profile: RootProfile) -> Self {
+        self.profile = Some(profile);
+        self
     }
 
     /// Override provider endpoints for local fixtures and embedding applications.
@@ -110,19 +140,48 @@ impl OnlineService {
     }
 
     fn core(&self) -> GuiResult<OnlineContentService> {
-        let key = if self.config.downloads.offline {
-            None
-        } else if let Ok(value) = std::env::var("CCL_CURSEFORGE_API_KEY") {
-            (!value.is_empty()).then_some(value)
-        } else {
-            provider_key(&self.config_path)?
-        };
+        let key = crate::provider_credentials::curseforge_key(
+            &self.config_path,
+            self.config.downloads.offline,
+        )?;
         let service = OnlineContentService::from_download_config(&self.config.downloads, key)
             .map_err(online_error)?;
         Ok(match &self.endpoints {
             Some((modrinth, curseforge)) => service.with_endpoints(modrinth, curseforge),
             None => service,
         })
+    }
+
+    fn begin_profile_workspace(&self) -> GuiResult<ProfileWorkspace> {
+        let profile = self
+            .profile
+            .as_ref()
+            .ok_or_else(|| GuiError::new("profile_operation_failed", "No selected root profile"))?;
+        profile
+            .begin_workspace(self.config.downloads.clone())
+            .map_err(profile_error)
+    }
+
+    async fn merge_pack_into_profile(
+        &self,
+        service: &OnlineContentService,
+        workspace_root: PathBuf,
+        profile_id: &str,
+        version: &ccl_core::online_content::VersionHit,
+        options: PackInstallOptions,
+        context: TaskContext,
+    ) -> GuiResult<ccl_core::instances::InstanceMetadata> {
+        service
+            .download_and_merge_pack_into_profile(
+                workspace_root,
+                &self.config.downloads,
+                profile_id,
+                version,
+                options,
+                Some(context),
+            )
+            .await
+            .map_err(online_error)
     }
 
     pub async fn query(&self, request: OnlineQuery) -> GuiResult<Value> {
@@ -184,17 +243,45 @@ impl OnlineService {
                 json!({"ok": true, "resolved": versions, "conflicts": conflicts})
             }
             OnlineQuery::Updates { id } => {
-                let updates = service
-                    .updates_for_instance(self.root.clone(), &self.config.downloads, &id)
-                    .await
-                    .map_err(online_error)?;
+                let updates = if self.profile.is_some() {
+                    let workspace = self.begin_profile_workspace()?;
+                    let workspace_root = workspace.root().to_path_buf();
+                    let workspace_service = service
+                        .clone()
+                        .with_runtime_subdirectory(workspace.runtime_subdirectory().to_path_buf());
+                    let result = workspace_service
+                        .updates_for_instance(workspace_root, &self.config.downloads, &id)
+                        .await
+                        .map_err(online_error);
+                    workspace.abort().map_err(profile_error)?;
+                    result?
+                } else {
+                    service
+                        .updates_for_instance(self.root.clone(), &self.config.downloads, &id)
+                        .await
+                        .map_err(online_error)?
+                };
                 json!({"ok": true, "updates": updates})
             }
             OnlineQuery::Analyze { id } => {
-                let conflicts = service
-                    .analyze_instance(self.root.clone(), &self.config.downloads, &id)
-                    .await
-                    .map_err(online_error)?;
+                let conflicts = if self.profile.is_some() {
+                    let workspace = self.begin_profile_workspace()?;
+                    let workspace_root = workspace.root().to_path_buf();
+                    let workspace_service = service
+                        .clone()
+                        .with_runtime_subdirectory(workspace.runtime_subdirectory().to_path_buf());
+                    let result = workspace_service
+                        .analyze_instance(workspace_root, &self.config.downloads, &id)
+                        .await
+                        .map_err(online_error);
+                    workspace.abort().map_err(profile_error)?;
+                    result?
+                } else {
+                    service
+                        .analyze_instance(self.root.clone(), &self.config.downloads, &id)
+                        .await
+                        .map_err(online_error)?
+                };
                 json!({"ok": true, "conflicts": conflicts})
             }
         };
@@ -215,20 +302,49 @@ impl OnlineService {
                 project,
                 version,
             } => {
-                let installed = service
-                    .install_project_with_context(
-                        &self.config.downloads,
-                        OnlineInstallRequest {
-                            root: self.root.clone(),
-                            instance_id: id,
-                            provider,
-                            project_id: project,
-                            version_id: version,
-                        },
-                        Some(context.clone()),
-                    )
-                    .await
-                    .map_err(online_error)?;
+                let request = OnlineInstallRequest {
+                    root: self.root.clone(),
+                    instance_id: id,
+                    provider,
+                    project_id: project,
+                    version_id: version,
+                };
+                let installed = if self.profile.is_some() {
+                    let workspace = self.begin_profile_workspace()?;
+                    let workspace_service = service
+                        .clone()
+                        .with_runtime_subdirectory(workspace.runtime_subdirectory().to_path_buf());
+                    let request = OnlineInstallRequest {
+                        root: workspace.root().to_path_buf(),
+                        ..request
+                    };
+                    match workspace_service
+                        .install_project_with_context(
+                            &self.config.downloads,
+                            request,
+                            Some(context.clone()),
+                        )
+                        .await
+                    {
+                        Ok(installed) => {
+                            workspace.commit().map_err(profile_error)?;
+                            installed
+                        }
+                        Err(error) => {
+                            let _ = workspace.abort();
+                            return Err(online_error(error));
+                        }
+                    }
+                } else {
+                    service
+                        .install_project_with_context(
+                            &self.config.downloads,
+                            request,
+                            Some(context.clone()),
+                        )
+                        .await
+                        .map_err(online_error)?
+                };
                 json!({"ok": true, "installed_content": installed})
             }
             OnlineMutation::PackInstall {
@@ -237,6 +353,7 @@ impl OnlineService {
                 project,
                 version,
                 include_optional,
+                mode,
             } => {
                 let selected = service
                     .versions(provider, &project, None, None)
@@ -250,17 +367,79 @@ impl OnlineService {
                             "Requested pack version is unavailable.",
                         )
                     })?;
-                let instance = service
-                    .download_and_import_pack(
-                        self.root.clone(),
-                        &self.config.downloads,
-                        &id,
-                        &selected,
-                        include_optional,
-                        Some(context.clone()),
-                    )
-                    .await
-                    .map_err(online_error)?;
+                let instance = if let Some(profile) = &self.profile {
+                    if mode != PackImportMode::UpdateExisting || profile.id() != id {
+                        return Err(GuiError::new(
+                            "instance_key_mismatch",
+                            "Selected profile does not match the requested pack target",
+                        ));
+                    }
+                    let workspace = self.begin_profile_workspace()?;
+                    let workspace_root = workspace.root().to_path_buf();
+                    let runtime_directory = workspace.runtime_directory().to_path_buf();
+                    let runtime_subdirectory = workspace.runtime_subdirectory().to_path_buf();
+                    let pack_receipt = runtime_directory.join(".ccl/modpack.json");
+                    let import =
+                        if mode == PackImportMode::UpdateExisting && !pack_receipt.is_file() {
+                            self.merge_pack_into_profile(
+                                &service,
+                                workspace_root.clone(),
+                                &id,
+                                &selected,
+                                PackInstallOptions {
+                                    include_optional,
+                                    mode,
+                                },
+                                context.clone(),
+                            )
+                            .await
+                        } else {
+                            service
+                                .clone()
+                                .with_runtime_subdirectory(runtime_subdirectory)
+                                .download_and_import_pack(
+                                    workspace_root,
+                                    &self.config.downloads,
+                                    &id,
+                                    &selected,
+                                    PackInstallOptions {
+                                        include_optional,
+                                        mode,
+                                    },
+                                    Some(context.clone()),
+                                )
+                                .await
+                                .map_err(online_error)
+                        };
+                    match import {
+                        Ok(instance) => {
+                            let committed = workspace.commit().map_err(profile_error)?;
+                            ccl_core::instances::InstanceMetadata {
+                                game_directory: committed.game_directory,
+                                ..instance
+                            }
+                        }
+                        Err(error) => {
+                            let _ = workspace.abort();
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    service
+                        .download_and_import_pack(
+                            self.root.clone(),
+                            &self.config.downloads,
+                            &id,
+                            &selected,
+                            PackInstallOptions {
+                                include_optional,
+                                mode,
+                            },
+                            Some(context.clone()),
+                        )
+                        .await
+                        .map_err(online_error)?
+                };
                 json!({"ok": true, "instance": instance, "pack_imported": true})
             }
         };
@@ -273,19 +452,6 @@ impl OnlineService {
     }
 }
 
-fn provider_key(config_path: &Path) -> GuiResult<Option<String>> {
-    let store = OsProviderKeyStore::for_config_file(config_path).map_err(account_error)?;
-    match store.get_curseforge() {
-        // An unavailable vault is handled like the existing GUI import adapter: Modrinth remains usable.
-        Err(ccl_core::accounts::AccountError::SecureStorage(_)) => Ok(None),
-        result => result.map_err(account_error),
-    }
-}
-
-fn account_error(error: ccl_core::accounts::AccountError) -> GuiError {
-    GuiError::new("account_error", error.to_string())
-}
-
 fn online_error(error: OnlineError) -> GuiError {
     let code = match &error {
         OnlineError::Offline => "offline",
@@ -296,4 +462,8 @@ fn online_error(error: OnlineError) -> GuiError {
         _ => "online_content_error",
     };
     GuiError::new(code, error.to_string())
+}
+
+fn profile_error(error: ccl_core::profiles::ProfileError) -> GuiError {
+    GuiError::new("profile_operation_failed", error.to_string())
 }

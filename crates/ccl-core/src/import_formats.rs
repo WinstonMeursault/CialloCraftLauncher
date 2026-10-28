@@ -81,6 +81,7 @@ impl std::fmt::Debug for ImportOptionsExt {
 pub struct ImportFormatService {
     root: PathBuf,
     config: DownloadConfig,
+    runtime_subdirectory: Option<PathBuf>,
     curseforge_api: String,
     #[cfg(test)]
     prepared: bool,
@@ -91,6 +92,22 @@ impl ImportFormatService {
         Self {
             root,
             config,
+            runtime_subdirectory: None,
+            curseforge_api: "https://api.curseforge.com/v1".into(),
+            #[cfg(test)]
+            prepared: false,
+        }
+    }
+
+    pub fn new_with_runtime_subdirectory(
+        root: PathBuf,
+        config: DownloadConfig,
+        relative: PathBuf,
+    ) -> Self {
+        Self {
+            root,
+            config,
+            runtime_subdirectory: (!relative.as_os_str().is_empty()).then_some(relative),
             curseforge_api: "https://api.curseforge.com/v1".into(),
             #[cfg(test)]
             prepared: false,
@@ -103,6 +120,7 @@ impl ImportFormatService {
         Self {
             root,
             config,
+            runtime_subdirectory: None,
             curseforge_api: "https://api.curseforge.com/v1".into(),
             prepared: true,
         }
@@ -142,8 +160,32 @@ impl ImportFormatService {
         options: &ImportOptionsExt,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ImportFormatError> {
-        self.import_inner(id, archive, options, context, false)
-            .await
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::Upsert,
+        )
+        .await
+    }
+
+    /// Update an existing imported pack only; a missing target ID is rejected under its lock.
+    pub async fn import_existing(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptionsExt,
+        context: Option<TaskContext>,
+    ) -> Result<InstanceMetadata, ImportFormatError> {
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::UpdateExisting,
+        )
+        .await
     }
 
     /// Import into a new instance, rejecting existing IDs inside the pack transaction lock.
@@ -154,7 +196,14 @@ impl ImportFormatService {
         options: &ImportOptionsExt,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ImportFormatError> {
-        self.import_inner(id, archive, options, context, true).await
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::CreateOnly,
+        )
+        .await
     }
 
     async fn import_inner(
@@ -163,37 +212,32 @@ impl ImportFormatService {
         archive: &Path,
         options: &ImportOptionsExt,
         context: Option<TaskContext>,
-        create_only: bool,
+        mode: crate::instances::PackTransactionMode,
     ) -> Result<InstanceMetadata, ImportFormatError> {
         check_cancelled(context.as_ref())?;
         if Self::is_modrinth(archive)? {
-            let service = ModpackService::new(self.root.clone(), self.config.clone())?;
-            let imported = if create_only {
-                service
-                    .import_new(
-                        id,
-                        archive,
-                        &ImportOptions {
-                            include_optional: options.include_optional,
-                            replace_modified: options.replace_modified,
-                            allowed_hosts: options.allowed_hosts.clone(),
-                        },
-                        context,
-                    )
-                    .await?
-            } else {
-                service
-                    .import(
-                        id,
-                        archive,
-                        &ImportOptions {
-                            include_optional: options.include_optional,
-                            replace_modified: options.replace_modified,
-                            allowed_hosts: options.allowed_hosts.clone(),
-                        },
-                        context,
-                    )
-                    .await?
+            let service = self.modpack_service()?;
+            let import_options = ImportOptions {
+                include_optional: options.include_optional,
+                replace_modified: options.replace_modified,
+                allowed_hosts: options.allowed_hosts.clone(),
+            };
+            let imported = match mode {
+                crate::instances::PackTransactionMode::CreateOnly => {
+                    service
+                        .import_new(id, archive, &import_options, context)
+                        .await?
+                }
+                crate::instances::PackTransactionMode::UpdateExisting => {
+                    service
+                        .import_existing(id, archive, &import_options, context)
+                        .await?
+                }
+                crate::instances::PackTransactionMode::Upsert => {
+                    service
+                        .import(id, archive, &import_options, context)
+                        .await?
+                }
             };
             return Ok(imported);
         }
@@ -218,34 +262,51 @@ impl ImportFormatService {
                 }
                 ArchiveKind::MultiMc => convert_multimc(archive, &temp)?,
             }
-            #[cfg(test)]
-            let service = if self.prepared {
-                ModpackService::new_prepared(self.root.clone(), self.config.clone())?
-            } else {
-                ModpackService::new(self.root.clone(), self.config.clone())?
-            };
-            #[cfg(not(test))]
-            let service = ModpackService::new(self.root.clone(), self.config.clone())?;
+            let service = self.modpack_service()?;
             let import_options = ImportOptions {
                 include_optional: options.include_optional,
                 replace_modified: options.replace_modified,
                 allowed_hosts: options.allowed_hosts.clone(),
             };
-            if create_only {
-                service
+            match mode {
+                crate::instances::PackTransactionMode::CreateOnly => service
                     .import_new(id, &temp, &import_options, context)
                     .await
-                    .map_err(ImportFormatError::from)
-            } else {
-                service
+                    .map_err(ImportFormatError::from),
+                crate::instances::PackTransactionMode::UpdateExisting => service
+                    .import_existing(id, &temp, &import_options, context)
+                    .await
+                    .map_err(ImportFormatError::from),
+                crate::instances::PackTransactionMode::Upsert => service
                     .import(id, &temp, &import_options, context)
                     .await
-                    .map_err(ImportFormatError::from)
+                    .map_err(ImportFormatError::from),
             }
         }
         .await;
         let _ = fs::remove_file(temp);
         result
+    }
+}
+
+impl ImportFormatService {
+    fn modpack_service(&self) -> Result<ModpackService, ImportFormatError> {
+        let relative = self.runtime_subdirectory.clone().unwrap_or_default();
+        #[cfg(test)]
+        {
+            if self.prepared {
+                return Ok(ModpackService::new_prepared_with_runtime_subdirectory(
+                    self.root.clone(),
+                    self.config.clone(),
+                    relative,
+                )?);
+            }
+        }
+        Ok(ModpackService::new_with_runtime_subdirectory(
+            self.root.clone(),
+            self.config.clone(),
+            relative,
+        )?)
     }
 }
 

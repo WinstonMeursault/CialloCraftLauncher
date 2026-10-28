@@ -172,8 +172,7 @@ impl Maintenance {
                 })))
             }
             MaintenanceRequest::Diagnose { key, run } => {
-                let root = self.diagnostic_root(key.as_deref())?;
-                let service = DiagnosticsService::new(&root, root.join(".ccl"));
+                let service = self.diagnostic_service(key.as_deref())?;
                 match run {
                     Some(run) => Ok(json!(service.diagnose_run(&run).map_err(diagnostic_error)?)),
                     None => Ok(json!(service.doctor(&Default::default()))),
@@ -185,8 +184,8 @@ impl Maintenance {
                 output,
                 include_log_preview,
             } => {
-                let root = self.diagnostic_root(key.as_deref())?;
-                let report = DiagnosticsService::new(&root, root.join(".ccl"))
+                let report = self
+                    .diagnostic_service(key.as_deref())?
                     .export(&ExportOptions {
                         run_id: run,
                         include_raw_log_preview: include_log_preview,
@@ -204,16 +203,20 @@ impl Maintenance {
             ),
         }
     }
-    fn diagnostic_root(&self, key: Option<&str>) -> GuiResult<PathBuf> {
+    fn diagnostic_service(&self, key: Option<&str>) -> GuiResult<DiagnosticsService> {
         let Some(key) = key else {
-            return Ok(self.root.clone());
+            return Ok(DiagnosticsService::new(&self.root, self.root.join(".ccl")));
         };
         let config = LauncherConfig::read_or_default(&self.config)
             .map_err(|e| GuiError::new("configuration_error", e.to_string()))?;
         crate::discover_entries(&self.root, &config.downloads)?
             .into_iter()
             .find(|entry| entry.key == key)
-            .map(|entry| entry.game_directory)
+            .map(|entry| {
+                DiagnosticsService::new(&entry.game_directory, entry.resource_root.join(".ccl"))
+                    .with_log_root(entry.resource_root)
+                    .with_profile(entry.id, entry.launch_version)
+            })
             .ok_or_else(|| GuiError::new("invalid_key", "Select an available instance"))
     }
 }

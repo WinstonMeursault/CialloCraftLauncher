@@ -131,6 +131,31 @@ fn online_mutations_are_typed_and_reject_unknown_fields() {
 }
 
 #[test]
+fn pack_install_mode_defaults_to_create_new_and_accepts_explicit_update() {
+    let created: OnlineMutation = serde_json::from_value(serde_json::json!({
+        "operation":"pack_install", "id":"fresh", "provider":"modrinth", "project":"pack"
+    }))
+    .unwrap();
+    assert!(matches!(
+        created,
+        OnlineMutation::PackInstall {
+            mode: ccl_core::online_content::PackImportMode::CreateNew,
+            ..
+        }
+    ));
+    let updated: OnlineMutation = serde_json::from_value(serde_json::json!({
+        "operation":"pack_install", "id":"existing", "provider":"modrinth", "project":"pack", "mode":"update_existing"
+    })).unwrap();
+    assert!(matches!(
+        updated,
+        OnlineMutation::PackInstall {
+            mode: ccl_core::online_content::PackImportMode::UpdateExisting,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn search_defaults_match_cli_defaults() {
     let request: OnlineQuery = serde_json::from_value(serde_json::json!({
         "operation": "search", "provider": "modrinth", "query": "fabric api"
@@ -173,11 +198,13 @@ async fn search_uses_local_provider_fixture_and_returns_cli_result_shape() {
 
 #[tokio::test]
 async fn resolve_uses_local_fixture_and_reports_required_graph_and_conflicts() {
-    let endpoint = fixture(
-        r#"[{"id":"root-v1","project_id":"root","name":"Root","version_number":"1","game_versions":["1.21.1"],"loaders":["fabric"],"files":[],"dependencies":[]}]"#,
-        "200 OK",
-        Duration::ZERO,
-    );
+    let (endpoint, worker) = fixture_sequence(vec![
+        ("/project/root", r#"{"project_type":"mod"}"#),
+        (
+            "/project/root/version",
+            r#"[{"id":"root-v1","project_id":"root","name":"Root","version_number":"1","game_versions":["1.21.1"],"loaders":["fabric"],"files":[],"dependencies":[]}]"#,
+        ),
+    ]);
     let temp = tempfile::tempdir().unwrap();
     let service = ccl_gui::online_service::OnlineService::new(
         temp.path().into(),
@@ -197,6 +224,7 @@ async fn resolve_uses_local_fixture_and_reports_required_graph_and_conflicts() {
         .unwrap();
     assert_eq!(value["resolved"].as_array().unwrap().len(), 1);
     assert!(value["conflicts"].as_array().unwrap().is_empty());
+    worker.join().unwrap();
 }
 
 #[tokio::test]
@@ -207,8 +235,10 @@ async fn resolve_plan_uses_the_selected_version_and_its_pinned_dependency() {
     ]"#;
     let dependency = r#"{"id":"dep-v1","project_id":"dep","name":"Dependency 1","version_number":"1","game_versions":["1.21.1"],"loaders":["fabric"],"files":[],"dependencies":[]}"#;
     let (endpoint, worker) = fixture_sequence(vec![
+        ("/project/root", r#"{"project_type":"mod"}"#),
         ("/project/root/version", roots),
         ("/version/dep-v1", dependency),
+        ("/project/dep", r#"{"project_type":"mod"}"#),
     ]);
     let temp = tempfile::tempdir().unwrap();
     let service = ccl_gui::online_service::OnlineService::new(
@@ -235,7 +265,10 @@ async fn resolve_plan_uses_the_selected_version_and_its_pinned_dependency() {
 
 #[tokio::test]
 async fn install_reports_unavailable_pinned_version_from_provider_fixture() {
-    let endpoint = fixture("[]", "200 OK", Duration::ZERO);
+    let (endpoint, worker) = fixture_sequence(vec![
+        ("/project/missing", r#"{"project_type":"mod"}"#),
+        ("/project/missing/version", "[]"),
+    ]);
     let temp = tempfile::tempdir().unwrap();
     let root = create_instance(temp.path());
     let service =
@@ -256,6 +289,7 @@ async fn install_reports_unavailable_pinned_version_from_provider_fixture() {
         .unwrap_err();
     assert_eq!(error.code, "invalid_online_request", "{error:?}");
     assert!(error.message.contains("compatible"));
+    worker.join().unwrap();
 }
 
 #[tokio::test]
@@ -290,4 +324,35 @@ async fn install_cancellation_interrupts_a_stalled_provider_request() {
         .unwrap()
         .unwrap_err();
     assert_eq!(error.code, "cancelled", "{error:?}");
+}
+
+#[tokio::test]
+async fn ordinary_profile_online_queries_read_through_a_temporary_managed_workspace() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let profile_dir = root.join("versions/plain");
+    std::fs::create_dir_all(profile_dir.join("mods")).unwrap();
+    std::fs::write(
+        profile_dir.join("plain.json"),
+        r#"{"id":"plain","libraries":[]}"#,
+    )
+    .unwrap();
+    let profile = ccl_core::profiles::RootProfile::open(root, "plain").unwrap();
+    let service =
+        ccl_gui::online_service::OnlineService::new(root.into(), root.join("config.json"))
+            .unwrap()
+            .with_profile(profile);
+
+    let updates = service
+        .query(OnlineQuery::Updates { id: "plain".into() })
+        .await
+        .unwrap();
+    let conflicts = service
+        .query(OnlineQuery::Analyze { id: "plain".into() })
+        .await
+        .unwrap();
+    assert_eq!(updates["updates"].as_array().unwrap().len(), 0);
+    assert_eq!(conflicts["conflicts"].as_array().unwrap().len(), 0);
+    let workspace_dir = root.join(".ccl/profile-workspaces");
+    assert!(!workspace_dir.exists() || std::fs::read_dir(workspace_dir).unwrap().next().is_none());
 }
