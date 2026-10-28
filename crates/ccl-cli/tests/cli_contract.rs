@@ -443,7 +443,12 @@ fn managed_launch_resolves_versions_from_the_managed_resource_root() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(message.contains(".ccl/instances/managed/game"), "{message}");
+    assert!(
+        message
+            .replace('\\', "/")
+            .contains(".ccl/instances/managed/game/versions/1.21.1/1.21.1.jar"),
+        "{message}"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
