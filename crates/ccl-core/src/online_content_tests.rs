@@ -13,6 +13,7 @@ fn version(project: &str, id: &str, filename: &str, bytes: &[u8]) -> VersionHit 
         provider: Provider::Modrinth,
         id: id.into(),
         project_id: project.into(),
+        content_kind: OnlineContentKind::Mod,
         name: id.into(),
         version_number: id.into(),
         game_versions: vec!["1.21.1".into()],
@@ -71,10 +72,17 @@ impl Fixture {
                 project_id: v.project_id.clone(),
                 version_id: v.id.clone(),
                 version_number: v.version_number.clone(),
-                files: std::collections::BTreeMap::from([(file.filename.clone(), hash.clone())]),
+                files: std::collections::BTreeMap::from([(
+                    format!("{}/{}", v.content_kind.directory(), file.filename),
+                    hash.clone(),
+                )]),
                 metadata: Some(v.clone()),
             });
-            downloads.push((file.filename.clone(), path, hash));
+            downloads.push((
+                format!("{}/{}", v.content_kind.directory(), file.filename),
+                path,
+                hash,
+            ));
         }
         apply_downloads(
             self.root.clone(),
@@ -83,6 +91,7 @@ impl Fixture {
             records,
             &downloads,
             context,
+            None,
         )
     }
 }
@@ -244,6 +253,112 @@ fn dependency_types_pins_and_incompatible_versions_are_not_flattened() {
     let conflicts = OnlineContentService::analyze_conflicts(&[a, dep, bad]);
     assert!(conflicts.iter().any(|c| c.path == "pinned-version:dep"));
     assert!(conflicts.iter().any(|c| c.path == "incompatible:bad"));
+}
+
+#[test]
+fn provider_declared_project_types_control_online_content_paths() {
+    assert_eq!(
+        OnlineContentKind::from_modrinth("resourcepack").unwrap(),
+        OnlineContentKind::ResourcePack
+    );
+    assert_eq!(
+        OnlineContentKind::from_modrinth("shader").unwrap(),
+        OnlineContentKind::ShaderPack
+    );
+    assert_eq!(
+        OnlineContentKind::from_curseforge(12).unwrap(),
+        OnlineContentKind::ResourcePack
+    );
+    assert_eq!(
+        OnlineContentKind::from_curseforge(6552).unwrap(),
+        OnlineContentKind::ShaderPack
+    );
+    assert!(OnlineContentKind::from_curseforge(999).is_err());
+    assert!(validate_online_filename(OnlineContentKind::ResourcePack, "pack.zip").is_ok());
+    assert!(validate_online_filename(OnlineContentKind::ShaderPack, "shader.zip").is_ok());
+    assert!(validate_online_filename(OnlineContentKind::ResourcePack, "bad.jar").is_err());
+    assert!(validate_online_filename(OnlineContentKind::ShaderPack, "../bad.zip").is_err());
+    assert_eq!(
+        validate_online_path("resourcepacks/pack.zip").unwrap(),
+        "resourcepacks/pack.zip"
+    );
+}
+
+#[test]
+fn resource_and_shader_content_install_and_update_in_their_owned_collections() {
+    let f = Fixture::new();
+    let mut resource = version("rp", "rp1", "texture.zip", b"resource-v1");
+    resource.content_kind = OnlineContentKind::ResourcePack;
+    let mut shader = version("sp", "sp1", "shader.zip", b"shader-v1");
+    shader.content_kind = OnlineContentKind::ShaderPack;
+    f.apply(&[resource.clone(), shader], &[b"resource-v1", b"shader-v1"])
+        .unwrap();
+    assert_eq!(
+        fs::read(f.game.join("resourcepacks/texture.zip")).unwrap(),
+        b"resource-v1"
+    );
+    assert_eq!(
+        fs::read(f.game.join("shaderpacks/shader.zip")).unwrap(),
+        b"shader-v1"
+    );
+
+    resource.id = "rp2".into();
+    resource.version_number = "rp2".into();
+    resource.files[0].filename = "texture-new.zip".into();
+    resource.files[0].sha512 = Some(format!("{:x}", Sha512::digest(b"resource-v2")));
+    f.apply(&[resource], &[b"resource-v2"]).unwrap();
+    assert!(!f.game.join("resourcepacks/texture.zip").exists());
+    assert_eq!(
+        fs::read(f.game.join("resourcepacks/texture-new.zip")).unwrap(),
+        b"resource-v2"
+    );
+    assert_eq!(
+        fs::read(f.game.join("shaderpacks/shader.zip")).unwrap(),
+        b"shader-v1"
+    );
+}
+
+#[test]
+fn root_profile_pack_merge_accepts_matching_files_but_refuses_modified_user_files() {
+    let temp = std::env::temp_dir().join(format!(
+        "ccl-online-pack-merge-{}-{}",
+        std::process::id(),
+        TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let source = temp.join("source");
+    let target = temp.join("target");
+    fs::create_dir_all(source.join("mods")).unwrap();
+    fs::create_dir_all(target.join("mods")).unwrap();
+    fs::write(source.join("mods/same.jar"), b"same").unwrap();
+    fs::write(target.join("mods/same.jar"), b"same").unwrap();
+    fs::write(source.join("mods/new.jar"), b"new").unwrap();
+    fs::write(source.join("mods/conflict.jar"), b"pack").unwrap();
+    fs::write(target.join("mods/conflict.jar"), b"profile").unwrap();
+    let owned = ["mods/same.jar", "mods/new.jar"]
+        .into_iter()
+        .map(|relative| {
+            (
+                relative.to_owned(),
+                file_sha512(&source.join(relative)).unwrap(),
+            )
+        })
+        .collect();
+    merge_pack_owned_files(&source, &target, &owned).unwrap();
+    assert_eq!(fs::read(target.join("mods/new.jar")).unwrap(), b"new");
+    let mut conflicting = owned;
+    conflicting.insert(
+        "mods/conflict.jar".into(),
+        file_sha512(&source.join("mods/conflict.jar")).unwrap(),
+    );
+    let error = merge_pack_owned_files(&source, &target, &conflicting).unwrap_err();
+    assert!(matches!(error, OnlineError::Conflict { .. }));
+    assert_eq!(fs::read(target.join("mods/same.jar")).unwrap(), b"same");
+    assert_eq!(fs::read(target.join("mods/new.jar")).unwrap(), b"new");
+    assert_eq!(
+        fs::read(target.join("mods/conflict.jar")).unwrap(),
+        b"profile"
+    );
+    fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
@@ -425,8 +540,10 @@ async fn modrinth_fixture_server_exercises_search_versions_and_recursive_pinned_
             "/search",
             r#"{"hits":[{"project_id":"root","slug":"root","title":"Root","description":"fixture","downloads":1,"icon_url":null}]}"#,
         ),
+        ("/project/root", r#"{"project_type":"mod"}"#),
         ("/project/root/version", root_body),
         ("/version/dep-v1", dep_body),
+        ("/project/dep", r#"{"project_type":"mod"}"#),
     ]);
     let service = OnlineContentService::new(OnlineConfig::default())
         .unwrap()
