@@ -71,6 +71,8 @@ pub struct LaunchRequest {
     /// Optional profile-specific game directory and process working directory.
     pub working_directory: Option<PathBuf>,
     pub version: String,
+    /// Stable library identity used to isolate launch history across shared resource roots.
+    pub profile_id: Option<String>,
     pub username: String,
     pub java: Option<PathBuf>,
     pub memory: crate::memory::MemoryPolicy,
@@ -96,6 +98,8 @@ impl Drop for PreparedLaunch {
 pub struct LaunchResult {
     pub run_id: String,
     pub version: String,
+    #[serde(default)]
+    pub profile_id: Option<String>,
     pub pid: u32,
     pub exit_code: Option<i32>,
     pub cancelled: bool,
@@ -409,13 +413,24 @@ impl LaunchService {
         context: Option<TaskContext>,
     ) -> Result<LaunchResult, LaunchError> {
         let prepared = self.prepare(request, context.clone()).await?;
-        run_process(
+        let mut result = run_process(
             &prepared.plan,
             &prepared.version,
             &request.game_directory.join(".ccl/logs"),
             context,
         )
-        .await
+        .await?;
+        result.profile_id = Some(
+            request
+                .profile_id
+                .as_deref()
+                .unwrap_or(&request.version)
+                .to_owned(),
+        );
+        let record_path = result.log_path.with_extension("json");
+        let bytes = serde_json::to_vec_pretty(&result).map_err(metadata::MetadataError::from)?;
+        fs::write(&record_path, bytes).map_err(|source| io(&record_path, source))?;
+        Ok(result)
     }
 }
 
@@ -698,6 +713,7 @@ pub async fn run_process(
     let result = LaunchResult {
         run_id: run_id.clone(),
         version: version.into(),
+        profile_id: None,
         pid,
         exit_code: status.code(),
         cancelled,
