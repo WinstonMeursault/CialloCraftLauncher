@@ -51,7 +51,7 @@ test('history replaces stale revisions, sorts newest first, and retains eight ta
 })
 
 test('keeps entries with active revision storage when a busy library refresh omits them', () => {
-  const oldEntry = { key: 'instance:' + 'a'.repeat(64), id: 'atelier', display_name: 'Atelier', has_revision_storage: true, memory_override: null, launch_version: '1.21.1', minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
+  const oldEntry = { key: 'instance:' + 'a'.repeat(64), id: 'atelier', display_name: 'Atelier', has_revision_storage: true, resource_root: '/games/atelier', profile_directory: '/games/atelier/versions/1.21.1', delete_paths: ['/games/atelier'], retained_paths: [], dependent_profiles: [], memory_override: null, launch_version: '1.21.1', minecraft: '1.21.1', loader: 'fabric', game_directory: '/games/atelier' }
   const current: Bootstrap = { root: '/games', root_exists: true, setup_required: false, config_path: '/config', launch_defaults: { java: null, max_memory_mb: 4096, auto_memory: true, auto_install_java: true, network_offline: false }, preferences: { theme: 'system', language: 'en', reduce_transparency: false, reduce_motion: false, last_selected_instance: null, background_image: null }, entries: [oldEntry], warnings: [], hidden_entries: 0 }
   const incomplete: Bootstrap = { ...current, entries: [], warnings: ['Instance revision metadata is busy or unreadable; retry after other operations finish'] }
 
@@ -96,7 +96,7 @@ test('a single oversized Unicode line is truncated on a UTF-8 boundary', () => {
 
 // Saved display names can collide; only the opaque library key chooses a game.
 test('instance selection requires the stable key and never falls back to another game', () => {
-  const first = { key: 'profile:a', id: 'a', display_name: '酒狐的奇妙冒险 with spaces', has_revision_storage: false, memory_override: null, launch_version: 'a', minecraft: '1.20.1', loader: 'forge', game_directory: '/games/a' }
+  const first = { key: 'profile:a', id: 'a', display_name: '酒狐的奇妙冒险 with spaces', has_revision_storage: false, resource_root: '/games', profile_directory: '/games/versions/a', delete_paths: ['/games/versions/a'], retained_paths: ['/games'], dependent_profiles: [], memory_override: null, launch_version: 'a', minecraft: '1.20.1', loader: 'forge', game_directory: '/games/a' }
   const second = { ...first, key: 'profile:b', id: 'b', game_directory: '/games/b' }
   assert.equal(resolveSelectedInstance([first, second], second.key), second)
   assert.equal(resolveSelectedInstance([first, second], second.display_name), null)
