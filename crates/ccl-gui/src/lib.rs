@@ -11,6 +11,7 @@ pub mod maintenance;
 pub mod online_service;
 pub mod operations;
 mod preferences;
+mod provider_credentials;
 pub mod self_update;
 mod tasks;
 pub mod update_service;

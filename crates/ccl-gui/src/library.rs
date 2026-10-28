@@ -19,6 +19,11 @@ pub struct LibraryEntry {
     pub has_revision_storage: bool,
     pub minecraft: String,
     pub loader: Option<ccl_core::loaders::LoaderKind>,
+    pub resource_root: PathBuf,
+    pub profile_directory: PathBuf,
+    pub delete_paths: Vec<PathBuf>,
+    pub retained_paths: Vec<PathBuf>,
+    pub dependent_profiles: Vec<String>,
     pub game_directory: PathBuf,
     pub launch_version: String,
     pub memory_override: Option<ccl_core::memory::MemoryPolicy>,
@@ -106,7 +111,7 @@ pub fn bootstrap(
     match discover_entries_state(&result.root, &config.downloads) {
         Ok((mut entries, busy)) => {
             for entry in &mut entries {
-                let key = ccl_core::memory::profile_key(&entry.game_directory, &entry.id)
+                let key = ccl_core::memory::profile_key(&entry.resource_root, &entry.id)
                     .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
                 entry.memory_override = config.launch.instance_memory.get(&key).copied();
             }
@@ -162,6 +167,8 @@ fn discover_entries_state(
             .map(|record| record.display_name.clone())
             .unwrap_or_else(|| id.clone());
         let (minecraft, loader) = root_profile_identity(&root, &id);
+        let profile = ccl_core::profiles::RootProfile::open(&root, &id)
+            .map_err(|error| GuiError::new("library_unavailable", error.to_string()))?;
         entries.push(LibraryEntry {
             key,
             id: id.clone(),
@@ -169,7 +176,15 @@ fn discover_entries_state(
             has_revision_storage: false,
             minecraft,
             loader,
-            game_directory: directory,
+            resource_root: directory.clone(),
+            profile_directory: profile.profile_directory().into(),
+            delete_paths: profile.delete_paths(),
+            retained_paths: profile.retained_paths(),
+            dependent_profiles: profile
+                .dependents()
+                .map_err(|error| GuiError::new("library_unavailable", error.to_string()))?,
+            game_directory: ccl_core::launch::installed_working_directory(&root, &id)
+                .map_err(|error| GuiError::new("directory_error", error.to_string()))?,
             launch_version,
             memory_override: None,
         });
@@ -203,6 +218,15 @@ fn discover_entries_state(
             has_revision_storage: true,
             minecraft: instance.minecraft,
             loader: instance.loader,
+            resource_root: directory.clone(),
+            profile_directory: directory.join("versions").join(&launch_version),
+            delete_paths: directory
+                .parent()
+                .map(Path::to_path_buf)
+                .into_iter()
+                .collect(),
+            retained_paths: Vec::new(),
+            dependent_profiles: Vec::new(),
             game_directory: directory,
             launch_version,
             memory_override: None,
@@ -413,7 +437,7 @@ pub fn update_library(
                         "This library entry is no longer available.",
                     )
                 })?;
-            let key = ccl_core::memory::profile_key(&entry.game_directory, &entry.id)
+            let key = ccl_core::memory::profile_key(&entry.resource_root, &entry.id)
                 .map_err(|error| GuiError::new("configuration_error", error.to_string()))?;
             ccl_core::config::ConfigStore::new(config_path)
                 .update(|config| {
@@ -471,6 +495,50 @@ mod tests {
             serde_json::to_vec(&metadata).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn discovery_separates_runtime_resources_and_deletion_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("minecraft");
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        write_root_version(&root, "base", json!({"id":"base","mainClass":"Main"}));
+        write_root_version(
+            &root,
+            "isolated",
+            json!({"id":"isolated","inheritsFrom":"base"}),
+        );
+        fs::create_dir_all(root.join("versions/isolated/saves")).unwrap();
+        write_root_version(&root, "custom", json!({"id":"custom","mainClass":"Main"}));
+        let custom = temp.path().join("custom runtime");
+        fs::create_dir_all(&custom).unwrap();
+        let custom = fs::canonicalize(custom).unwrap();
+        fs::write(
+            root.join("versions/custom/hmclversion.cfg"),
+            serde_json::to_vec(&json!({
+                "usesGlobal":false,"gameDirType":2,"gameDir":custom
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let entries = discover_entries(&root, &Default::default()).unwrap();
+        let base = entries.iter().find(|e| e.id == "base").unwrap();
+        assert_eq!(base.resource_root, root);
+        assert_eq!(base.game_directory, root);
+        assert_eq!(base.dependent_profiles, vec!["isolated"]);
+        assert!(!base.delete_paths.contains(&root));
+        let isolated = entries.iter().find(|e| e.id == "isolated").unwrap();
+        assert_eq!(isolated.game_directory, root.join("versions/isolated"));
+        assert!(isolated.delete_paths.contains(&isolated.game_directory));
+        let external = entries.iter().find(|e| e.id == "custom").unwrap();
+        assert_eq!(external.game_directory, custom);
+        assert!(external.retained_paths.contains(&custom));
+        assert!(!external.delete_paths.contains(&custom));
+        assert!(
+            !root.join(".ccl/profiles").exists(),
+            "discovery must not adopt or snapshot profiles"
+        );
     }
 
     #[test]
