@@ -1366,7 +1366,11 @@ fn acquire_lock_file(root: &Path, key: &str) -> ProfileResult<File> {
         .open(&path)
         .map_err(|e| io(&path, e))?;
     file.try_lock_exclusive().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::WouldBlock {
+        // Windows reports ERROR_LOCK_VIOLATION rather than WouldBlock.
+        if e.kind() == std::io::ErrorKind::WouldBlock
+            || e.raw_os_error()
+                .is_some_and(|code| Some(code) == fs2::lock_contended_error().raw_os_error())
+        {
             ProfileError::Conflict(key.into())
         } else {
             io(&path, e)
