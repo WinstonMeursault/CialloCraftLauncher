@@ -25,6 +25,7 @@ pub mod natives;
 pub mod network;
 pub mod online_content;
 pub mod optifine;
+pub mod profiles;
 pub mod runtime;
 pub mod source;
 pub mod task;

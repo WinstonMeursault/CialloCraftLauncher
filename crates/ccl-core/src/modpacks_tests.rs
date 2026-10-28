@@ -45,6 +45,7 @@ fn service(root: &Path) -> ModpackService {
     ModpackService {
         instances: InstanceService::new(root.to_path_buf(), DownloadConfig::default()).unwrap(),
         config: DownloadConfig::default(),
+        runtime_subdirectory: None,
         prepared: true,
     }
 }
@@ -70,6 +71,29 @@ fn pack(
 
 fn imports() -> ImportOptions {
     ImportOptions::default()
+}
+
+#[tokio::test]
+async fn import_existing_rejects_missing_id_while_import_keeps_upsert_behavior() {
+    let temp = TempDir::new("strict-update");
+    let service = service(temp.path());
+    let archive = pack(temp.path(), "strict-update", []);
+
+    let error = service
+        .import_existing("missing", &archive, &imports(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ModpackError::Instance(InstanceError::NotFound(_))
+    ));
+    assert!(service.instances.metadata("missing").is_err());
+
+    let imported = service
+        .import("missing", &archive, &imports(), None)
+        .await
+        .unwrap();
+    assert_eq!(imported.id, "missing");
 }
 
 #[tokio::test]

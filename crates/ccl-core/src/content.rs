@@ -98,9 +98,22 @@ impl ContentService {
         })
     }
 
+    pub fn new_with_runtime_subdirectory(
+        root: PathBuf,
+        config: DownloadConfig,
+        relative: PathBuf,
+    ) -> ContentResult<Self> {
+        Ok(Self {
+            instances: InstanceService::new(root, config)?.with_runtime_subdirectory(relative)?,
+        })
+    }
+
     pub fn list(&self, id: &str, kind: ContentKind) -> ContentResult<Vec<ContentEntry>> {
         let guard = self.instances.acquire_launch(id)?;
-        let directory = guard.game_directory().join(kind.directory());
+        let directory = self
+            .instances
+            .runtime_path_for(guard.game_directory())
+            .join(kind.directory());
         reject_symlink(&directory)?;
         let mut result = Vec::new();
         let entries = match fs::read_dir(&directory) {
@@ -315,9 +328,9 @@ impl ContentService {
 
     pub fn backup(&self, id: &str, archive_path: &Path) -> ContentResult<()> {
         let guard = self.instances.acquire_launch(id)?;
-        let game = guard.game_directory();
+        let game = self.instances.runtime_path_for(guard.game_directory());
         let parent = archive_path.parent().unwrap_or_else(|| Path::new("."));
-        let game_canonical = fs::canonicalize(game).map_err(|e| io(game, e))?;
+        let game_canonical = fs::canonicalize(&game).map_err(|e| io(&game, e))?;
         if canonicalize_future(archive_path)?.starts_with(&game_canonical) {
             return Err(ContentError::Invalid(
                 "backup destination must be outside the instance game directory".into(),
@@ -365,7 +378,7 @@ impl ContentService {
                 present,
             });
             if present {
-                collect_files(game, &path, &mut records, &mut directories)?;
+                collect_files(&game, &path, &mut records, &mut directories)?;
             }
         }
         records.sort_by(|a, b| a.0.cmp(&b.0));

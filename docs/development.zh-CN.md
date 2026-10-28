@@ -13,7 +13,7 @@
 - [Microsoft 应用设置与可选登录验收](#microsoft-application)
 - [验证与预览包](#validation)
 - [发行清单与命令](#release)
-- [v0.3.3 发行说明](#release-notes)
+- [v0.3.4 发行说明](#release-notes)
 - [当前功能范围](#scope)
 
 <a id="environment"></a>
@@ -200,6 +200,8 @@ CialloCraftLauncher 最初以命令行为首个界面。可复用的 Rust 核心
 
 `instances` 服务管理 `<游戏根目录>/.ccl/instances/<id>/game`。安装和更新在独立暂存修订版中构建，成功后才提交。事务日志支持修订版切换中断后的恢复，并保留前一成功修订版以便回滚。加载器更新和移除会保留当前用户数据。整合包导入/更新和内容编辑也使用相同的暂存版本事务与实例跨进程锁；游戏正在持锁运行时，修改不能替换其目录。
 
+`profiles` 服务管理已有 `versions/<ID>` 配置，不移动游戏数据；发现过程只读。实际游戏目录与共享资源分开，使用和启动一致的 HMCL 兼容解析规则。显式编辑在 `.ccl/profile-workspaces` 的持锁私有工作区进行，管理快照保存在 `.ccl/profiles`，检测源文件并发变化后原地发布。删除仅作用于拥有的路径，并拒绝被其他配置引用的目标；位于配置目录外的共享或自定义游戏数据会保留。CLI 的 `version:ID`、`instance:ID` 选择器与 GUI 游戏库 key 避免同名 ID 指向错误存储。
+
 实例生命周期操作可重命名、复制、删除实例，查看和恢复保留的修订版，报告逻辑磁盘用量，并预览或执行归档修订版及未完成暂存目录的清理。清理不会选择活动世界或内容；硬链接意味着逻辑字节数不等于实际磁盘占用，也不能保证释放同等空间。参阅[实例生命周期](user-guide.zh-CN.md#instances)。
 
 归档导入可识别 Modrinth、CurseForge 和 MultiMC/Prism 导出包。CurseForge 远程文件解析使用官方 API，并要求用户自行提供 API 密钥；请求范围的测试夹具不代表已获得真实 API 授权。MultiMC/Prism 导入支持受支持的原版/加载器组件和本地游戏内容，并会拒绝不支持的自定义补丁。这些转换不会执行归档钩子，也不会导入账户数据库。参阅[归档导入](user-guide.zh-CN.md#imports)。
@@ -355,7 +357,7 @@ $env:TARGET = $target
 
 ### 开发版
 
-本文档对应 v0.3.3 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
+本文档对应 v0.3.4 GUI 和 CLI 发行目标。程序包可用状态以 GitHub Releases 为准。开发预发行版可能包含较新改动。
 
 向 `dev` 推送已验证的提交即可触发 `.github/workflows/release-dev.yml`：
 
@@ -379,12 +381,31 @@ git push origin dev
 
 <a id="release-notes"></a>
 
-## v0.3.3 发行说明
+## v0.3.4 发行说明
 
-以下说明对应 v0.3.3，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
+以下说明对应 v0.3.4，供获批准的稳定版发行工作流使用。发布状态以 GitHub Releases 为准。原始 v0.2.0 资产保持不变。
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.3
+# CialloCraftLauncher 0.3.4
+
+本次补丁修复 CLI 与桌面应用中已有 Minecraft 配置的管理及在线内容安装。
+
+- 原地管理已有配置：复制、删除拥有的磁盘文件、编辑内容和加载器、检查存储，并保留和还原管理历史；发现过程保留文件原位置。
+- 区分共享资源、配置元数据及实际游戏目录。删除确认列出完整删除范围和保留路径；共享资源与外部游戏目录会保留，被其他配置依赖的目标受保护。
+- 同名 ID 不再造成 CLI 或 GUI 目标歧义。CLI 支持显式的 `version:ID`、`instance:ID`，GUI 传入准确的游戏库 key。
+- 根据来源确认的项目类型，将资源包和光影 ZIP 安装至 `resourcepacks`、`shaderpacks`；模组 JAR 仍安装至 `mods`。
+- 后端严格区分新建整合包与更新已有实例，覆盖隐藏实例、并发创建等情况，同时保留中断导入的安全重试。
+- 切换版本或其他解析条件后，旧依赖预览不会再启用安装。
+- 已保存游戏日志按稳定配置身份筛选；在线发现与本地归档导入共用 CurseForge 凭据优先级。
+
+本地 macOS 验证：工作区与桌面测试 435 项通过、9 项忽略；前端测试 20 项、生产构建、格式检查及严格 Clippy 均通过。发行工作流还会验证并打包 Windows x64、macOS arm64 和 Linux x64。
+
+CLI 与 GUI 更新清单继续使用发行密钥的独立签名。操作系统发布者签名与 Microsoft GUI 登录可用状态保持不变。
+<!-- release-notes:end -->
+
+### v0.3.3 历史发行说明
+
+#### CialloCraftLauncher 0.3.3
 
 此补丁统一桌面应用浅色与深色主题下的控件设计。
 
@@ -397,7 +418,6 @@ git push origin dev
 功能通过 16 项前端测试、TypeScript/Vite 生产构建，以及 Windows x64、macOS arm64、Linux x86_64 核心/桌面 CI。桌面检查覆盖打包、前端就绪及更新回滚/恢复。隔离渲染检查使用合成数据验证真实账户、首页、设置和弹窗组件，不代表三种操作系统均已完成交互式物理机验收。正式工作流会再次验证标签版本和上传附件。
 
 此 UI 补丁不改变 CLI 行为或游戏数据，内存分配仍默认自动。CLI 和 GUI 更新清单保留发行密钥签名。安装文件没有操作系统发布者证书签名；macOS 保留完整 ad-hoc 签名验证，未经公证。GUI Microsoft 登录仍暂不可用，CurseForge 需要用户提供 API key。
-<!-- release-notes:end -->
 
 ### v0.3.2 历史发行说明
 
@@ -503,7 +523,7 @@ CLI 和 GUI 更新清单具有发行密钥的独立签名。安装程序不具�
 
 现有启动器配置、账户和实例元数据无需 schema 迁移即可读取。替换内容前请备份重要存档。Minecraft 真实正版账户验收仍已暂缓，CurseForge 需要用户提供获授权的 API key。托管 CI 和受控启动夹具不代表所有平台的物理机 Minecraft 验收。
 
-`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.3；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
+`scripts/release-notes.py` 会提取标记间的中英文正文，确认标题版本号与指定程序包版本一致，再合并为 `.github/workflows/release-stable.yml` 使用的 GitHub 发行说明。请保持两段标记内容准确，并让标题版本号与 Cargo package 版本一致。以上内容对应 v0.3.4；发布仍须经过获批准的稳定版工作流。未来发行前要检查当前三个平台的性能制品；调查疑似退化时，可选择基线运行 Linux 配对比较。历史验收结果不能证明当前发行提交的性能。
 
 <a id="scope"></a>
 

@@ -20,6 +20,8 @@ const MAX_CORRELATED_CRASH_REPORTS: usize = 4;
 pub struct DiagnosticsService {
     game_directory: PathBuf,
     launcher_data_directory: PathBuf,
+    log_root: PathBuf,
+    profile: Option<(String, String)>,
 }
 
 impl DiagnosticsService {
@@ -27,10 +29,29 @@ impl DiagnosticsService {
         game_directory: impl Into<PathBuf>,
         launcher_data_directory: impl Into<PathBuf>,
     ) -> Self {
+        let game_directory = game_directory.into();
         Self {
-            game_directory: game_directory.into(),
+            log_root: game_directory.clone(),
+            game_directory,
             launcher_data_directory: launcher_data_directory.into(),
+            profile: None,
         }
+    }
+
+    /// Locate saved launch records separately from the runtime's crash reports.
+    pub fn with_log_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.log_root = root.into();
+        self
+    }
+
+    /// Restrict explicit run diagnostics and exports to a selected profile.
+    pub fn with_profile(
+        mut self,
+        id: impl Into<String>,
+        legacy_version: impl Into<String>,
+    ) -> Self {
+        self.profile = Some((id.into(), legacy_version.into()));
+        self
     }
 
     pub fn doctor(&self, options: &DoctorOptions) -> DoctorReport {
@@ -93,7 +114,7 @@ impl DiagnosticsService {
             return Err(DiagnosticError::InvalidRunId);
         }
         let record: RunRecord = serde_json::from_slice(&read_run_artifact(
-            &self.game_directory,
+            &self.log_root,
             run_id,
             "json",
             MAX_RUN_RECORD_BYTES,
@@ -102,14 +123,19 @@ impl DiagnosticsService {
         if record.run_id != run_id {
             return Err(DiagnosticError::InvalidRunRecord);
         }
-        let log = read_run_artifact(
-            &self.game_directory,
-            run_id,
-            "log",
-            MAX_RUN_LOG_BYTES as usize,
-        )
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+        if let Some((id, legacy)) = &self.profile
+            && !record
+                .profile_id
+                .as_ref()
+                .map_or(record.version.as_ref() == Some(legacy), |profile| {
+                    profile == id
+                })
+        {
+            return Err(DiagnosticError::RunProfileMismatch);
+        }
+        let log = read_run_artifact(&self.log_root, run_id, "log", MAX_RUN_LOG_BYTES as usize)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let crash_reports = correlated_crash_reports(&self.game_directory, &record);
         let mut evidence_text = log;
         for report in &crash_reports {
@@ -142,8 +168,7 @@ impl DiagnosticsService {
                 .run_id
                 .as_deref()
                 .ok_or(DiagnosticError::RunRequiredForRawLog)?;
-            let bytes =
-                read_run_artifact(&self.game_directory, run_id, "log", MAX_RAW_PREVIEW_BYTES)?;
+            let bytes = read_run_artifact(&self.log_root, run_id, "log", MAX_RAW_PREVIEW_BYTES)?;
             Some(redact_raw_preview(
                 &String::from_utf8_lossy(&bytes),
                 &self.game_directory,
@@ -281,6 +306,8 @@ pub enum DiagnosticError {
     RunNotFound,
     #[error("saved run record is invalid")]
     InvalidRunRecord,
+    #[error("saved run does not belong to the selected profile")]
+    RunProfileMismatch,
     #[error("raw log preview requires a run identifier")]
     RunRequiredForRawLog,
     #[error("diagnostic data could not be read")]
@@ -292,6 +319,10 @@ pub enum DiagnosticError {
 #[derive(serde::Deserialize)]
 struct RunRecord {
     run_id: String,
+    #[serde(default)]
+    profile_id: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
     exit_code: Option<i32>,
     cancelled: bool,
     #[serde(default)]

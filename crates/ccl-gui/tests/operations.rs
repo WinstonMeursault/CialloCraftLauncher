@@ -338,6 +338,22 @@ async fn saved_log_reads_bound_file_size_lines_and_line_length() {
     let log_dir = root.join(".ccl/logs");
     fs::create_dir_all(&log_dir).unwrap();
     let log = log_dir.join("123-run.log");
+    fs::write(
+        log_dir.join("123-run.json"),
+        serde_json::to_vec(&ccl_core::launch::LaunchResult {
+            run_id: "123-run".into(),
+            version: "fixture-1".into(),
+            profile_id: Some("fixture-1".into()),
+            pid: 0,
+            exit_code: Some(0),
+            cancelled: false,
+            log_path: log.clone(),
+            started_at_ms: 0,
+            finished_at_ms: 0,
+        })
+        .unwrap(),
+    )
+    .unwrap();
     let mut content = vec![b'a'; 1_100_000];
     content.extend_from_slice(b"\nshort-line\n");
     content.extend(std::iter::repeat_n(b'b', 9000));

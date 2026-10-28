@@ -118,3 +118,57 @@ fn offline_doctor_cannot_probe_network_and_export_does_not_overwrite() {
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
 }
+
+#[test]
+fn profile_diagnostics_use_resource_logs_and_refuse_another_profiles_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("game");
+    let runtime = temp.path().join("custom-runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let runtime = std::fs::canonicalize(runtime).unwrap();
+    for id in ["one", "two"] {
+        let profile = root.join("versions").join(id);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join(format!("{id}.json")),
+            json!({"id":id,"mainClass":"Main"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("hmclversion.cfg"),
+            json!({"usesGlobal":false,"gameDirType":2,"gameDir":runtime}).to_string(),
+        )
+        .unwrap();
+    }
+    let logs = root.join(".ccl/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    for id in ["one", "two"] {
+        std::fs::write(logs.join(format!("{id}-run.json")), json!({"run_id":format!("{id}-run"),"profile_id":id,"version":id,"exit_code":0,"cancelled":false}).to_string()).unwrap();
+        std::fs::write(logs.join(format!("{id}-run.log")), "fixture").unwrap();
+    }
+    let entry = ccl_gui::discover_entries(&root, &Default::default())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.id == "one")
+        .unwrap();
+    let service = Maintenance {
+        root,
+        config: temp.path().join("config.json"),
+    };
+    let diagnosis = service
+        .execute(MaintenanceRequest::Diagnose {
+            key: Some(entry.key.clone()),
+            run: Some("one-run".into()),
+        })
+        .unwrap();
+    assert_eq!(diagnosis["run_id"], "one-run");
+    assert!(
+        service
+            .execute(MaintenanceRequest::Diagnose {
+                key: Some(entry.key),
+                run: Some("two-run".into())
+            })
+            .is_err()
+    );
+    assert!(!runtime.join(".ccl/logs").exists());
+}

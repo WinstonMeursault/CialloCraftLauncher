@@ -1121,6 +1121,7 @@ mod tests {
             game_directory: dir.clone(),
             working_directory: None,
             version: "runtime-cache-test".into(),
+            profile_id: None,
             username: "RuntimeCacheTest".into(),
             java: None,
             memory: crate::memory::MemoryPolicy::Manual(1024),

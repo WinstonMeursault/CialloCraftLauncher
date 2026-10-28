@@ -4,7 +4,7 @@ export type Language = 'en' | 'zh-CN'
 
 export interface Preferences { theme: Theme; language: Language; reduce_transparency: boolean; reduce_motion: boolean; last_selected_instance: string | null; background_image: string | null }
 export interface LaunchDefaults { java: string | null; max_memory_mb: number; auto_memory: boolean; auto_install_java: boolean; network_offline: boolean }
-export interface LibraryEntry { key: string; id: string; display_name: string; has_revision_storage: boolean; minecraft: string; loader: string | null; game_directory: string; memory_override: MemoryPolicy | null; launch_version: string }
+export interface LibraryEntry { key: string; id: string; display_name: string; has_revision_storage: boolean; resource_root: string; profile_directory: string; delete_paths: string[]; retained_paths: string[]; dependent_profiles: string[]; minecraft: string; loader: string | null; game_directory: string; memory_override: MemoryPolicy | null; launch_version: string }
 export interface Bootstrap {
   root: string
   root_exists: boolean

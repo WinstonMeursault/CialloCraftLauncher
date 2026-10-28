@@ -1,7 +1,7 @@
 mod browser;
 
 use std::{
-    env,
+    env, fs,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::{
@@ -24,7 +24,10 @@ use ccl_core::{
     loaders::{LoaderKind, LoaderRequest, LoaderService},
     modpacks::{ImportOptions, ModpackError, ModpackService},
     network::HttpClient,
-    online_content::{OnlineContentService, Provider, SearchQuery},
+    online_content::{
+        OnlineContentService, PackInstallOptions, PackMergeTarget, Provider, SearchQuery,
+    },
+    profiles::RootProfile,
 };
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -65,7 +68,7 @@ enum Command {
     },
     /// Diagnose a saved run or export an allowlisted local diagnostic report.
     Diagnose {
-        /// Select a managed instance instead of the shared game root.
+        /// Select a root profile or managed instance instead of the shared game root.
         #[arg(long)]
         instance: Option<String>,
         #[arg(long)]
@@ -144,7 +147,7 @@ enum Command {
     Launch {
         #[arg(required_unless_present = "instance", conflicts_with = "instance")]
         version: Option<String>,
-        /// Launch an isolated instance using its selected loader revision.
+        /// Launch a root profile or managed instance by ID; use version:ID or instance:ID to disambiguate.
         #[arg(long)]
         instance: Option<String>,
         /// Use an offline profile with this name.
@@ -171,7 +174,7 @@ enum Command {
     },
     /// Read the latest launch log, or select a run ID.
     Logs {
-        /// Read logs from an isolated managed instance.
+        /// Read logs for a root profile or managed instance; use version:ID or instance:ID to disambiguate.
         #[arg(long)]
         instance: Option<String>,
         #[arg(long)]
@@ -253,6 +256,9 @@ enum OnlineCommand {
         version: Option<String>,
         #[arg(long)]
         include_optional: bool,
+        /// Update an existing managed pack instance instead of creating a new instance.
+        #[arg(long)]
+        update_existing: bool,
     },
     Search {
         #[arg(value_parser=parse_provider)]
@@ -476,6 +482,334 @@ fn parse_content_kind(value: &str) -> std::result::Result<ContentKind, String> {
     }
 }
 
+enum ProfileTarget {
+    Root(RootProfile),
+    Managed(String),
+}
+
+/// Resolve profile selectors without guessing when a root version and a managed instance
+/// share an ID. Explicit selectors are `version:<id>` and `instance:<id>`.
+fn select_profile_target(
+    service: &InstanceService,
+    root: &Path,
+    selector: &str,
+) -> Result<ProfileTarget> {
+    let (requested, id) = if let Some(id) = selector.strip_prefix("version:") {
+        (Some("version"), id)
+    } else if let Some(id) = selector.strip_prefix("instance:") {
+        (Some("instance"), id)
+    } else {
+        (None, selector)
+    };
+    let root_profiles = RootProfile::list(root).map_err(profile_error)?;
+    let root_exists = root_profiles.iter().any(|profile| profile.id() == id);
+    let managed_exists = service.list()?.iter().any(|instance| instance.id == id);
+    match requested {
+        Some("version") => Ok(ProfileTarget::Root(
+            RootProfile::open(root, id).map_err(profile_error)?,
+        )),
+        Some("instance") => {
+            if !managed_exists {
+                return Err(Error::Instance(
+                    ccl_core::instances::InstanceError::NotFound(id.into()),
+                ));
+            }
+            Ok(ProfileTarget::Managed(id.into()))
+        }
+        _ if root_exists && managed_exists => Err(Error::InvalidConfig(format!(
+            "ambiguous profile ID {id}; choose version:{id} or instance:{id}"
+        ))),
+        _ if root_exists => Ok(ProfileTarget::Root(
+            RootProfile::open(root, id).map_err(profile_error)?,
+        )),
+        _ if managed_exists => Ok(ProfileTarget::Managed(id.into())),
+        _ => Err(Error::Instance(
+            ccl_core::instances::InstanceError::NotFound(id.into()),
+        )),
+    }
+}
+
+fn is_explicit_profile_selector(value: &str) -> bool {
+    value.starts_with("version:") || value.starts_with("instance:")
+}
+
+fn profile_error(error: ccl_core::profiles::ProfileError) -> Error {
+    use ccl_core::{instances::InstanceError, profiles::ProfileError};
+    match error {
+        ProfileError::InvalidId(id) => InstanceError::InvalidId(id).into(),
+        ProfileError::NotFound(id) => InstanceError::NotFound(id).into(),
+        ProfileError::Conflict(message) => InstanceError::Conflict(message).into(),
+        ProfileError::Referenced(ids) => {
+            InstanceError::Conflict(format!("referenced by: {ids}")).into()
+        }
+        ProfileError::Metadata { path, source } => InstanceError::Metadata { path, source }.into(),
+        ProfileError::Io { path, source } => InstanceError::Io { path, source }.into(),
+        ProfileError::Instance(error) => error.into(),
+        ProfileError::UnsafePath(path) => {
+            Error::InvalidConfig(format!("unsafe profile path: {}", path.display()))
+        }
+    }
+}
+
+fn sanitize_workspace_error(error: Error, workspace: &Path) -> Error {
+    let message = error.to_string();
+    let workspace = workspace.to_string_lossy();
+    if message.contains(workspace.as_ref()) {
+        Error::InvalidConfig(message.replace(workspace.as_ref(), "profile workspace"))
+    } else {
+        error
+    }
+}
+
+fn read_profile_logs(
+    candidate_roots: &[PathBuf],
+    profile_id: &str,
+    legacy_version: &str,
+    requested_run: Option<&str>,
+    lines: usize,
+) -> Result<(String, String)> {
+    let (selected_root, run_id) =
+        profile_log_location(candidate_roots, profile_id, legacy_version, requested_run)?;
+    Ok(launch::read_logs(&selected_root, Some(&run_id), lines)?)
+}
+
+fn profile_log_location(
+    candidate_roots: &[PathBuf],
+    profile_id: &str,
+    legacy_version: &str,
+    requested_run: Option<&str>,
+) -> Result<(PathBuf, String)> {
+    let mut matching = Vec::<(u64, PathBuf, String)>::new();
+    for root in candidate_roots {
+        let ccl_directory = root.join(".ccl");
+        let directory = root.join(".ccl/logs");
+        for path in [&ccl_directory, &directory] {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(Error::InvalidConfig(
+                        "launch log path contains a symlink".into(),
+                    ));
+                }
+                Ok(metadata) if path == &directory && !metadata.is_dir() => {
+                    return Err(Error::InvalidConfig(
+                        "launch log path is not a directory".into(),
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(source) => {
+                    return Err(Error::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+                _ => {}
+            }
+        }
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(Error::Io {
+                    path: directory.clone(),
+                    source,
+                });
+            }
+        };
+        for entry in entries.take(10_000) {
+            let entry = entry.map_err(|source| Error::Io {
+                path: directory.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            if !entry
+                .file_type()
+                .map_err(|source| Error::Io {
+                    path: path.clone(),
+                    source,
+                })?
+                .is_file()
+                || path.extension().is_none_or(|extension| extension != "json")
+                || fs::symlink_metadata(&path)
+                    .map_err(|source| Error::Io {
+                        path: path.clone(),
+                        source,
+                    })?
+                    .len()
+                    > 64 * 1024
+            {
+                continue;
+            }
+            let record: ccl_core::launch::LaunchResult =
+                match serde_json::from_slice(&fs::read(&path).map_err(|source| Error::Io {
+                    path: path.clone(),
+                    source,
+                })?) {
+                    Ok(record) => record,
+                    Err(_) => continue,
+                };
+            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if record.run_id != id
+                || record
+                    .profile_id
+                    .as_deref()
+                    .map_or(record.version != legacy_version, |id| id != profile_id)
+                || requested_run.is_some_and(|requested| requested != id)
+            {
+                continue;
+            }
+            matching.push((record.started_at_ms, root.clone(), id.to_owned()));
+        }
+    }
+    matching.sort_by_key(|(started, _, _)| std::cmp::Reverse(*started));
+    let (_, selected_root, run_id) = matching.into_iter().next().ok_or_else(|| {
+        Error::InvalidConfig(if requested_run.is_some() {
+            "selected launch log does not belong to this profile".into()
+        } else {
+            format!("no launch logs found for profile {profile_id}")
+        })
+    })?;
+    let log_path = selected_root
+        .join(".ccl/logs")
+        .join(format!("{run_id}.log"));
+    let log_metadata = fs::symlink_metadata(&log_path).map_err(|source| Error::Io {
+        path: log_path.clone(),
+        source,
+    })?;
+    if log_metadata.file_type().is_symlink() || !log_metadata.is_file() {
+        return Err(Error::InvalidConfig(
+            "launch log is not a regular file".into(),
+        ));
+    }
+    Ok((selected_root, run_id))
+}
+
+fn content_id(command: &ContentCommand) -> &str {
+    match command {
+        ContentCommand::List { id, .. }
+        | ContentCommand::Add { id, .. }
+        | ContentCommand::Remove { id, .. }
+        | ContentCommand::Enable { id, .. }
+        | ContentCommand::Disable { id, .. }
+        | ContentCommand::Backup { id, .. }
+        | ContentCommand::Restore { id, .. } => id,
+    }
+}
+
+fn content_command_mutates(command: &ContentCommand) -> bool {
+    matches!(
+        command,
+        ContentCommand::Add { .. }
+            | ContentCommand::Remove { .. }
+            | ContentCommand::Enable { .. }
+            | ContentCommand::Disable { .. }
+            | ContentCommand::Restore { .. }
+    )
+}
+
+fn run_content_command(
+    service: &ContentService,
+    id: &str,
+    command: &ContentCommand,
+) -> Result<Value> {
+    match command {
+        ContentCommand::List { kind, .. } => {
+            let content = service.list(id, *kind)?;
+            Ok(json!({ "ok": true, "id": id, "kind": kind, "content": content }))
+        }
+        ContentCommand::Add {
+            kind, source, name, ..
+        } => {
+            let entry = service.add(id, *kind, source, name.as_deref())?;
+            Ok(json!({ "ok": true, "id": id, "kind": kind, "entry": entry }))
+        }
+        ContentCommand::Remove { kind, name, .. } => {
+            service.remove(id, *kind, name)?;
+            Ok(json!({ "ok": true, "id": id, "kind": kind, "removed": name }))
+        }
+        ContentCommand::Enable { name, .. } => {
+            let entry = service.set_enabled(id, name, true)?;
+            Ok(json!({ "ok": true, "id": id, "entry": entry }))
+        }
+        ContentCommand::Disable { name, .. } => {
+            let entry = service.set_enabled(id, name, false)?;
+            Ok(json!({ "ok": true, "id": id, "entry": entry }))
+        }
+        ContentCommand::Backup { output, .. } => {
+            service.backup(id, output)?;
+            Ok(json!({ "ok": true, "id": id, "backup": output }))
+        }
+        ContentCommand::Restore { archive, .. } => {
+            service.restore(id, archive)?;
+            Ok(json!({ "ok": true, "id": id, "restored": true }))
+        }
+    }
+}
+
+fn instance_listing(root: &Path, config: &ccl_core::config::DownloadConfig) -> Result<Value> {
+    let profiles = RootProfile::list(root).map_err(profile_error)?;
+    let installed = launch::list_installed_versions(root)?;
+    let required_java = installed
+        .into_iter()
+        .map(|version| (version.id, version.required_java))
+        .collect::<std::collections::HashMap<_, _>>();
+    let managed = InstanceService::new(root.to_path_buf(), config.clone())?.list()?;
+    let mut counts = std::collections::HashMap::<String, usize>::new();
+    for item in profiles
+        .iter()
+        .map(RootProfile::id)
+        .chain(managed.iter().map(|item| item.id.as_str()))
+    {
+        *counts.entry(item.to_owned()).or_default() += 1;
+    }
+    let root_profiles: Vec<Value> = profiles
+        .iter()
+        .map(|profile| {
+            let id = profile.id();
+            let mut item = json!({
+                "id": id,
+                "kind": "root_profile",
+                "required_java": required_java.get(id),
+                "game_directory": profile.game_directory(),
+                "resource_root": profile.resource_root(),
+                "profile_directory": profile.profile_directory(),
+                "metadata": profile.metadata(),
+            });
+            if counts.get(id).copied().unwrap_or_default() > 1 {
+                item["selector"] = json!(format!("version:{id}"));
+            }
+            item
+        })
+        .collect();
+    let managed_instances: Vec<Value> = managed
+        .iter()
+        .map(|instance| {
+            let mut item = json!({
+                "id": instance.id,
+                "kind": "managed_instance",
+                "game_directory": instance.game_directory,
+                "metadata": instance,
+            });
+            if counts.get(&instance.id).copied().unwrap_or_default() > 1 {
+                item["selector"] = json!(format!("instance:{}", instance.id));
+            }
+            item
+        })
+        .collect();
+    let instances = root_profiles
+        .iter()
+        .chain(managed_instances.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "ok": true,
+        "root_profiles": root_profiles,
+        "managed_instances": managed_instances,
+        "instances": instances,
+    }))
+}
+
 #[derive(Subcommand)]
 enum AccountCommand {
     /// Begin device-code login. Credentials are saved only in OS secure storage.
@@ -632,19 +966,24 @@ async fn run(cli: &Cli) -> Result<Value> {
                     instance,
                     value,
                 } => {
-                    let (directory, id) = if let Some(id) = instance {
-                        (
-                            InstanceService::new(
-                                resolution.path.clone(),
-                                config.downloads.clone(),
-                            )?
-                            .game_directory(id)?,
-                            id.clone(),
-                        )
+                    let instances =
+                        InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                    let (directory, id) = if let Some(selector) = instance {
+                        match select_profile_target(&instances, &resolution.path, selector)? {
+                            ProfileTarget::Root(profile) => (
+                                profile.resource_root().to_path_buf(),
+                                profile.id().to_owned(),
+                            ),
+                            ProfileTarget::Managed(id) => (instances.game_directory(&id)?, id),
+                        }
                     } else {
                         let id = version.as_ref().expect("clap requires version or instance");
-                        launch::load_installed_metadata(&resolution.path, id)?;
-                        (resolution.path.clone(), id.clone())
+                        let profile =
+                            RootProfile::open(&resolution.path, id).map_err(profile_error)?;
+                        (
+                            profile.resource_root().to_path_buf(),
+                            profile.id().to_owned(),
+                        )
                     };
                     let key = ccl_core::memory::profile_key(&directory, &id).map_err(|source| {
                         Error::Io {
@@ -818,19 +1157,64 @@ async fn run(cli: &Cli) -> Result<Value> {
             export,
             include_log_preview,
         } => {
-            let diagnostic_root = if let Some(id) = instance {
-                InstanceService::new(resolution.path.clone(), config.downloads.clone())?
-                    .game_directory(id)?
+            let mut diagnostic_root = resolution.path.clone();
+            let mut log_root = resolution.path.clone();
+            let mut launcher_data_root = resolution.path.clone();
+            let mut diagnostic_run = run.clone();
+            let profile_identity = if let Some(selector) = instance {
+                let instances =
+                    InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                let (runtime, id, legacy_version, resource_root) =
+                    match select_profile_target(&instances, &resolution.path, selector)? {
+                        ProfileTarget::Root(profile) => (
+                            profile.game_directory().to_path_buf(),
+                            profile.id().to_owned(),
+                            profile.id().to_owned(),
+                            profile.resource_root().to_path_buf(),
+                        ),
+                        ProfileTarget::Managed(id) => {
+                            let metadata = instances.metadata(&id)?;
+                            let legacy_version = metadata
+                                .loader_version
+                                .clone()
+                                .unwrap_or_else(|| metadata.minecraft.clone());
+                            (
+                                metadata.game_directory,
+                                id,
+                                legacy_version,
+                                resolution.path.clone(),
+                            )
+                        }
+                    };
+                diagnostic_root = runtime.clone();
+                log_root = resource_root.clone();
+                launcher_data_root = resource_root.clone();
+                let legacy_roots = if runtime == resource_root {
+                    vec![resource_root.clone()]
+                } else {
+                    vec![resource_root.clone(), runtime]
+                };
+                if run.is_some() || (*include_log_preview && export.is_some()) {
+                    let (selected_root, selected_run) =
+                        profile_log_location(&legacy_roots, &id, &legacy_version, run.as_deref())?;
+                    log_root = selected_root;
+                    diagnostic_run = Some(selected_run);
+                }
+                Some((id, legacy_version))
             } else {
-                resolution.path.clone()
+                None
             };
-            let service = ccl_core::diagnostics::DiagnosticsService::new(
+            let mut service = ccl_core::diagnostics::DiagnosticsService::new(
                 &diagnostic_root,
-                diagnostic_root.join(".ccl"),
-            );
+                launcher_data_root.join(".ccl"),
+            )
+            .with_log_root(log_root);
+            if let Some((id, legacy_version)) = profile_identity {
+                service = service.with_profile(id, legacy_version);
+            }
             if let Some(path) = export {
                 let report = service.export(&ccl_core::diagnostics::ExportOptions {
-                    run_id: run.clone(),
+                    run_id: diagnostic_run,
                     include_raw_log_preview: *include_log_preview,
                 })?;
                 let mut options = std::fs::OpenOptions::new();
@@ -854,8 +1238,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                 Ok(
                     json!({"ok":true,"diagnostic_export":path,"notice":report.raw_log_preview_notice}),
                 )
-            } else if let Some(id) = run {
-                Ok(json!({"ok":true,"diagnosis":service.diagnose_run(id)?}))
+            } else if let Some(id) = diagnostic_run {
+                Ok(json!({"ok":true,"diagnosis":service.diagnose_run(&id)?}))
             } else {
                 Ok(json!({"ok":true,"diagnostics":service.doctor(&Default::default())}))
             }
@@ -910,9 +1294,12 @@ async fn run(cli: &Cli) -> Result<Value> {
                 .await?;
             Ok(json!({ "ok": true, "install": summary }))
         }
-        Command::Instances => Ok(
-            json!({ "ok": true, "game_directory": resolution, "instances": launch::list_installed_versions(&resolution.path)? }),
-        ),
+        Command::Instances => {
+            let listing = instance_listing(&resolution.path, &config.downloads)?;
+            Ok(
+                json!({"ok":true,"game_directory":resolution,"root_profiles":listing["root_profiles"],"managed_instances":listing["managed_instances"],"instances":listing["instances"]}),
+            )
+        }
         Command::Loaders {
             loader,
             minecraft,
@@ -930,21 +1317,20 @@ async fn run(cli: &Cli) -> Result<Value> {
             )
         }
         Command::Instance { command } => {
-            let service = InstanceService::new(resolution.path, config.downloads.clone())?;
+            let service = InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
             match command {
-                InstanceCommand::List => {
-                    Ok(json!({ "ok": true, "managed_instances": service.list()? }))
-                }
+                InstanceCommand::List => instance_listing(&resolution.path, &config.downloads),
                 InstanceCommand::Show { id } => {
-                    Ok(json!({ "ok": true, "instance": service.metadata(id)? }))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({ "ok": true, "instance": profile.metadata(), "kind": "root_profile" }),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({ "ok": true, "instance": service.metadata(&id)?, "kind": "managed_instance" }),
+                        ),
+                    }
                 }
                 InstanceCommand::Install {
-                    id,
-                    minecraft,
-                    loader,
-                    loader_version,
-                }
-                | InstanceCommand::Update {
                     id,
                     minecraft,
                     loader,
@@ -956,43 +1342,236 @@ async fn run(cli: &Cli) -> Result<Value> {
                         version: loader_version.clone(),
                     };
                     let context = operation_context();
-                    let instance = service.install(id, &request, Some(context)).await?;
+                    let target = match select_profile_target(&service, &resolution.path, id) {
+                        Ok(target) => Some(target),
+                        Err(Error::Instance(ccl_core::instances::InstanceError::NotFound(_))) => {
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let instance = match target {
+                        Some(ProfileTarget::Root(profile)) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            let profile_id = profile.id().to_owned();
+                            match workspace
+                                .service()
+                                .install(&profile_id, &request, Some(context))
+                                .await
+                            {
+                                Ok(_) => match workspace.commit() {
+                                    Ok(instance) => instance,
+                                    Err(error) => {
+                                        return Err(sanitize_workspace_error(
+                                            profile_error(error),
+                                            &workspace_root,
+                                        ));
+                                    }
+                                },
+                                Err(error) => {
+                                    let _ = workspace.abort();
+                                    return Err(sanitize_workspace_error(
+                                        error.into(),
+                                        &workspace_root,
+                                    ));
+                                }
+                            }
+                        }
+                        Some(ProfileTarget::Managed(id)) => {
+                            service.install(&id, &request, Some(context)).await?
+                        }
+                        None => {
+                            service
+                                .install_new_loader(id, &request, Some(context))
+                                .await?
+                        }
+                    };
+                    Ok(json!({ "ok": true, "instance": instance }))
+                }
+                InstanceCommand::Update {
+                    id,
+                    minecraft,
+                    loader,
+                    loader_version,
+                } => {
+                    let request = LoaderRequest {
+                        kind: *loader,
+                        minecraft: minecraft.clone(),
+                        version: loader_version.clone(),
+                    };
+                    let context = operation_context();
+                    let instance = match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            let profile_id = profile.id().to_owned();
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            match workspace
+                                .service()
+                                .install(&profile_id, &request, Some(context))
+                                .await
+                            {
+                                Ok(_) => match workspace.commit() {
+                                    Ok(instance) => instance,
+                                    Err(error) => {
+                                        return Err(sanitize_workspace_error(
+                                            profile_error(error),
+                                            &workspace_root,
+                                        ));
+                                    }
+                                },
+                                Err(error) => {
+                                    let _ = workspace.abort();
+                                    return Err(sanitize_workspace_error(
+                                        error.into(),
+                                        &workspace_root,
+                                    ));
+                                }
+                            }
+                        }
+                        ProfileTarget::Managed(id) => {
+                            service.install(&id, &request, Some(context)).await?
+                        }
+                    };
                     Ok(json!({ "ok": true, "instance": instance }))
                 }
                 InstanceCommand::Rename { id, destination } => {
-                    Ok(json!({"ok":true,"instance":service.rename(id,destination)?}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({"ok":true,"instance":profile.rename(destination).map_err(profile_error)?,"kind":"root_profile"}),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"instance":service.rename(&id,destination)?,"kind":"managed_instance"}),
+                        ),
+                    }
                 }
                 InstanceCommand::Copy { id, destination } => {
-                    Ok(json!({"ok":true,"instance":service.duplicate(id,destination)?}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({"ok":true,"instance":profile.copy_to(&resolution.path,destination,config.downloads.clone()).map_err(profile_error)?,"kind":"managed_instance"}),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"instance":service.duplicate(&id,destination)?,"kind":"managed_instance"}),
+                        ),
+                    }
                 }
                 InstanceCommand::Delete { id, .. } => {
-                    service.delete(id)?;
-                    Ok(json!({"ok":true,"deleted":id}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            profile.delete().map_err(profile_error)?;
+                            Ok(json!({"ok":true,"deleted":id,"kind":"root_profile"}))
+                        }
+                        ProfileTarget::Managed(id) => {
+                            service.delete(&id)?;
+                            Ok(json!({"ok":true,"deleted":id,"kind":"managed_instance"}))
+                        }
+                    }
                 }
                 InstanceCommand::History { id } => {
-                    Ok(json!({"ok":true,"history":service.history(id)?}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({"ok":true,"history":profile.history().map_err(profile_error)?,"kind":"root_profile"}),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"history":service.history(&id)?,"kind":"managed_instance"}),
+                        ),
+                    }
                 }
                 InstanceCommand::Restore { id, revision } => {
-                    Ok(json!({"ok":true,"instance":service.restore_revision(id,revision)?}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({"ok":true,"instance":profile.restore_revision(revision).map_err(profile_error)?,"kind":"root_profile"}),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"instance":service.restore_revision(&id,revision)?,"kind":"managed_instance"}),
+                        ),
+                    }
                 }
                 InstanceCommand::DiskUsage { id } => {
-                    Ok(json!({"ok":true,"disk_usage":service.disk_usage(id)?}))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => Ok(
+                            json!({"ok":true,"disk_usage":profile.disk_usage().map_err(profile_error)?,"kind":"root_profile"}),
+                        ),
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"disk_usage":service.disk_usage(&id)?,"kind":"managed_instance"}),
+                        ),
+                    }
                 }
                 InstanceCommand::Clean {
                     id,
                     keep,
                     include_previous,
                     apply,
-                } => Ok(
-                    json!({"ok":true,"cleanup":service.cleanup(id,*keep,*include_previous,*apply)?}),
-                ),
+                } => match select_profile_target(&service, &resolution.path, id)? {
+                    ProfileTarget::Root(profile) => Ok(
+                        json!({"ok":true,"cleanup":profile.cleanup(*keep,*include_previous,*apply).map_err(profile_error)?,"kind":"root_profile"}),
+                    ),
+                    ProfileTarget::Managed(id) => Ok(
+                        json!({"ok":true,"cleanup":service.cleanup(&id,*keep,*include_previous,*apply)?,"kind":"managed_instance"}),
+                    ),
+                },
                 InstanceCommand::Rollback { id } => {
-                    Ok(json!({ "ok": true, "instance": service.rollback(id).await? }))
+                    match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            let revision = profile
+                                .history()
+                                .map_err(profile_error)?
+                                .into_iter()
+                                .last()
+                                .ok_or_else(|| {
+                                    Error::InvalidConfig(format!(
+                                        "no rollback history for {}",
+                                        profile.id()
+                                    ))
+                                })?;
+                            Ok(
+                                json!({"ok":true,"instance":profile.rollback(&revision.revision).map_err(profile_error)?,"kind":"root_profile"}),
+                            )
+                        }
+                        ProfileTarget::Managed(id) => {
+                            Ok(json!({ "ok": true, "instance": service.rollback(&id).await? }))
+                        }
+                    }
                 }
                 InstanceCommand::UninstallLoader { id } => {
-                    let instance = service
-                        .uninstall_loader(id, Some(operation_context()))
-                        .await?;
+                    let instance = match select_profile_target(&service, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            match workspace
+                                .service()
+                                .uninstall_loader(id, Some(operation_context()))
+                                .await
+                            {
+                                Ok(_) => match workspace.commit() {
+                                    Ok(instance) => instance,
+                                    Err(error) => {
+                                        return Err(sanitize_workspace_error(
+                                            profile_error(error),
+                                            &workspace_root,
+                                        ));
+                                    }
+                                },
+                                Err(error) => {
+                                    let _ = workspace.abort();
+                                    return Err(sanitize_workspace_error(
+                                        error.into(),
+                                        &workspace_root,
+                                    ));
+                                }
+                            }
+                        }
+                        ProfileTarget::Managed(id) => {
+                            service
+                                .uninstall_loader(&id, Some(operation_context()))
+                                .await?
+                        }
+                    };
                     Ok(json!({ "ok": true, "instance": instance }))
                 }
             }
@@ -1011,10 +1590,40 @@ async fn run(cli: &Cli) -> Result<Value> {
                 Ok(json!({ "ok": true, "manifest": manifest }))
             }
             PackCommand::Show { id } => {
-                let service =
-                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
-                let receipt = service.show(id)?;
-                Ok(json!({ "ok": true, "receipt": receipt }))
+                let instances =
+                    InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                match select_profile_target(&instances, &resolution.path, id)? {
+                    ProfileTarget::Managed(id) => {
+                        let service =
+                            ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
+                        Ok(json!({ "ok": true, "receipt": service.show(&id)? }))
+                    }
+                    ProfileTarget::Root(profile) => {
+                        let workspace = profile
+                            .begin_workspace(config.downloads.clone())
+                            .map_err(profile_error)?;
+                        let workspace_root = workspace.root().to_path_buf();
+                        let receipt = workspace
+                            .modpack_service(config.downloads.clone())
+                            .map_err(profile_error)
+                            .and_then(|service| service.show(profile.id()).map_err(Error::Modpack));
+                        match receipt {
+                            Ok(receipt) => {
+                                if let Err(error) = workspace.abort() {
+                                    return Err(sanitize_workspace_error(
+                                        profile_error(error),
+                                        &workspace_root,
+                                    ));
+                                }
+                                Ok(json!({ "ok": true, "receipt": receipt }))
+                            }
+                            Err(error) => {
+                                let _ = workspace.abort();
+                                Err(sanitize_workspace_error(error, &workspace_root))
+                            }
+                        }
+                    }
+                }
             }
             PackCommand::Import {
                 id,
@@ -1023,89 +1632,278 @@ async fn run(cli: &Cli) -> Result<Value> {
                 replace_modified,
                 allow_hosts,
             } => {
-                let service =
-                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
+                let instances =
+                    InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                let target = match select_profile_target(&instances, &resolution.path, id) {
+                    Ok(target) => Some(target),
+                    Err(Error::Instance(ccl_core::instances::InstanceError::NotFound(_)))
+                        if !is_explicit_profile_selector(id) =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error),
+                };
                 let options = ImportOptions {
                     include_optional: *include_optional,
                     replace_modified: *replace_modified,
                     allowed_hosts: allow_hosts.clone(),
                 };
-                let instance = if archive
+                let is_modrinth = archive
                     .extension()
                     .and_then(|v| v.to_str())
                     .is_some_and(|v| v.eq_ignore_ascii_case("mrpack"))
-                    || ImportFormatService::is_modrinth(archive)?
-                {
-                    service
-                        .import(id, archive, &options, Some(operation_context()))
-                        .await?
-                } else {
-                    ImportFormatService::new(resolution.path, config.downloads.clone())
-                        .import(
-                            id,
-                            archive,
-                            &ImportOptionsExt {
-                                include_optional: *include_optional,
-                                replace_modified: *replace_modified,
-                                curseforge_api_key: if ImportFormatService::inspect(archive)?["format"] == "curseforge" {
-                                    optional_curseforge_key(&config_path)?
-                                } else {
-                                    None
-                                },
-                                allowed_hosts: allow_hosts.clone(),
-                            },
-                            Some(operation_context()),
-                        )
-                        .await?
+                    || ImportFormatService::is_modrinth(archive)?;
+                let import_format_options = ImportOptionsExt {
+                    include_optional: *include_optional,
+                    replace_modified: *replace_modified,
+                    curseforge_api_key: if !is_modrinth
+                        && ImportFormatService::inspect(archive)?["format"] == "curseforge"
+                    {
+                        optional_curseforge_key(&config_path)?
+                    } else {
+                        None
+                    },
+                    allowed_hosts: allow_hosts.clone(),
                 };
-                Ok(json!({ "ok": true, "instance": instance, "pack_imported": true }))
+                match target {
+                    Some(ProfileTarget::Root(profile)) => {
+                        let workspace = profile
+                            .begin_workspace(config.downloads.clone())
+                            .map_err(profile_error)?;
+                        let workspace_root = workspace.root().to_path_buf();
+                        let has_pack_receipt =
+                            profile.game_directory().join(".ccl/modpack.json").is_file();
+                        let imported = async {
+                            if !has_pack_receipt {
+                                let scratch_id = format!(
+                                    "ccl-cli-pack-{}-{}",
+                                    std::process::id(),
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_nanos()
+                                );
+                                let imported = if is_modrinth {
+                                    ModpackService::new(
+                                        workspace_root.clone(),
+                                        config.downloads.clone(),
+                                    )?
+                                    .import_new(
+                                        &scratch_id,
+                                        archive,
+                                        &options,
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                                    .map_err(Error::Modpack)?
+                                } else {
+                                    ImportFormatService::new(
+                                        workspace_root.clone(),
+                                        config.downloads.clone(),
+                                    )
+                                    .import_new(
+                                        &scratch_id,
+                                        archive,
+                                        &import_format_options,
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                                    .map_err(Error::ImportFormat)?
+                                };
+                                OnlineContentService::merge_imported_pack_into_profile(
+                                    PackMergeTarget {
+                                        root: workspace_root.clone(),
+                                        config: config.downloads.clone(),
+                                        profile_id: profile.id().to_owned(),
+                                        runtime_subdirectory: workspace
+                                            .runtime_subdirectory()
+                                            .to_path_buf(),
+                                    },
+                                    &imported.id,
+                                )
+                                .map_err(Error::Online)
+                            } else if is_modrinth {
+                                workspace
+                                    .modpack_service(config.downloads.clone())
+                                    .map_err(profile_error)?
+                                    .import(
+                                        profile.id(),
+                                        archive,
+                                        &options,
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                                    .map_err(Error::Modpack)
+                            } else {
+                                ImportFormatService::new_with_runtime_subdirectory(
+                                    workspace_root.clone(),
+                                    config.downloads.clone(),
+                                    workspace.runtime_subdirectory().to_path_buf(),
+                                )
+                                .import(
+                                    profile.id(),
+                                    archive,
+                                    &import_format_options,
+                                    Some(operation_context()),
+                                )
+                                .await
+                                .map_err(Error::ImportFormat)
+                            }
+                        }
+                        .await;
+                        match imported {
+                            Ok(_) => {
+                                let instance = match workspace.commit() {
+                                    Ok(instance) => instance,
+                                    Err(error) => {
+                                        return Err(sanitize_workspace_error(
+                                            profile_error(error),
+                                            &workspace_root,
+                                        ));
+                                    }
+                                };
+                                Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                            }
+                            Err(error) => {
+                                let _ = workspace.abort();
+                                Err(sanitize_workspace_error(error, &workspace_root))
+                            }
+                        }
+                    }
+                    Some(ProfileTarget::Managed(id)) => {
+                        let instance = if is_modrinth {
+                            ModpackService::new(resolution.path.clone(), config.downloads.clone())?
+                                .import(&id, archive, &options, Some(operation_context()))
+                                .await?
+                        } else {
+                            ImportFormatService::new(
+                                resolution.path.clone(),
+                                config.downloads.clone(),
+                            )
+                            .import(
+                                &id,
+                                archive,
+                                &import_format_options,
+                                Some(operation_context()),
+                            )
+                            .await?
+                        };
+                        Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                    }
+                    None => {
+                        let instance = if is_modrinth {
+                            ModpackService::new(resolution.path.clone(), config.downloads.clone())?
+                                .import(id, archive, &options, Some(operation_context()))
+                                .await?
+                        } else {
+                            ImportFormatService::new(resolution.path, config.downloads.clone())
+                                .import(
+                                    id,
+                                    archive,
+                                    &import_format_options,
+                                    Some(operation_context()),
+                                )
+                                .await?
+                        };
+                        Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                    }
+                }
             }
             PackCommand::Export {
                 id,
                 output,
                 include_local_content,
             } => {
-                let service =
-                    ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
-                let manifest = service.export(id, output, *include_local_content)?;
-                Ok(json!({ "ok": true, "archive": output, "manifest": manifest }))
+                let instances =
+                    InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                match select_profile_target(&instances, &resolution.path, id)? {
+                    ProfileTarget::Managed(id) => {
+                        let service =
+                            ModpackService::new(resolution.path.clone(), config.downloads.clone())?;
+                        let manifest = service.export(&id, output, *include_local_content)?;
+                        Ok(json!({ "ok": true, "archive": output, "manifest": manifest }))
+                    }
+                    ProfileTarget::Root(profile) => {
+                        let workspace = profile
+                            .begin_workspace(config.downloads.clone())
+                            .map_err(profile_error)?;
+                        let workspace_root = workspace.root().to_path_buf();
+                        let manifest = workspace
+                            .modpack_service(config.downloads.clone())
+                            .map_err(profile_error)
+                            .and_then(|service| {
+                                service
+                                    .export(profile.id(), output, *include_local_content)
+                                    .map_err(Error::Modpack)
+                            });
+                        match manifest {
+                            Ok(manifest) => {
+                                if let Err(error) = workspace.abort() {
+                                    return Err(sanitize_workspace_error(
+                                        profile_error(error),
+                                        &workspace_root,
+                                    ));
+                                }
+                                Ok(json!({ "ok": true, "archive": output, "manifest": manifest }))
+                            }
+                            Err(error) => {
+                                let _ = workspace.abort();
+                                Err(sanitize_workspace_error(error, &workspace_root))
+                            }
+                        }
+                    }
+                }
             }
         },
         Command::Content { command } => {
-            let service = ContentService::new(resolution.path, config.downloads.clone())?;
-            match command {
-                ContentCommand::List { id, kind } => {
-                    let content = service.list(id, *kind)?;
-                    Ok(json!({ "ok": true, "id": id, "kind": kind, "content": content }))
+            let instances =
+                InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+            let id = content_id(command);
+            match select_profile_target(&instances, &resolution.path, id)? {
+                ProfileTarget::Managed(id) => {
+                    let service = ContentService::new(resolution.path, config.downloads.clone())?;
+                    run_content_command(&service, &id, command)
                 }
-                ContentCommand::Add {
-                    id,
-                    kind,
-                    source,
-                    name,
-                } => {
-                    let entry = service.add(id, *kind, source, name.as_deref())?;
-                    Ok(json!({ "ok": true, "id": id, "kind": kind, "entry": entry }))
-                }
-                ContentCommand::Remove { id, kind, name } => {
-                    service.remove(id, *kind, name)?;
-                    Ok(json!({ "ok": true, "id": id, "kind": kind, "removed": name }))
-                }
-                ContentCommand::Enable { id, name } => {
-                    let entry = service.set_enabled(id, name, true)?;
-                    Ok(json!({ "ok": true, "id": id, "entry": entry }))
-                }
-                ContentCommand::Disable { id, name } => {
-                    let entry = service.set_enabled(id, name, false)?;
-                    Ok(json!({ "ok": true, "id": id, "entry": entry }))
-                }
-                ContentCommand::Backup { id, output } => {
-                    service.backup(id, output)?;
-                    Ok(json!({ "ok": true, "id": id, "backup": output }))
-                }
-                ContentCommand::Restore { id, archive } => {
-                    service.restore(id, archive)?;
-                    Ok(json!({ "ok": true, "id": id, "restored": true }))
+                ProfileTarget::Root(profile) => {
+                    let workspace = profile
+                        .begin_workspace(config.downloads.clone())
+                        .map_err(profile_error)?;
+                    let workspace_root = workspace.root().to_path_buf();
+                    let service = match workspace.content_service(config.downloads.clone()) {
+                        Ok(service) => service,
+                        Err(error) => {
+                            let _ = workspace.abort();
+                            return Err(sanitize_workspace_error(
+                                profile_error(error),
+                                &workspace_root,
+                            ));
+                        }
+                    };
+                    let result = run_content_command(&service, profile.id(), command);
+                    match result {
+                        Ok(value) if content_command_mutates(command) => {
+                            if let Err(error) = workspace.commit() {
+                                return Err(sanitize_workspace_error(
+                                    profile_error(error),
+                                    &workspace_root,
+                                ));
+                            }
+                            Ok(value)
+                        }
+                        Ok(value) => {
+                            if let Err(error) = workspace.abort() {
+                                return Err(sanitize_workspace_error(
+                                    profile_error(error),
+                                    &workspace_root,
+                                ));
+                            }
+                            Ok(value)
+                        }
+                        Err(error) => {
+                            let _ = workspace.abort();
+                            Err(sanitize_workspace_error(error, &workspace_root))
+                        }
+                    }
                 }
             }
         }
@@ -1133,31 +1931,174 @@ async fn run(cli: &Cli) -> Result<Value> {
                     project,
                     version,
                 } => {
-                    let installed = service
-                        .install_project(
-                            resolution.path,
-                            &config.downloads,
-                            id,
-                            *provider,
-                            project,
-                            version.as_deref(),
-                        )
-                        .await?;
-                    Ok(json!({"ok":true,"installed_content":installed}))
+                    let instances =
+                        InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                    let target = match select_profile_target(&instances, &resolution.path, id) {
+                        Ok(target) => Some(target),
+                        Err(Error::Instance(ccl_core::instances::InstanceError::NotFound(_))) => {
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match target {
+                        Some(ProfileTarget::Root(profile)) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            let installed = service
+                                .clone()
+                                .with_runtime_subdirectory(
+                                    workspace.runtime_subdirectory().to_path_buf(),
+                                )
+                                .install_project(
+                                    workspace_root.clone(),
+                                    &config.downloads,
+                                    profile.id(),
+                                    *provider,
+                                    project,
+                                    version.as_deref(),
+                                )
+                                .await;
+                            match installed {
+                                Ok(installed) => {
+                                    let profile = match workspace.commit() {
+                                        Ok(profile) => profile,
+                                        Err(error) => {
+                                            return Err(sanitize_workspace_error(
+                                                profile_error(error),
+                                                &workspace_root,
+                                            ));
+                                        }
+                                    };
+                                    Ok(
+                                        json!({"ok":true,"installed_content":installed,"profile":profile}),
+                                    )
+                                }
+                                Err(error) => {
+                                    let _ = workspace.abort();
+                                    Err(sanitize_workspace_error(error.into(), &workspace_root))
+                                }
+                            }
+                        }
+                        Some(ProfileTarget::Managed(id)) => {
+                            let installed = service
+                                .install_project(
+                                    resolution.path,
+                                    &config.downloads,
+                                    &id,
+                                    *provider,
+                                    project,
+                                    version.as_deref(),
+                                )
+                                .await?;
+                            Ok(json!({"ok":true,"installed_content":installed}))
+                        }
+                        None => {
+                            let installed = service
+                                .install_project(
+                                    resolution.path,
+                                    &config.downloads,
+                                    id,
+                                    *provider,
+                                    project,
+                                    version.as_deref(),
+                                )
+                                .await?;
+                            Ok(json!({"ok":true,"installed_content":installed}))
+                        }
+                    }
                 }
-                OnlineCommand::Updates { id } => Ok(
-                    json!({"ok":true,"updates":service.updates_for_instance(resolution.path,&config.downloads,id).await?}),
-                ),
-                OnlineCommand::Analyze { id } => Ok(
-                    json!({"ok":true,"conflicts":service.analyze_instance(resolution.path,&config.downloads,id).await?}),
-                ),
+                OnlineCommand::Updates { id } => {
+                    let instances =
+                        InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                    match select_profile_target(&instances, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            let workspace_service = service.clone().with_runtime_subdirectory(
+                                workspace.runtime_subdirectory().to_path_buf(),
+                            );
+                            let updates = workspace_service
+                                .updates_for_instance(
+                                    workspace_root.clone(),
+                                    &config.downloads,
+                                    profile.id(),
+                                )
+                                .await;
+                            let _ = workspace.abort();
+                            let updates = updates.map_err(|error| {
+                                sanitize_workspace_error(error.into(), &workspace_root)
+                            })?;
+                            Ok(json!({"ok":true,"updates":updates}))
+                        }
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"updates":service.updates_for_instance(resolution.path,&config.downloads,&id).await?}),
+                        ),
+                    }
+                }
+                OnlineCommand::Analyze { id } => {
+                    let instances =
+                        InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                    match select_profile_target(&instances, &resolution.path, id)? {
+                        ProfileTarget::Root(profile) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            let workspace_service = service.clone().with_runtime_subdirectory(
+                                workspace.runtime_subdirectory().to_path_buf(),
+                            );
+                            let conflicts = workspace_service
+                                .analyze_instance(
+                                    workspace_root.clone(),
+                                    &config.downloads,
+                                    profile.id(),
+                                )
+                                .await;
+                            let _ = workspace.abort();
+                            let conflicts = conflicts.map_err(|error| {
+                                sanitize_workspace_error(error.into(), &workspace_root)
+                            })?;
+                            Ok(json!({"ok":true,"conflicts":conflicts}))
+                        }
+                        ProfileTarget::Managed(id) => Ok(
+                            json!({"ok":true,"conflicts":service.analyze_instance(resolution.path,&config.downloads,&id).await?}),
+                        ),
+                    }
+                }
                 OnlineCommand::PackInstall {
                     id,
                     provider,
                     project,
                     version,
                     include_optional,
+                    update_existing,
                 } => {
+                    let instances =
+                        InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+                    let target =
+                        match select_profile_target(&instances, &resolution.path, id) {
+                            Ok(target) => Some(target),
+                            Err(Error::Instance(ccl_core::instances::InstanceError::NotFound(
+                                _,
+                            ))) if !update_existing => None,
+                            Err(error) => return Err(error),
+                        };
+                    if !update_existing && target.is_some() {
+                        return Err(Error::Instance(
+                            ccl_core::instances::InstanceError::Conflict(format!(
+                                "profile already exists: {id}; choose --update-existing to replace pack-owned files"
+                            )),
+                        ));
+                    }
+                    if *update_existing && target.is_none() {
+                        return Err(Error::Instance(
+                            ccl_core::instances::InstanceError::NotFound(id.clone()),
+                        ));
+                    }
                     let selected = service
                         .versions(*provider, project, None, None)
                         .await?
@@ -1166,17 +2107,118 @@ async fn run(cli: &Cli) -> Result<Value> {
                         .ok_or_else(|| {
                             Error::InvalidConfig("requested pack version is unavailable".into())
                         })?;
-                    let instance = service
-                        .download_and_import_pack(
-                            resolution.path,
-                            &config.downloads,
-                            id,
-                            &selected,
-                            *include_optional,
-                            Some(operation_context()),
-                        )
-                        .await?;
-                    Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                    let mode = if *update_existing {
+                        ccl_core::online_content::PackImportMode::UpdateExisting
+                    } else {
+                        ccl_core::online_content::PackImportMode::CreateNew
+                    };
+                    match target {
+                        Some(ProfileTarget::Root(profile)) => {
+                            let workspace = profile
+                                .begin_workspace(config.downloads.clone())
+                                .map_err(profile_error)?;
+                            let workspace_root = workspace.root().to_path_buf();
+                            let has_pack_receipt =
+                                profile.game_directory().join(".ccl/modpack.json").is_file();
+                            let imported = if *update_existing && !has_pack_receipt {
+                                service
+                                    .download_and_merge_pack_into_profile(
+                                        workspace_root.clone(),
+                                        &config.downloads,
+                                        profile.id(),
+                                        &selected,
+                                        PackInstallOptions {
+                                            include_optional: *include_optional,
+                                            mode,
+                                        },
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                            } else if has_pack_receipt {
+                                service
+                                    .clone()
+                                    .with_runtime_subdirectory(
+                                        workspace.runtime_subdirectory().to_path_buf(),
+                                    )
+                                    .download_and_import_pack(
+                                        workspace_root.clone(),
+                                        &config.downloads,
+                                        profile.id(),
+                                        &selected,
+                                        PackInstallOptions {
+                                            include_optional: *include_optional,
+                                            mode,
+                                        },
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                            } else {
+                                service
+                                    .download_and_import_pack(
+                                        workspace_root.clone(),
+                                        &config.downloads,
+                                        profile.id(),
+                                        &selected,
+                                        PackInstallOptions {
+                                            include_optional: *include_optional,
+                                            mode,
+                                        },
+                                        Some(operation_context()),
+                                    )
+                                    .await
+                            };
+                            match imported {
+                                Ok(_) => {
+                                    let profile = match workspace.commit() {
+                                        Ok(profile) => profile,
+                                        Err(error) => {
+                                            return Err(sanitize_workspace_error(
+                                                profile_error(error),
+                                                &workspace_root,
+                                            ));
+                                        }
+                                    };
+                                    Ok(json!({"ok":true,"instance":profile,"pack_imported":true}))
+                                }
+                                Err(error) => {
+                                    let _ = workspace.abort();
+                                    Err(sanitize_workspace_error(error.into(), &workspace_root))
+                                }
+                            }
+                        }
+                        Some(ProfileTarget::Managed(id)) => {
+                            let instance = service
+                                .download_and_import_pack(
+                                    resolution.path,
+                                    &config.downloads,
+                                    &id,
+                                    &selected,
+                                    PackInstallOptions {
+                                        include_optional: *include_optional,
+                                        mode,
+                                    },
+                                    Some(operation_context()),
+                                )
+                                .await?;
+                            Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                        }
+                        None => {
+                            let instance = service
+                                .download_and_import_pack(
+                                    resolution.path,
+                                    &config.downloads,
+                                    id,
+                                    &selected,
+                                    PackInstallOptions {
+                                        include_optional: *include_optional,
+                                        mode,
+                                    },
+                                    Some(operation_context()),
+                                )
+                                .await?;
+                            Ok(json!({"ok":true,"instance":instance,"pack_imported":true}))
+                        }
+                    }
                 }
                 OnlineCommand::Search {
                     provider,
@@ -1236,12 +2278,35 @@ async fn run(cli: &Cli) -> Result<Value> {
             run,
             lines,
         } => {
-            let root = match instance {
-                Some(id) => InstanceService::new(resolution.path, config.downloads.clone())?
-                    .game_directory(id)?,
-                None => resolution.path,
+            let service = InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+            let (run_id, text) = match instance {
+                Some(selector) => {
+                    match select_profile_target(&service, &resolution.path, selector)? {
+                        ProfileTarget::Root(profile) => read_profile_logs(
+                            &[profile.resource_root().to_path_buf()],
+                            profile.id(),
+                            profile.id(),
+                            run.as_deref(),
+                            *lines,
+                        )?,
+                        ProfileTarget::Managed(id) => {
+                            let metadata = service.metadata(&id)?;
+                            let legacy_version = metadata
+                                .loader_version
+                                .as_deref()
+                                .unwrap_or(&metadata.minecraft);
+                            read_profile_logs(
+                                &[resolution.path.clone(), metadata.game_directory],
+                                &id,
+                                legacy_version,
+                                run.as_deref(),
+                                *lines,
+                            )?
+                        }
+                    }
+                }
+                None => launch::read_logs(&resolution.path, run.as_deref(), *lines)?,
             };
-            let (run_id, text) = launch::read_logs(&root, run.as_deref(), *lines)?;
             Ok(json!({ "ok": true, "run_id": run_id, "log": text }))
         }
         Command::Launch {
@@ -1255,28 +2320,50 @@ async fn run(cli: &Cli) -> Result<Value> {
             memory,
             dry_run,
         } => {
-            let instance_service = if instance.is_some() {
-                Some(InstanceService::new(
-                    resolution.path.clone(),
-                    config.downloads.clone(),
-                )?)
-            } else {
-                None
-            };
-            let instance_guard = match (&instance_service, instance) {
-                (Some(service), Some(id)) => Some(service.acquire_launch(id)?),
-                _ => None,
-            };
-            let (game_directory, version) = match &instance_guard {
-                Some(guard) => (
-                    guard.game_directory().to_path_buf(),
-                    guard.version().to_owned(),
-                ),
-                None => (
-                    resolution.path.clone(),
-                    version.clone().expect("clap requires version or instance"),
-                ),
-            };
+            let instance_service =
+                InstanceService::new(resolution.path.clone(), config.downloads.clone())?;
+            let mut _profile_guard = None;
+            let mut _instance_guard = None;
+            let (resource_root, working_directory, version, profile_id) =
+                if let Some(selector) = instance {
+                    match select_profile_target(&instance_service, &resolution.path, selector)? {
+                        ProfileTarget::Root(profile) => {
+                            let id = profile.id().to_owned();
+                            _profile_guard = Some(profile.guard().map_err(profile_error)?);
+                            (
+                                profile.resource_root().to_path_buf(),
+                                profile.game_directory().to_path_buf(),
+                                id.clone(),
+                                id,
+                            )
+                        }
+                        ProfileTarget::Managed(id) => {
+                            let guard = instance_service.acquire_launch(&id)?;
+                            let version = guard.version().to_owned();
+                            let directory = guard.game_directory().to_path_buf();
+                            _instance_guard = Some(guard);
+                            (directory.clone(), directory, version, id)
+                        }
+                    }
+                } else {
+                    let id = version.clone().expect("clap requires version or instance");
+                    let profile =
+                        RootProfile::open(&resolution.path, &id).map_err(|error| match error {
+                            ccl_core::profiles::ProfileError::NotFound(id) => {
+                                Error::Launch(ccl_core::launch::LaunchError::Invalid(format!(
+                                    "installed profile not found: {id}"
+                                )))
+                            }
+                            other => profile_error(other),
+                        })?;
+                    _profile_guard = Some(profile.guard().map_err(profile_error)?);
+                    (
+                        profile.resource_root().to_path_buf(),
+                        profile.game_directory().to_path_buf(),
+                        id.clone(),
+                        id,
+                    )
+                };
             let service = LaunchService::new(config.downloads.clone());
             let token = signal_token();
             let store = account_store(&config_path)?;
@@ -1313,15 +2400,15 @@ async fn run(cli: &Cli) -> Result<Value> {
                     );
                 }
             }
-            let memory_policy = config.launch.memory_policy(
-                &game_directory,
-                instance.as_deref().unwrap_or(&version),
-                *memory,
-            )?;
+            let memory_policy =
+                config
+                    .launch
+                    .memory_policy(&resource_root, &profile_id, *memory)?;
             let request = LaunchRequest {
-                game_directory,
-                working_directory: None,
+                game_directory: resource_root,
+                working_directory: Some(working_directory),
                 version,
+                profile_id: Some(profile_id),
                 username: launch_username,
                 java: java.clone().or(config.launch.java.clone()),
                 memory: memory_policy,

@@ -81,6 +81,7 @@ pub struct PackReceipt {
 pub struct ModpackService {
     instances: InstanceService,
     config: DownloadConfig,
+    runtime_subdirectory: Option<PathBuf>,
     #[cfg(test)]
     prepared: bool,
 }
@@ -90,18 +91,42 @@ impl ModpackService {
         Ok(Self {
             instances: InstanceService::new(root, config.clone())?,
             config,
+            runtime_subdirectory: None,
             #[cfg(test)]
             prepared: false,
         })
     }
 
-    /// Create a transaction fixture service that skips installing the game runtime.
-    #[cfg(test)]
-    pub(crate) fn new_prepared(
+    pub fn new_with_runtime_subdirectory(
         root: PathBuf,
         config: DownloadConfig,
+        relative: PathBuf,
     ) -> Result<Self, ModpackError> {
-        let mut service = Self::new(root, config)?;
+        let (instances, runtime_subdirectory) = if relative.as_os_str().is_empty() {
+            (InstanceService::new(root, config.clone())?, None)
+        } else {
+            (
+                InstanceService::new(root, config.clone())?
+                    .with_runtime_subdirectory(relative.clone())?,
+                Some(relative),
+            )
+        };
+        Ok(Self {
+            instances,
+            config,
+            runtime_subdirectory,
+            #[cfg(test)]
+            prepared: false,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_prepared_with_runtime_subdirectory(
+        root: PathBuf,
+        config: DownloadConfig,
+        relative: PathBuf,
+    ) -> Result<Self, ModpackError> {
+        let mut service = Self::new_with_runtime_subdirectory(root, config, relative)?;
         service.prepared = true;
         Ok(service)
     }
@@ -112,8 +137,8 @@ impl ModpackService {
 
     pub fn show(&self, id: &str) -> Result<PackReceipt, ModpackError> {
         let guard = self.instances.acquire_launch(id)?;
-        read_receipt(guard.game_directory())?
-            .ok_or_else(|| conflict(id, "instance has no imported modpack"))
+        let game = self.instances.runtime_path_for(guard.game_directory());
+        read_receipt(&game)?.ok_or_else(|| conflict(id, "instance has no imported modpack"))
     }
 
     pub async fn import(
@@ -123,8 +148,32 @@ impl ModpackService {
         options: &ImportOptions,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ModpackError> {
-        self.import_inner(id, archive, options, context, false)
-            .await
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::Upsert,
+        )
+        .await
+    }
+
+    /// Update an existing pack only; a missing ID is rejected while holding the instance lock.
+    pub async fn import_existing(
+        &self,
+        id: &str,
+        archive: &Path,
+        options: &ImportOptions,
+        context: Option<TaskContext>,
+    ) -> Result<InstanceMetadata, ModpackError> {
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::UpdateExisting,
+        )
+        .await
     }
 
     /// Import a pack into a new managed instance, rejecting existing IDs under the instance lock.
@@ -135,7 +184,14 @@ impl ModpackService {
         options: &ImportOptions,
         context: Option<TaskContext>,
     ) -> Result<InstanceMetadata, ModpackError> {
-        self.import_inner(id, archive, options, context, true).await
+        self.import_inner(
+            id,
+            archive,
+            options,
+            context,
+            crate::instances::PackTransactionMode::CreateOnly,
+        )
+        .await
     }
 
     async fn import_inner(
@@ -144,7 +200,7 @@ impl ModpackService {
         archive: &Path,
         options: &ImportOptions,
         context: Option<TaskContext>,
-        create_only: bool,
+        mode: crate::instances::PackTransactionMode,
     ) -> Result<InstanceMetadata, ModpackError> {
         check(&context)?;
         let pack = modpack_format::read_pack(archive)?;
@@ -192,11 +248,20 @@ impl ModpackService {
             &options.allowed_hosts,
         ))?);
         let config = self.config.clone();
+        let runtime_subdirectory = self.runtime_subdirectory.clone();
         self.instances
-            .transact_pack(id, &fingerprint, create_only, |stage, current| async move {
+            .transact_pack(id, &fingerprint, mode, |stage, current| async move {
                 check(&context)?;
+                let runtime = runtime_subdirectory
+                    .as_ref()
+                    .map(|relative| stage.join(relative))
+                    .unwrap_or_else(|| stage.clone());
                 if let Some(current) = &current {
-                    let old = read_receipt(&current.game_directory)?;
+                    let current_runtime = runtime_subdirectory
+                        .as_ref()
+                        .map(|relative| current.game_directory.join(relative))
+                        .unwrap_or_else(|| current.game_directory.clone());
+                    let old = read_receipt(&current_runtime)?;
                     if old.is_none() {
                         return Err(conflict(
                             id,
@@ -204,20 +269,20 @@ impl ModpackService {
                         ));
                     }
                     check_update(
-                        &current.game_directory,
+                        &current_runtime,
                         &old.unwrap().owned_files,
                         &desired,
                         options.replace_modified,
                     )?;
                 }
                 // Remove unchanged files removed by the new pack, within the private stage only.
-                if let Some(old) = read_receipt(&stage)? {
+                if let Some(old) = read_receipt(&runtime)? {
                     for path in old
                         .owned_files
                         .keys()
                         .filter(|path| !desired.contains_key(*path))
                     {
-                        let target = content_target(&stage, path)?;
+                        let target = content_target(&runtime, path)?;
                         if target.is_file() {
                             fs::remove_file(&target).map_err(|e| io(&target, e))?;
                         }
@@ -243,7 +308,7 @@ impl ModpackService {
                 hosts.extend(options.allowed_hosts.clone());
                 for file in selected {
                     check(&context)?;
-                    let destination = content_target(&stage, &file.path)?;
+                    let destination = content_target(&runtime, &file.path)?;
                     let mut request = DownloadRequest::new(file.downloads, &destination)
                         .with_sha1(&file.hashes["sha1"])
                         .with_sha512(&file.hashes["sha512"])
@@ -256,7 +321,7 @@ impl ModpackService {
                 }
                 for (path, bytes) in &pack.overrides {
                     check(&context)?;
-                    let target = content_target(&stage, path)?;
+                    let target = content_target(&runtime, path)?;
                     fs::create_dir_all(target.parent().unwrap()).map_err(|e| io(&target, e))?;
                     fs::write(&target, bytes).map_err(|e| io(&target, e))?;
                 }
@@ -266,7 +331,7 @@ impl ModpackService {
                     owned_files: desired,
                     include_optional: options.include_optional,
                 };
-                let receipt_path = stage.join(RECEIPT);
+                let receipt_path = runtime.join(RECEIPT);
                 fs::create_dir_all(receipt_path.parent().unwrap())
                     .map_err(|e| io(&receipt_path, e))?;
                 fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt)?)
@@ -324,8 +389,8 @@ impl ModpackService {
         include_local: bool,
     ) -> Result<Manifest, ModpackError> {
         let guard = self.instances.acquire_launch(id)?;
-        let game = guard.game_directory();
-        let receipt = match read_receipt(game)? {
+        let game = self.instances.runtime_path_for(guard.game_directory());
+        let receipt = match read_receipt(&game)? {
             Some(receipt) => receipt,
             None => PackReceipt {
                 schema: 1,
@@ -353,7 +418,7 @@ impl ModpackService {
         let mut overrides = BTreeMap::new();
         let mut retained = Vec::new();
         for mut file in manifest.files {
-            let target = content_target(game, &file.path)?;
+            let target = content_target(&game, &file.path)?;
             let bytes = fs::read(&target).map_err(|e| io(&target, e))?;
             if hash(&bytes).eq_ignore_ascii_case(&file.hashes["sha512"]) {
                 // Selected optional files become required to reproduce this installation.
@@ -380,7 +445,7 @@ impl ModpackService {
             "datapacks",
         ] {
             gather_export(
-                game,
+                &game,
                 Path::new(directory),
                 &manifest,
                 include_local,

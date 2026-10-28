@@ -1,3 +1,5 @@
+use ccl_core::{config::DownloadConfig, profiles::RootProfile};
+use ccl_gui::LibraryEntry;
 use ccl_gui::instance_service::{InstanceOperations, InstanceRequest as InstanceAction};
 use ccl_gui::maintenance::{Maintenance, MaintenanceRequest};
 use ccl_gui::online_service::{OnlineMutation, OnlineQuery, OnlineService};
@@ -34,6 +36,107 @@ fn validate_instance_paths(state: &DesktopState, request: &InstanceAction) -> Re
             .or_else(|_| require_grant(state, "content_directory", source)),
         _ => Ok(()),
     }
+}
+
+fn resolve_library_target(
+    root: &std::path::Path,
+    downloads: &DownloadConfig,
+    key: Option<&str>,
+    id: &str,
+) -> Result<Option<LibraryEntry>, GuiError> {
+    let entries = ccl_gui::discover_entries(root, downloads)?;
+    let target = if let Some(key) = key {
+        entries.into_iter().find(|entry| entry.key == key)
+    } else {
+        let mut matches = entries.into_iter().filter(|entry| entry.id == id);
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(GuiError::new(
+                "ambiguous_instance",
+                "Choose the exact library entry before managing this instance",
+            ));
+        }
+        first
+    }
+    .ok_or_else(|| {
+        GuiError::new(
+            "instance_not_found",
+            "The selected library entry is unavailable",
+        )
+    })?;
+    if target.id != id {
+        return Err(GuiError::new(
+            "instance_key_mismatch",
+            "Selected library entry does not match the requested instance",
+        ));
+    }
+    Ok(Some(target))
+}
+
+fn profile_for_target(
+    root: &std::path::Path,
+    entry: Option<&LibraryEntry>,
+) -> Result<Option<RootProfile>, GuiError> {
+    let Some(entry) = entry.filter(|entry| !entry.has_revision_storage) else {
+        return Ok(None);
+    };
+    RootProfile::open(root, &entry.id)
+        .map(Some)
+        .map_err(|error| GuiError::new("profile_operation_failed", error.to_string()))
+}
+
+fn validate_output_outside_runtime(
+    output: &std::path::Path,
+    entry: Option<&LibraryEntry>,
+) -> Result<(), GuiError> {
+    let Some(entry) = entry else {
+        return Ok(());
+    };
+    let canonical_future = canonicalize_future(output)?;
+    let mut forbidden = vec![entry.game_directory.clone()];
+    if !entry.has_revision_storage {
+        forbidden.push(entry.profile_directory.clone());
+        forbidden.push(entry.resource_root.join(".ccl"));
+        forbidden.push(entry.resource_root.join(".ccl/profile-workspaces"));
+        forbidden.extend(entry.retained_paths.iter().cloned());
+    }
+    if forbidden
+        .iter()
+        .any(|path| canonical_future.starts_with(path))
+    {
+        return Err(GuiError::new(
+            "invalid_output_path",
+            "Output must be outside the instance runtime and private workspace",
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_future(path: &std::path::Path) -> Result<PathBuf, GuiError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| GuiError::new("invalid_path", e.to_string()))?
+            .join(path)
+    };
+    let mut ancestor = absolute.as_path();
+    let mut tail = Vec::new();
+    while !ancestor.exists() {
+        let name = ancestor
+            .file_name()
+            .ok_or_else(|| GuiError::new("invalid_path", "Invalid output path"))?;
+        tail.push(name.to_os_string());
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| GuiError::new("invalid_path", "Invalid output path"))?;
+    }
+    let mut resolved = std::fs::canonicalize(ancestor)
+        .map_err(|e| GuiError::new("invalid_path", e.to_string()))?;
+    for segment in tail.iter().rev() {
+        resolved.push(segment);
+    }
+    Ok(resolved)
 }
 async fn root_config(state: &DesktopState) -> Result<(PathBuf, LauncherConfig), GuiError> {
     let store = state.store.clone();
@@ -109,6 +212,7 @@ async fn choose_path(
 async fn instance_query(
     state: State<'_, DesktopState>,
     request: InstanceAction,
+    key: Option<String>,
 ) -> Result<Value, GuiError> {
     if request.mutates() {
         return Err(GuiError::new(
@@ -118,10 +222,21 @@ async fn instance_query(
     }
     validate_instance_paths(&state, &request)?;
     let (root, config) = root_config(&state).await?;
+    let target = request
+        .target_id()
+        .map(|id| resolve_library_target(&root, &config.downloads, key.as_deref(), id))
+        .transpose()?
+        .flatten();
+    if let Some(output) = instance_output_path(&request) {
+        validate_output_outside_runtime(output, target.as_ref())?;
+    }
+    let profile = profile_for_target(&root, target.as_ref())?;
     tauri::async_runtime::spawn_blocking(move || {
-        tauri::async_runtime::block_on(
-            InstanceOperations::new(root, config.downloads).execute(request, None),
-        )
+        let operations = match profile {
+            Some(profile) => InstanceOperations::new(root, config.downloads).with_profile(profile),
+            None => InstanceOperations::new(root, config.downloads),
+        };
+        tauri::async_runtime::block_on(operations.execute(request, None))
     })
     .await
     .map_err(|_| GuiError::new("worker_error", "Instance worker stopped"))?
@@ -130,6 +245,7 @@ async fn instance_query(
 async fn instance_mutate(
     state: State<'_, DesktopState>,
     request: InstanceAction,
+    key: Option<String>,
 ) -> Result<TaskSnapshot, GuiError> {
     ensure_idle(&state)?;
     validate_instance_paths(&state, &request)?;
@@ -140,6 +256,15 @@ async fn instance_mutate(
         ));
     }
     let (root, config) = root_config(&state).await?;
+    let target = request
+        .target_id()
+        .map(|id| resolve_library_target(&root, &config.downloads, key.as_deref(), id))
+        .transpose()?
+        .flatten();
+    if let Some(output) = instance_output_path(&request) {
+        validate_output_outside_runtime(output, target.as_ref())?;
+    }
+    let profile = profile_for_target(&root, target.as_ref())?;
     start_task_policy(
         &state,
         "instance",
@@ -151,10 +276,13 @@ async fn instance_mutate(
         ),
         move |h| async move {
             tauri::async_runtime::spawn_blocking(move || {
-                tauri::async_runtime::block_on(
-                    InstanceOperations::new(root, config.downloads)
-                        .execute(request, Some(h.context)),
-                )
+                let operations = match profile {
+                    Some(profile) => {
+                        InstanceOperations::new(root, config.downloads).with_profile(profile)
+                    }
+                    None => InstanceOperations::new(root, config.downloads),
+                };
+                tauri::async_runtime::block_on(operations.execute(request, Some(h.context)))
             })
             .await
             .map_err(|_| GuiError::new("worker_error", "Instance worker stopped"))?
@@ -165,24 +293,175 @@ async fn instance_mutate(
 async fn online_query(
     state: State<'_, DesktopState>,
     request: OnlineQuery,
+    key: Option<String>,
 ) -> Result<Value, GuiError> {
-    let (root, _) = root_config(&state).await?;
+    let (root, config) = root_config(&state).await?;
+    let target_id = request.target_id();
+    let target = target_id
+        .map(|id| resolve_library_target(&root, &config.downloads, key.as_deref(), id))
+        .transpose()?
+        .flatten();
+    let profile = profile_for_target(&root, target.as_ref())?;
     let config = state.config_path();
-    OnlineService::new(root, config)?.query(request).await
+    match profile {
+        Some(profile) => {
+            OnlineService::new(root, config)?
+                .with_profile(profile)
+                .query(request)
+                .await
+        }
+        None => OnlineService::new(root, config)?.query(request).await,
+    }
 }
 #[tauri::command]
 async fn online_mutate(
     state: State<'_, DesktopState>,
     request: OnlineMutation,
+    key: Option<String>,
 ) -> Result<TaskSnapshot, GuiError> {
     ensure_idle(&state)?;
-    let (root, _) = root_config(&state).await?;
+    let (root, launcher_config) = root_config(&state).await?;
+    if let OnlineMutation::PackInstall {
+        id,
+        mode: ccl_core::online_content::PackImportMode::CreateNew,
+        ..
+    } = &request
+    {
+        if key.is_some() {
+            return Err(GuiError::new(
+                "instance_key_mismatch",
+                "Creating a new pack instance must not target a selected library entry",
+            ));
+        }
+        if root_profile_id_exists(&root, id)
+            || managed_instance_id_exists(&root, &launcher_config.downloads, id)
+        {
+            return Err(GuiError::new(
+                "instance_conflict",
+                "An instance with this ID already exists",
+            ));
+        }
+    }
+    let target_id = request.target_id();
+    let target = target_id
+        .map(|id| resolve_library_target(&root, &launcher_config.downloads, key.as_deref(), id))
+        .transpose()?
+        .flatten();
+    let profile = profile_for_target(&root, target.as_ref())?;
     let config = state.config_path();
     start_task(&state, "online", move |h| async move {
-        OnlineService::new(root, config)?
-            .mutate(request, h.context)
-            .await
+        match profile {
+            Some(profile) => {
+                OnlineService::new(root, config)?
+                    .with_profile(profile)
+                    .mutate(request, h.context)
+                    .await
+            }
+            None => {
+                OnlineService::new(root, config)?
+                    .mutate(request, h.context)
+                    .await
+            }
+        }
     })
+}
+
+fn root_profile_id_exists(root: &std::path::Path, id: &str) -> bool {
+    !matches!(
+        RootProfile::open(root, id),
+        Err(ccl_core::profiles::ProfileError::NotFound(_))
+    )
+}
+
+fn managed_instance_id_exists(
+    root: &std::path::Path,
+    downloads: &DownloadConfig,
+    id: &str,
+) -> bool {
+    match ccl_core::instances::InstanceService::new(root.to_path_buf(), downloads.clone())
+        .and_then(|service| service.metadata(id))
+    {
+        Ok(_) => true,
+        Err(ccl_core::instances::InstanceError::NotFound(_)) => false,
+        Err(_) => true,
+    }
+}
+
+fn instance_output_path(request: &InstanceAction) -> Option<&std::path::Path> {
+    match request {
+        InstanceAction::PackExport { output, .. }
+        | InstanceAction::ContentBackup { output, .. } => Some(output),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod target_key_tests {
+    use super::*;
+
+    #[test]
+    fn library_key_selects_the_matching_source_when_ids_collide() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let profile = root.join("versions/same");
+        std::fs::create_dir_all(profile.join("mods")).unwrap();
+        std::fs::write(profile.join("same.json"), r#"{"id":"same","libraries":[]}"#).unwrap();
+        let managed_game = root.join(".ccl/instances/same/game");
+        std::fs::create_dir_all(&managed_game).unwrap();
+        let metadata = ccl_core::instances::InstanceMetadata {
+            id: "same".into(),
+            minecraft: "1.21.1".into(),
+            loader: None,
+            loader_version: None,
+            game_directory: managed_game,
+        };
+        let managed_dir = root.join(".ccl/instances/same");
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        std::fs::write(
+            managed_dir.join("instance.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let entries = ccl_gui::discover_entries(&root, &DownloadConfig::default()).unwrap();
+        let ordinary = entries
+            .iter()
+            .find(|entry| !entry.has_revision_storage)
+            .unwrap();
+        let managed = entries
+            .iter()
+            .find(|entry| entry.has_revision_storage)
+            .unwrap();
+        assert_ne!(ordinary.key, managed.key);
+        let selected_ordinary = resolve_library_target(
+            &root,
+            &DownloadConfig::default(),
+            Some(&ordinary.key),
+            "same",
+        )
+        .unwrap()
+        .unwrap();
+        let selected_managed = resolve_library_target(
+            &root,
+            &DownloadConfig::default(),
+            Some(&managed.key),
+            "same",
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!selected_ordinary.has_revision_storage);
+        assert!(selected_managed.has_revision_storage);
+        assert!(resolve_library_target(&root, &DownloadConfig::default(), None, "same").is_err());
+        assert!(
+            resolve_library_target(
+                &root,
+                &DownloadConfig::default(),
+                Some(&ordinary.key),
+                "different"
+            )
+            .is_err()
+        );
+    }
 }
 #[tauri::command]
 async fn maintenance(

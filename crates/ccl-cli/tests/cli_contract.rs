@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::ErrorKind,
@@ -201,6 +202,7 @@ fn launch_requires_exactly_one_version_or_instance() {
 fn launch_uses_saved_offline_account_by_default_and_with_network_offline() {
     let root = sandbox();
     let game = root.join("game");
+    write_instance(&game, "1.21.1", 21);
     fs::create_dir_all(&game).unwrap();
     let config = root.join("config.json");
     fs::write(&config, "{}").unwrap();
@@ -244,23 +246,34 @@ fn launch_uses_saved_offline_account_by_default_and_with_network_offline() {
 }
 
 #[test]
-fn instance_logs_select_the_isolated_game_directory() {
+fn instance_logs_can_read_legacy_runtime_log_for_instance() {
     let root = sandbox();
     let game = root.join("game");
     let instance = game.join(".ccl/instances/test");
     let isolated = instance.join("game");
-    fs::create_dir_all(isolated.join(".ccl/logs")).unwrap();
-    let isolated = fs::canonicalize(isolated).unwrap();
+    fs::create_dir_all(&isolated).unwrap();
     fs::write(
         instance.join("instance.json"),
         serde_json::json!({
             "id":"test", "minecraft":"1.21.1", "loader":null,
-            "loader_version":null, "game_directory": isolated,
+            "loader_version":null, "game_directory": fs::canonicalize(&isolated).unwrap(),
         })
         .to_string(),
     )
     .unwrap();
+    fs::create_dir_all(isolated.join(".ccl/logs")).unwrap();
     fs::write(isolated.join(".ccl/logs/run1.log"), "first\nlast\n").unwrap();
+    fs::write(
+        isolated.join(".ccl/logs/run1.json"),
+        serde_json::json!({
+            "run_id":"run1", "version":"1.21.1",
+            "pid":1, "exit_code":0, "cancelled":false,
+            "log_path":isolated.join(".ccl/logs/run1.log"),
+            "started_at_ms":1, "finished_at_ms":2,
+        })
+        .to_string(),
+    )
+    .unwrap();
     let output = command(&root)
         .args(["--json", "--game-dir"])
         .arg(&game)
@@ -282,6 +295,208 @@ fn instance_logs_select_the_isolated_game_directory() {
     );
     assert_eq!(json_output(&output)["log"], "last");
     assert_eq!(json_output(&output)["run_id"], "run1");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_logs_only_show_runs_owned_by_selected_profile() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    let logs = game.join(".ccl/logs");
+    fs::create_dir_all(&logs).unwrap();
+    for (run_id, owner, body, started) in [
+        ("run-own", "1.20.1", "this profile", 1),
+        ("run-other", "another-profile", "other profile", 2),
+    ] {
+        fs::write(logs.join(format!("{run_id}.log")), body).unwrap();
+        fs::write(
+            logs.join(format!("{run_id}.json")),
+            serde_json::json!({
+                "run_id":run_id, "version":"1.20.1", "profile_id":owner,
+                "pid":1, "exit_code":0, "cancelled":false,
+                "log_path":logs.join(format!("{run_id}.log")),
+                "started_at_ms":started, "finished_at_ms":started,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let latest = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["logs", "--instance", "version:1.20.1"])
+        .output()
+        .unwrap();
+    assert!(latest.status.success());
+    assert_eq!(json_output(&latest)["run_id"], "run-own");
+    assert_eq!(json_output(&latest)["log"], "this profile");
+
+    let rejected = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["logs", "--instance", "version:1.20.1", "--run", "run-other"])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert_eq!(
+        json_output(&rejected)["error"]["code"],
+        "configuration_error"
+    );
+    assert!(String::from_utf8_lossy(&rejected.stdout).contains("does not belong to this profile"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnose_rejects_a_run_owned_by_another_root_profile() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    let logs = game.join(".ccl/logs");
+    fs::create_dir_all(&logs).unwrap();
+    fs::write(logs.join("run-other.log"), "other profile log").unwrap();
+    fs::write(
+        logs.join("run-other.json"),
+        serde_json::json!({
+            "run_id":"run-other", "version":"1.20.1", "profile_id":"other-profile",
+            "pid":1, "exit_code":1, "cancelled":false,
+            "log_path":logs.join("run-other.log"),
+            "started_at_ms":1, "finished_at_ms":2,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args([
+            "diagnose",
+            "--instance",
+            "version:1.20.1",
+            "--run",
+            "run-other",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(json_output(&output)["error"]["code"], "configuration_error");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn online_pack_create_new_rejects_existing_root_and_managed_targets_before_network() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    write_managed_instance(&game, "managed-existing");
+
+    for target in ["version:1.20.1", "instance:managed-existing"] {
+        let output = command(&root)
+            .args(["--json", "--network-offline", "--game-dir"])
+            .arg(&game)
+            .args(["online", "pack-install", target, "modrinth", "example-pack"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert_eq!(json_output(&output)["error"]["code"], "instance_conflict");
+    }
+    assert!(game.join("versions/1.20.1/1.20.1.json").is_file());
+    assert!(
+        game.join(".ccl/instances/managed-existing/instance.json")
+            .is_file()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn managed_launch_resolves_versions_from_the_managed_resource_root() {
+    let root = sandbox();
+    let game = root.join("game");
+    let managed_game = write_managed_instance(&game, "managed");
+    let version_dir = managed_game.join("versions/1.21.1");
+    fs::create_dir_all(&version_dir).unwrap();
+    fs::write(
+        version_dir.join("1.21.1.json"),
+        r#"{"id":"1.21.1","type":"release","javaVersion":{"component":"java-runtime-gamma","majorVersion":17},"mainClass":"Main","downloads":{"client":{"url":"https://fixture.invalid/client.jar","sha1":"da39a3ee5e6b4b0d3255bfef95601890afd80709","size":0}},"arguments":{"game":[]}}"#,
+    )
+    .unwrap();
+    let java = java_fixture(&root);
+
+    let output = command(&root)
+        .args(["--json", "--network-offline", "--game-dir"])
+        .arg(&game)
+        .args([
+            "launch",
+            "--instance",
+            "instance:managed",
+            "--offline",
+            "--dry-run",
+            "--no-java-download",
+            "--java",
+        ])
+        .arg(java)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let message = json_output(&output)["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        message
+            .replace('\\', "/")
+            .contains(".ccl/instances/managed/game/versions/1.21.1/1.21.1.jar"),
+        "{message}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn managed_memory_setting_uses_the_same_profile_key_as_launch() {
+    let root = sandbox();
+    let game = root.join("game");
+    let managed_game = write_managed_instance(&game, "managed");
+    let config = root.join("config.json");
+    fs::write(&config, "{}").unwrap();
+    let mut digest = Sha256::new();
+    digest.update(
+        fs::canonicalize(&managed_game)
+            .unwrap()
+            .to_string_lossy()
+            .as_bytes(),
+    );
+    digest.update([0]);
+    digest.update(b"managed");
+    let memory_key = format!("memory:{:x}", digest.finalize());
+
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["--config"])
+        .arg(&config)
+        .args([
+            "settings",
+            "memory",
+            "--instance",
+            "instance:managed",
+            "--set",
+            "1024",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value = json_output(&output);
+    assert_eq!(value["override"], serde_json::json!(1024));
+    let persisted: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(
+        persisted["launch"]["instance_memory"][memory_key],
+        serde_json::json!(1024)
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -745,6 +960,334 @@ fn instance_lifecycle_cli_requires_delete_confirmation_and_supports_preview_clea
     assert!(removed.status.success());
     assert!(!root.join(".ccl/instances/renamed").exists());
     assert!(game.join("options.txt").is_file());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profiles_and_managed_instances_use_explicit_selectors_when_ids_overlap() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "same-id", 17);
+    write_managed_instance(&game, "same-id");
+
+    let ambiguous = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "show", "same-id"])
+        .output()
+        .unwrap();
+    assert!(!ambiguous.status.success());
+    assert_eq!(
+        json_output(&ambiguous)["error"]["code"],
+        "configuration_error"
+    );
+
+    for (selector, kind) in [
+        ("version:same-id", "root_profile"),
+        ("instance:same-id", "managed_instance"),
+    ] {
+        let output = command(&root)
+            .args(["--json", "--game-dir"])
+            .arg(&game)
+            .args(["instance", "show", selector])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(json_output(&output)["kind"], kind);
+    }
+
+    let listing = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "list"])
+        .output()
+        .unwrap();
+    assert!(listing.status.success());
+    let instances = &json_output(&listing)["instances"];
+    assert_eq!(instances.as_array().unwrap().len(), 2);
+    assert!(
+        instances
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["selector"] == "version:same-id")
+    );
+    assert!(
+        instances
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["selector"] == "instance:same-id")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_content_edit_publishes_without_workspace_paths() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "vanilla", 17);
+    let source = root.join("fixture.jar");
+    fs::write(&source, b"fixture mod bytes").unwrap();
+
+    let added = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["content", "add", "version:vanilla", "mods"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stdout)
+    );
+    let added_json = json_output(&added);
+    assert_eq!(added_json["entry"]["path"], "fixture.jar");
+    assert!(
+        !String::from_utf8_lossy(&added.stdout).contains(
+            &game
+                .join(".ccl/profile-workspaces")
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert_eq!(
+        fs::read(game.join("mods/fixture.jar")).unwrap(),
+        b"fixture mod bytes"
+    );
+
+    let history = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "history", "version:vanilla"])
+        .output()
+        .unwrap();
+    assert!(
+        history.status.success(),
+        "{}",
+        String::from_utf8_lossy(&history.stdout)
+    );
+    let revision = json_output(&history)["history"][0]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let restored = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "restore", "version:vanilla", &revision])
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stdout)
+    );
+    assert!(!game.join("mods/fixture.jar").exists());
+
+    let rolled_back = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "rollback", "version:vanilla"])
+        .output()
+        .unwrap();
+    assert!(
+        rolled_back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rolled_back.stdout)
+    );
+    assert!(game.join("mods/fixture.jar").is_file());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_copy_and_delete_preserve_the_independent_copy() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    fs::create_dir_all(game.join("mods")).unwrap();
+    fs::write(game.join("mods/fixture.jar"), b"fixture mod bytes").unwrap();
+
+    let copied = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "copy", "version:1.20.1", "vanilla-copy"])
+        .output()
+        .unwrap();
+    assert!(
+        copied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&copied.stdout)
+    );
+    let instance = json_output(&copied)["instance"].clone();
+    assert_eq!(instance["id"], "vanilla-copy");
+    let copied_game = PathBuf::from(instance["game_directory"].as_str().unwrap());
+    let launch_version = instance["loader_version"]
+        .as_str()
+        .unwrap_or_else(|| instance["minecraft"].as_str().unwrap());
+    assert!(
+        copied_game
+            .join("versions")
+            .join(launch_version)
+            .join(format!("{launch_version}.json"))
+            .is_file()
+    );
+    assert!(
+        game.join(".ccl/instances/vanilla-copy/game/mods/fixture.jar")
+            .is_file()
+    );
+
+    let deleted = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "delete", "version:1.20.1", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        deleted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deleted.stdout)
+    );
+    assert!(!game.join("versions/1.20.1").exists());
+    ccl_core::launch::load_installed_metadata(&copied_game, launch_version).unwrap();
+    assert!(
+        game.join(".ccl/instances/vanilla-copy/game/mods/fixture.jar")
+            .is_file()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_pack_export_uses_workspace_without_exposing_workspace_path() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    let archive = root.join("root-profile.mrpack");
+
+    let output = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["pack", "export", "version:1.20.1"])
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(archive.is_file());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("profile-workspaces"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_pack_show_uses_workspace_and_explicit_missing_targets_do_not_create() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+
+    let shown = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["pack", "show", "version:1.20.1"])
+        .output()
+        .unwrap();
+    assert!(!shown.status.success());
+    assert_eq!(json_output(&shown)["error"]["code"], "pack_conflict");
+    assert!(!String::from_utf8_lossy(&shown.stdout).contains("profile-workspaces"));
+
+    let missing = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args([
+            "pack",
+            "import",
+            "version:missing-profile",
+            "does-not-exist.mrpack",
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    assert_eq!(missing.status.code(), Some(12));
+    assert_eq!(json_output(&missing)["error"]["code"], "instance_error");
+    assert!(
+        json_output(&missing)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing-profile")
+    );
+    assert!(!game.join(".ccl/instances/missing-profile").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn root_profile_workspace_and_copy_keep_custom_hmcl_game_directory_separate() {
+    let root = sandbox();
+    let game = root.join("game");
+    write_instance(&game, "1.20.1", 17);
+    let version_dir = game.join("versions/1.20.1");
+    fs::write(
+        version_dir.join("hmclversion.cfg"),
+        r#"{"usesGlobal":false,"gameDirType":"CUSTOM","gameDir":"custom-game"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(game.join("custom-game")).unwrap();
+    fs::write(game.join("custom-game/options.txt"), "before").unwrap();
+    let source = root.join("custom-mod.jar");
+    fs::write(&source, b"custom runtime mod").unwrap();
+
+    let added = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["content", "add", "version:1.20.1", "mods"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stdout)
+    );
+    assert!(game.join("custom-game/mods/custom-mod.jar").is_file());
+    assert!(!game.join("mods/custom-mod.jar").exists());
+
+    let copied = command(&root)
+        .args(["--json", "--game-dir"])
+        .arg(&game)
+        .args(["instance", "copy", "version:1.20.1", "custom-copy"])
+        .output()
+        .unwrap();
+    assert!(
+        copied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&copied.stdout)
+    );
+    let metadata = &json_output(&copied)["instance"];
+    let runtime = game.join(".ccl/instances/custom-copy/game");
+    assert_eq!(
+        metadata["game_directory"].as_str(),
+        Some(fs::canonicalize(&runtime).unwrap().to_str().unwrap())
+    );
+    assert!(runtime.join("mods/custom-mod.jar").is_file());
+    let selected_version = metadata["loader_version"]
+        .as_str()
+        .or_else(|| metadata["minecraft"].as_str())
+        .unwrap();
+    assert!(
+        runtime
+            .join("versions")
+            .join(selected_version)
+            .join(format!("{selected_version}.json"))
+            .is_file(),
+        "managed copy does not contain its selected launch version"
+    );
+    assert!(!String::from_utf8_lossy(&copied.stdout).contains("profile-workspaces"));
     fs::remove_dir_all(root).unwrap();
 }
 #[test]

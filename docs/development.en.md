@@ -13,7 +13,7 @@
 - [Microsoft application setup and optional sign-in validation](#microsoft-application)
 - [Validation and preview packages](#validation)
 - [Release checklist and commands](#release)
-- [v0.3.3 release notes](#release-notes)
+- [v0.3.4 release notes](#release-notes)
 - [Current feature scope](#scope)
 
 <a id="environment"></a>
@@ -196,6 +196,8 @@ The `loaders` service discovers compatible Fabric, Quilt, Legacy Fabric, Forge, 
 
 The `instances` service owns `<game root>/.ccl/instances/<id>/game`. Installation and update build a separate staging revision and commit only after success. A journal supports recovery from an interrupted revision switch; the previous successful revision remains available for rollback. Loader updates and loader removal preserve current user data. Pack imports/updates and content edits use the same staged-generation transaction and cross-process instance lock as launches, so a running game cannot be replaced underneath a mutation.
 
+The `profiles` service manages existing `versions/<ID>` profiles without moving their data. Discovery is read-only. Runtime directories use the same HMCL-compatible resolver as launch, separately from shared resources. Explicit edits use a locked private workspace under `.ccl/profile-workspaces`, retain management snapshots under `.ccl/profiles`, detect concurrent source changes, and publish back to the original layout. Deletion removes only owned paths and refuses referenced profiles; shared/custom runtime data outside the profile remains. CLI selectors `version:ID` and `instance:ID`, and GUI library keys, prevent ambiguous IDs from targeting the wrong storage.
+
 Instance lifecycle operations can rename, copy, delete, list and restore retained revisions, report logical disk usage, and preview or apply cleanup of archived revisions and unfinished stages. Cleanup keeps active worlds/content out of scope by design; hard links mean reported logical bytes are not physical disk usage or guaranteed reclaimed space. See [instance lifecycle](user-guide.en.md#instances).
 
 Archive import recognizes Modrinth, CurseForge and MultiMC/Prism exports. CurseForge remote file resolution uses the official API and requires a user supplied API key; fixture tests for request scoping do not establish live API authorization. MultiMC/Prism import accepts supported vanilla/loader components and local game content, and rejects unsupported custom patches. These conversions do not execute archive hooks or import account databases. See [archive imports](user-guide.en.md#imports).
@@ -351,7 +353,7 @@ An ordinary local build has an unpublished commit identity unless the release bu
 
 ### Developer builds
 
-These guides target the v0.3.3 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
+These guides target the v0.3.4 GUI and CLI release. GitHub Releases is authoritative for package availability. Developer prereleases may contain newer changes.
 
 Push a validated commit to `dev` to start `.github/workflows/release-dev.yml`:
 
@@ -375,12 +377,31 @@ The workflow requires the tested commit to remain the current `dev` tip while al
 
 <a id="release-notes"></a>
 
-## v0.3.3 release notes
+## v0.3.4 release notes
 
-These notes target v0.3.3 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
+These notes target v0.3.4 and are prepared for the authorized stable-release workflow. GitHub Releases is authoritative for publication status. Original v0.2.0 assets remain unchanged.
 
 <!-- release-notes:start -->
-# CialloCraftLauncher 0.3.3
+# CialloCraftLauncher 0.3.4
+
+This patch fixes management of existing Minecraft profiles and online content installation across the CLI and desktop app.
+
+- Manage existing profiles in place: copy, delete owned disk files, edit content and loaders, inspect storage, and retain/restore management history. Discovery keeps files in their original locations.
+- Separate shared resources, profile metadata and the actual game directory. Deletion lists the full removed scope and preserved paths; shared resources and external game directories remain, and dependent profiles block destructive changes.
+- Keep CLI and GUI targets unambiguous when IDs collide. The CLI supports explicit `version:ID` and `instance:ID` selectors; the GUI passes the exact library key.
+- Install provider-identified resource packs and shaders as ZIPs into `resourcepacks` and `shaderpacks`; mods remain JARs in `mods`.
+- Enforce new-pack creation versus existing-pack update in the backend, including hidden or concurrently created instances, and preserve safe retry of interrupted imports.
+- Ignore stale dependency previews after changing the selected version or other resolution inputs.
+- Filter saved game logs by stable profile identity and share CurseForge credential precedence between online discovery and local archive import.
+
+Local macOS validation: 435 workspace/desktop tests passed, 9 ignored; 20 frontend tests, production build, formatting and strict Clippy passed. The release workflow additionally validates and packages Windows x64, macOS arm64 and Linux x64.
+
+CLI and GUI update manifests retain detached release-key signatures. OS publisher signing and Microsoft GUI sign-in availability are unchanged.
+<!-- release-notes:end -->
+
+### v0.3.3 historical release notes
+
+#### CialloCraftLauncher 0.3.3
 
 This patch makes desktop controls consistent across the application’s light and dark themes.
 
@@ -393,7 +414,6 @@ This patch makes desktop controls consistent across the application’s light an
 The feature passed 16 frontend tests, TypeScript/Vite production builds, and core/desktop CI on Windows x64, macOS arm64 and Linux x86_64. Desktop checks covered packaging, frontend readiness and update rollback/recovery. Isolated rendered checks covered actual account, home, settings and dialog components with synthetic data; they do not establish interactive physical-machine acceptance on all three operating systems. The stable workflow revalidates the tagged release and uploaded assets.
 
 CLI behavior and game data are unchanged by this UI patch; automatic memory remains the default. CLI and GUI updater manifests retain release-key signatures. Installers lack OS publisher certificate signatures; macOS bundles retain verified ad-hoc signatures and are not notarized. GUI Microsoft sign-in remains temporarily unavailable, and CurseForge requires a user-provided API key.
-<!-- release-notes:end -->
 
 ### v0.3.2 historical release notes
 
@@ -499,7 +519,7 @@ Packages cover Windows x86_64 (CLI ZIP / GUI NSIS), macOS arm64 (CLI ZIP / GUI D
 
 Existing launcher configuration, accounts and instance metadata remain readable without a schema migration. Back up important worlds before operations that replace content. Genuine-account Minecraft acceptance remains deferred, and CurseForge requires a user-supplied authorized API key. Hosted CI and controlled launch fixtures do not establish physical Minecraft acceptance on every platform.
 
-`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.3; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
+`scripts/release-notes.py` extracts the marked English and Chinese bodies, checks that their titles match the requested package version, and combines them for `.github/workflows/release-stable.yml` to use as the GitHub release notes. Keep both marked sections accurate and their version titles synchronized with the Cargo package version. These notes target v0.3.4; publication requires the approved stable workflow. Review current all-platform performance artifacts before a future release; use the paired Linux comparison with a selected baseline when investigating a suspected regression. Historical acceptance results do not establish performance for a release commit.
 
 <a id="scope"></a>
 
